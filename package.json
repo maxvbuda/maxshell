@@ -1,0 +1,19 @@
+{
+  "name": "maxshell",
+  "version": "0.1.0",
+  "description": "A terminal shell with its own scripting language (MaxScript), running on Node.js",
+  "main": "src/interpreter.js",
+  "bin": {
+    "maxshell": "bin/maxshell.js"
+  },
+  "scripts": {
+    "start": "node bin/maxshell.js",
+    "test": "node test/run.js"
+  },
+  "keywords": ["shell", "terminal", "repl", "scripting-language", "interpreter"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}

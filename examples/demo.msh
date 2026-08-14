@@ -1,0 +1,30 @@
+# demo.msh — a tour of MaxScript, maxshell's own scripting language.
+
+let name = "World"
+print "Hello, " + name
+
+fn greet(person) do
+  print "Hi there, " + person + "!"
+end
+
+greet("maxshell")
+
+fn fib(n) do
+  if n < 2 do
+    return n
+  end
+  return fib(n - 1) + fib(n - 2)
+end
+
+let i = 0
+while i < 10 do
+  print fib(i)
+  let i = i + 1
+end
+
+# Anything after "!" runs as a real system command through /bin/sh,
+# pipes and all — this is still a working terminal underneath.
+!echo "running a real shell command:"
+!ls -la | head -n 5
+
+pwd
