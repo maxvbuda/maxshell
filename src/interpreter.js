@@ -138,9 +138,15 @@ class Interpreter {
         return null;
       }
       case 'Cd': {
-        const target = stmt.target ? this.evaluate(stmt.target, env) : process.env.HOME;
-        const path = require('path').resolve(this.cwd, String(target));
-        this.cwd = path;
+        const path = require('path');
+        let target = stmt.target || process.env.HOME;
+        if ((target[0] === '"' && target[target.length - 1] === '"') ||
+            (target[0] === "'" && target[target.length - 1] === "'")) {
+          target = target.slice(1, -1);
+        }
+        if (target === '~') target = process.env.HOME;
+        else if (target.startsWith('~/')) target = path.join(process.env.HOME, target.slice(2));
+        this.cwd = path.resolve(this.cwd, target);
         return null;
       }
       case 'Pwd': {

@@ -73,6 +73,33 @@ test('if / else if / else', () => {
   assert.deepStrictEqual(run(src), ['big', 'medium', 'small']);
 });
 
+test('bare commands run as real shell commands, no "!" needed', () => {
+  assert.deepStrictEqual(run('echo hello-from-shell'), ['hello-from-shell']);
+});
+
+test('cd accepts bareword and ".." paths', () => {
+  const path = require('path');
+  const src = `
+    cd test
+    pwd
+    cd ..
+    pwd
+  `;
+  const [afterCd, afterCdDotDot] = run(src);
+  assert.strictEqual(afterCd, path.resolve(__dirname));
+  assert.strictEqual(afterCdDotDot, path.resolve(__dirname, '..'));
+});
+
+test('calling a defined function at top level needs no prefix', () => {
+  const src = `
+    fn greet(n) do
+      print "hi " + n
+    end
+    greet("max")
+  `;
+  assert.deepStrictEqual(run(src), ['hi max']);
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

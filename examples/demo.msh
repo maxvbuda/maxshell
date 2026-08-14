@@ -22,9 +22,9 @@ while i < 10 do
   let i = i + 1
 end
 
-# Anything after "!" runs as a real system command through /bin/sh,
-# pipes and all — this is still a working terminal underneath.
-!echo "running a real shell command:"
-!ls -la | head -n 5
+# Real commands just run, no prefix needed — this is still a working
+# terminal underneath, pipes and all.
+echo "running a real shell command:"
+ls -la | head -n 5
 
 pwd

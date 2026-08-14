@@ -1,10 +1,15 @@
 # maxshell
 
 A terminal, but its scripting language isn't bash and isn't JavaScript either.
-maxshell is a Node.js program that hosts a small language of its own —
-**MaxScript** — with variables, functions, `if`/`while`, and a `!` escape hatch
-that drops straight into a real system shell (pipes and all) when you actually
-need one.
+maxshell is a Node.js program that behaves like an ordinary terminal —
+`ls`, `git status`, `cd ..`, `./script.sh` all just run — but also hosts a
+small language of its own, **MaxScript**, for variables, functions, and
+control flow (`if`/`while`) when you want more than one-off commands.
+
+A line is treated as MaxScript only if it starts with a MaxScript keyword
+(`let`, `fn`, `if`, `while`, `print`, `return`, `cd`, `pwd`, `exit`) or is a
+call to a function you defined (`greet("world")`). Everything else is run
+exactly as you'd expect from a normal shell.
 
 ## Install / run
 
@@ -65,16 +70,21 @@ end
 Blocks are opened with `do` and closed with `end` — no braces, no
 significant indentation. `let` both declares and reassigns.
 
-### Escaping to a real shell
+### Running real commands
 
-Any line starting with `!` is sent verbatim to `/bin/sh`, so pipes,
-redirects, and every normal system command work exactly as in a regular
-terminal:
+Just type them — no prefix needed:
 
 ```
-!ls -la | grep ".js"
-!echo $HOME
+ls -la | grep ".js"
+git status
+echo $HOME
 ```
+
+These run through `/bin/sh`, so pipes, redirects, and everything else work
+exactly as in a regular terminal. Prefixing a line with `!` runs it as a
+command too; it's only needed to force shell execution for a line that
+would otherwise look like MaxScript (e.g. a line that happens to start
+with a MaxScript keyword).
 
 ### Built-ins
 
@@ -86,10 +96,11 @@ terminal:
 | `if / else if / else / end` | Conditionals                  |
 | `while <cond> do ... end` | Loop                             |
 | `return <expr>` | Return from a function                     |
-| `cd <path>`   | Change maxshell's working directory          |
+| `cd <path>`   | Change maxshell's working directory (`..`, `~`, relative or absolute paths all work) |
 | `pwd`         | Print the working directory                  |
 | `exit`        | Quit                                         |
-| `!<command>`  | Run `<command>` in the real system shell     |
+| `<anything else>` | Run as a real system command (e.g. `ls -la`, `git status`) |
+| `!<command>`  | Force `<command>` to run as a real system command |
 
 ## Project layout
 

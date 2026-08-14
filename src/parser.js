@@ -130,9 +130,8 @@ class Parser {
         return { type: 'FnDecl', name, params, body };
       }
       case 'CD': {
-        this.advance();
-        const target = this.at('NEWLINE') || this.at('EOF') ? null : this.parseExpression();
-        return { type: 'Cd', target };
+        const tok = this.advance();
+        return { type: 'Cd', target: tok.value || null };
       }
       case 'PWD': {
         this.advance();
