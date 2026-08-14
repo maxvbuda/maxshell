@@ -1,8 +1,9 @@
 'use strict';
 
 const KEYWORDS = new Set([
-  'let', 'fn', 'do', 'end', 'if', 'else', 'while', 'print', 'return',
-  'true', 'false', 'and', 'or', 'not', 'cd', 'exit', 'pwd', 'help',
+  'let', 'fn', 'do', 'end', 'if', 'else', 'while', 'for', 'in', 'break',
+  'continue', 'print', 'return', 'true', 'false', 'and', 'or', 'not',
+  'cd', 'exit', 'pwd', 'help', 'which', 'alias', 'history', 'env',
 ]);
 
 class Token {
@@ -150,10 +151,14 @@ class Lexer {
         while (this.pos < this.src.length && isIdentPart(this.peek())) {
           id += this.advance();
         }
-        if (id === 'cd') {
+        const lastTok = this.tokens[this.tokens.length - 1];
+        const isFirstOnLine = !lastTok || lastTok.type === 'NEWLINE';
+        if (id === 'cd' && isFirstOnLine) {
           // Paths ("..", "../foo", "~", "some-dir") aren't valid MaxScript
           // expressions, so take the rest of the line as raw text instead
-          // of tokenizing it, the same way "!" and bare commands do.
+          // of tokenizing it, the same way "!" and bare commands do. Only
+          // do this when "cd" opens the line, so e.g. "which cd" still
+          // treats "cd" as an ordinary keyword token.
           let arg = '';
           while (this.pos < this.src.length && this.peek() !== '\n') {
             arg += this.advance();
@@ -176,7 +181,7 @@ class Lexer {
       const singles = {
         '+': 'PLUS', '-': 'MINUS', '*': 'STAR', '/': 'SLASH', '%': 'PERCENT',
         '=': 'EQ', '<': 'LT', '>': 'GT', '(': 'LPAREN', ')': 'RPAREN',
-        ',': 'COMMA',
+        ',': 'COMMA', '[': 'LBRACKET', ']': 'RBRACKET',
       };
       if (singles[ch]) {
         this.advance();
@@ -191,4 +196,4 @@ class Lexer {
   }
 }
 
-module.exports = { Lexer, Token };
+module.exports = { Lexer, Token, KEYWORDS };

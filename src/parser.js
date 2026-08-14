@@ -112,6 +112,23 @@ class Parser {
         this.expect('END');
         return { type: 'While', test, body };
       }
+      case 'FOR': {
+        this.advance();
+        const varName = this.expect('IDENT').value;
+        this.expect('IN');
+        const iterable = this.parseExpression();
+        const body = this.parseBlock();
+        this.expect('END');
+        return { type: 'ForIn', varName, iterable, body };
+      }
+      case 'BREAK': {
+        this.advance();
+        return { type: 'Break' };
+      }
+      case 'CONTINUE': {
+        this.advance();
+        return { type: 'Continue' };
+      }
       case 'FN': {
         this.advance();
         const name = this.expect('IDENT').value;
@@ -144,6 +161,38 @@ class Parser {
       case 'HELP': {
         this.advance();
         return { type: 'Help' };
+      }
+      case 'HISTORY': {
+        this.advance();
+        return { type: 'History' };
+      }
+      case 'WHICH': {
+        this.advance();
+        if (this.at('NEWLINE') || this.at('EOF')) return { type: 'Which', name: null };
+        const name = this.advance().value;
+        return { type: 'Which', name };
+      }
+      case 'ALIAS': {
+        this.advance();
+        if (this.at('NEWLINE') || this.at('EOF')) return { type: 'Alias', name: null, value: null };
+        const name = this.expect('IDENT').value;
+        if (this.at('EQ')) {
+          this.advance();
+          const value = this.parseExpression();
+          return { type: 'Alias', name, value };
+        }
+        return { type: 'Alias', name, value: undefined };
+      }
+      case 'ENV': {
+        this.advance();
+        if (this.at('NEWLINE') || this.at('EOF')) return { type: 'Env', name: null, value: null };
+        const name = this.expect('IDENT').value;
+        if (this.at('EQ')) {
+          this.advance();
+          const value = this.parseExpression();
+          return { type: 'Env', name, value };
+        }
+        return { type: 'Env', name, value: undefined };
       }
       default: {
         const expr = this.parseExpression();
@@ -223,18 +272,25 @@ class Parser {
 
   parseCall() {
     let expr = this.parsePrimary();
-    while (this.at('LPAREN')) {
-      this.advance();
-      const args = [];
-      if (!this.at('RPAREN')) {
-        args.push(this.parseExpression());
-        while (this.at('COMMA')) {
-          this.advance();
+    while (this.at('LPAREN') || this.at('LBRACKET')) {
+      if (this.at('LPAREN')) {
+        this.advance();
+        const args = [];
+        if (!this.at('RPAREN')) {
           args.push(this.parseExpression());
+          while (this.at('COMMA')) {
+            this.advance();
+            args.push(this.parseExpression());
+          }
         }
+        this.expect('RPAREN');
+        expr = { type: 'Call', callee: expr, args };
+      } else {
+        this.advance();
+        const index = this.parseExpression();
+        this.expect('RBRACKET');
+        expr = { type: 'Index', object: expr, index };
       }
-      this.expect('RPAREN');
-      expr = { type: 'Call', callee: expr, args };
     }
     return expr;
   }
@@ -266,6 +322,19 @@ class Parser {
       const expr = this.parseExpression();
       this.expect('RPAREN');
       return expr;
+    }
+    if (tok.type === 'LBRACKET') {
+      this.advance();
+      const elements = [];
+      if (!this.at('RBRACKET')) {
+        elements.push(this.parseExpression());
+        while (this.at('COMMA')) {
+          this.advance();
+          elements.push(this.parseExpression());
+        }
+      }
+      this.expect('RBRACKET');
+      return { type: 'ArrayLit', elements };
     }
     throw new Error(`Unexpected token ${tok.type} on line ${tok.line}`);
   }

@@ -10,16 +10,17 @@ const { Lexer } = require('../src/lexer');
 const VERSION = require('../package.json').version;
 
 function blockDepth(source) {
-  // Depth of unclosed blocks. Count block-openers (if/while/fn), each of
-  // which needs exactly one closing "end" — except an "if" chained after
-  // "else" (an "else if"), which shares its predecessor's "end".
+  // Depth of unclosed blocks. Count block-openers (if/while/for/fn), each
+  // of which needs exactly one closing "end" — except an "if" chained
+  // after "else" (an "else if"), which shares its predecessor's "end".
   let depth = 0;
   let prevType = null;
   try {
     const tokens = new Lexer(source).tokenize();
     for (const tok of tokens) {
       if (tok.type === 'NEWLINE') continue;
-      if ((tok.type === 'IF' && prevType !== 'ELSE') || tok.type === 'WHILE' || tok.type === 'FN') {
+      if ((tok.type === 'IF' && prevType !== 'ELSE') ||
+          tok.type === 'WHILE' || tok.type === 'FOR' || tok.type === 'FN') {
         depth++;
       } else if (tok.type === 'END') {
         depth--;

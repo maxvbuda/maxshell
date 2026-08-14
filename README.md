@@ -7,7 +7,8 @@ small language of its own, **MaxScript**, for variables, functions, and
 control flow (`if`/`while`) when you want more than one-off commands.
 
 A line is treated as MaxScript only if it starts with a MaxScript keyword
-(`let`, `fn`, `if`, `while`, `print`, `return`, `cd`, `pwd`, `exit`) or is a
+(`let`, `fn`, `if`, `while`, `for`, `break`, `continue`, `print`, `return`,
+`cd`, `pwd`, `which`, `alias`, `env`, `history`, `help`, `exit`) or is a
 call to a function you defined (`greet("world")`). Everything else is run
 exactly as you'd expect from a normal shell.
 
@@ -70,6 +71,33 @@ end
 Blocks are opened with `do` and closed with `end` — no braces, no
 significant indentation. `let` both declares and reassigns.
 
+### Arrays and loops
+
+```
+let nums = [1, 2, 3, 4, 5]
+print nums[0]
+print len(nums)
+
+for n in nums do
+  if n == 3 do
+    continue
+  end
+  if n == 5 do
+    break
+  end
+  print n
+end
+
+for i in range(3) do
+  print i
+end
+```
+
+### Built-in functions
+
+`len`, `upper`, `lower`, `abs`, `min`, `max`, `sqrt`, `range`, `split`,
+`join`, `str`, `num` — called like any function: `print upper("hi")`.
+
 ### Running real commands
 
 Just type them — no prefix needed:
@@ -95,9 +123,16 @@ with a MaxScript keyword).
 | `fn f(a,b) do ... end` | Define a function                  |
 | `if / else if / else / end` | Conditionals                  |
 | `while <cond> do ... end` | Loop                             |
+| `for x in <arr> do ... end` | Loop over an array (or a string's characters) |
+| `break` / `continue` | Exit or skip to the next loop iteration |
 | `return <expr>` | Return from a function                     |
+| `[1, 2, 3]`, `arr[i]` | Array literal and indexing           |
 | `cd <path>`   | Change maxshell's working directory (`..`, `~`, relative or absolute paths all work) |
 | `pwd`         | Print the working directory                  |
+| `which <name>` | Show what a name refers to — keyword, function, variable, alias, or real command |
+| `alias name = "value"` | Define a command alias; `alias name` shows it, `alias` alone lists all |
+| `env NAME = <expr>` | Set an environment variable for subsequent commands; `env NAME` shows it, `env` alone lists all |
+| `history`     | Show real commands run so far this session   |
 | `help`        | Show maxshell's own built-in command list    |
 | `exit`        | Quit                                         |
 | `<anything else>` | Run as a real system command (e.g. `ls -la`, `git status`) |

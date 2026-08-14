@@ -100,6 +100,95 @@ test('calling a defined function at top level needs no prefix', () => {
   assert.deepStrictEqual(run(src), ['hi max']);
 });
 
+test('array literals and indexing', () => {
+  assert.deepStrictEqual(run('let arr = [10, 20, 30]\nprint arr\nprint arr[1]\nprint len(arr)'),
+    ['[10, 20, 30]', '20', '3']);
+});
+
+test('for-in loop over an array', () => {
+  const src = `
+    let total = 0
+    for x in [1, 2, 3, 4] do
+      let total = total + x
+    end
+    print total
+  `;
+  assert.deepStrictEqual(run(src), ['10']);
+});
+
+test('for-in loop over range() with break and continue', () => {
+  const src = `
+    for i in range(10) do
+      if i == 5 do
+        break
+      end
+      if i % 2 == 0 do
+        continue
+      end
+      print i
+    end
+  `;
+  assert.deepStrictEqual(run(src), ['1', '3']);
+});
+
+test('break outside a loop reports an error, not a crash', () => {
+  const interp = new Interpreter({ output: () => {} });
+  assert.throws(() => interp.run('break'), /'break' used outside of a loop/);
+});
+
+test('builtin string and math functions', () => {
+  const src = `
+    print upper("hi")
+    print lower("HI")
+    print abs(-5)
+    print max(3, 9, 1)
+    print min(3, 9, 1)
+    print sqrt(16)
+    print split("a,b,c", ",")
+    print join([1, 2, 3], "-")
+  `;
+  assert.deepStrictEqual(run(src), ['HI', 'hi', '5', '9', '1', '4', '[a, b, c]', '1-2-3']);
+});
+
+test('which identifies keywords, functions, and variables', () => {
+  const src = `
+    fn greet(n) do
+      print n
+    end
+    let x = 42
+    which cd
+    which greet
+    which x
+  `;
+  assert.deepStrictEqual(run(src), [
+    'cd: maxshell keyword',
+    'greet: function',
+    'x: variable = 42',
+  ]);
+});
+
+test('alias expands the leading word of a shell command', () => {
+  assert.deepStrictEqual(run('alias hi = "echo aliased"\nhi'), ['aliased']);
+});
+
+test('env sets and reads a variable used by real commands', () => {
+  const src = `
+    env MAXSHELL_TEST_VAR = "from-maxscript"
+    echo $MAXSHELL_TEST_VAR
+  `;
+  assert.deepStrictEqual(run(src), ['from-maxscript']);
+});
+
+test('history records real commands, not MaxScript statements', () => {
+  const src = `
+    let x = 1
+    echo one
+    echo two
+    history
+  `;
+  assert.deepStrictEqual(run(src), ['one', 'two', '1  echo one', '2  echo two']);
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }
