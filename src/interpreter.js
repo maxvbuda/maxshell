@@ -3,6 +3,24 @@
 const { execSync } = require('child_process');
 const { Parser } = require('./parser');
 
+const HELP_TEXT = `maxshell — a terminal with its own scripting language (MaxScript)
+
+Built-ins:
+  print <expr>            Print a value
+  let x = <expr>           Declare or reassign a variable
+  fn f(a, b) do ... end    Define a function
+  if <cond> do ... end     Conditional (else / else if supported)
+  while <cond> do ... end  Loop
+  return <expr>            Return from a function
+  cd <path>                Change the working directory (.., ~, relative, absolute)
+  pwd                      Print the working directory
+  help                     Show this message
+  exit                     Quit maxshell
+
+Anything else you type — ls, git status, ./script.sh, etc. — runs as a
+real system command, exactly like a normal terminal. Prefix a line with
+"!" to force shell execution if it would otherwise look like MaxScript.`;
+
 class Environment {
   constructor(parent = null) {
     this.vars = new Map();
@@ -155,6 +173,10 @@ class Interpreter {
       }
       case 'Exit': {
         process.exit(0);
+        return null;
+      }
+      case 'Help': {
+        this.output(HELP_TEXT);
         return null;
       }
       case 'ExprStatement': {

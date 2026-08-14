@@ -98,6 +98,7 @@ with a MaxScript keyword).
 | `return <expr>` | Return from a function                     |
 | `cd <path>`   | Change maxshell's working directory (`..`, `~`, relative or absolute paths all work) |
 | `pwd`         | Print the working directory                  |
+| `help`        | Show maxshell's own built-in command list    |
 | `exit`        | Quit                                         |
 | `<anything else>` | Run as a real system command (e.g. `ls -la`, `git status`) |
 | `!<command>`  | Force `<command>` to run as a real system command |

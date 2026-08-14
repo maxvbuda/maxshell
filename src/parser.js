@@ -141,6 +141,10 @@ class Parser {
         this.advance();
         return { type: 'Exit' };
       }
+      case 'HELP': {
+        this.advance();
+        return { type: 'Help' };
+      }
       default: {
         const expr = this.parseExpression();
         return { type: 'ExprStatement', expr };

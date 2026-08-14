@@ -2,7 +2,7 @@
 
 const KEYWORDS = new Set([
   'let', 'fn', 'do', 'end', 'if', 'else', 'while', 'print', 'return',
-  'true', 'false', 'and', 'or', 'not', 'cd', 'exit', 'pwd',
+  'true', 'false', 'and', 'or', 'not', 'cd', 'exit', 'pwd', 'help',
 ]);
 
 class Token {
