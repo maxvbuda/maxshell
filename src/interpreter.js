@@ -1,7 +1,12 @@
 'use strict';
 
+const fs = require('fs');
 const { execSync } = require('child_process');
 const { Parser } = require('./parser');
+
+// Prefer zsh (macOS's default interactive shell) for running real
+// commands; fall back to /bin/sh where zsh isn't installed (e.g. Linux).
+const SHELL_PATH = fs.existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/sh';
 
 const HELP_TEXT = `maxshell — a terminal with its own scripting language (MaxScript)
 
@@ -113,7 +118,7 @@ class Interpreter {
     switch (stmt.type) {
       case 'ShellExec': {
         try {
-          const out = execSync(stmt.command, { cwd: this.cwd, encoding: 'utf8', shell: '/bin/sh' });
+          const out = execSync(stmt.command, { cwd: this.cwd, encoding: 'utf8', shell: SHELL_PATH });
           if (out) this.output(out.replace(/\n$/, ''));
         } catch (e) {
           if (e.stdout) this.output(String(e.stdout).replace(/\n$/, ''));

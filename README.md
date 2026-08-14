@@ -80,7 +80,7 @@ git status
 echo $HOME
 ```
 
-These run through `/bin/sh`, so pipes, redirects, and everything else work
+These run through `zsh` (falling back to `/bin/sh` if zsh isn't installed), so pipes, redirects, and everything else work
 exactly as in a regular terminal. Prefixing a line with `!` runs it as a
 command too; it's only needed to force shell execution for a line that
 would otherwise look like MaxScript (e.g. a line that happens to start
