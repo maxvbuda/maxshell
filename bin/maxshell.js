@@ -7,33 +7,19 @@ const path = require('path');
 const readline = require('readline');
 
 const { Shell, ShellError, IncompleteError, ExitSignal } = require('../src/interpreter');
-const { BUILTINS, findInPath } = require('../src/builtins');
+const { LineEditor } = require('../src/lineeditor');
+const { highlight } = require('../src/highlight');
+const { completions } = require('../src/complete');
+const { leftPrompt, rightPrompt, expandPrompt } = require('../src/prompt');
+const ansi = require('../src/ansi');
 
 const VERSION = require('../package.json').version;
 const HISTORY_FILE = path.join(os.homedir(), '.maxshell_history');
 const RC_FILE = path.join(os.homedir(), '.maxshellrc');
-
-function expandPrompt(template, shell) {
-  const home = shell.getVar('HOME') || os.homedir();
-  return template.replace(/%(.)/g, (match, code) => {
-    switch (code) {
-      case '~': return shell.cwd.startsWith(home) ? `~${shell.cwd.slice(home.length)}` : shell.cwd;
-      case 'd': case '/': return shell.cwd;
-      case 'c': case 'C': return path.basename(shell.cwd);
-      case 'n': return os.userInfo().username;
-      case 'm': return os.hostname().split('.')[0];
-      case 'M': return os.hostname();
-      case '#': return process.getuid && process.getuid() === 0 ? '#' : '%';
-      case '?': return String(shell.status);
-      case '%': return '%';
-      default: return match;
-    }
-  });
-}
+const HISTORY_LIMIT = 2000;
 
 function reportError(e) {
-  if (e instanceof ShellError) process.stderr.write(`maxshell: ${e.message}\n`);
-  else process.stderr.write(`maxshell: ${e.message}\n`);
+  process.stderr.write(`${ansi.fg('red')}maxshell:${ansi.reset()} ${e.message}\n`);
 }
 
 function sourceRcFile(shell) {
@@ -45,106 +31,143 @@ function sourceRcFile(shell) {
   }
 }
 
-function completer(line, shell) {
-  const match = /(\S*)$/.exec(line);
-  const partial = match ? match[1] : '';
-  const isFirstWord = line.slice(0, line.length - partial.length).trim() === '';
-
-  const candidates = [];
-
-  if (isFirstWord) {
-    candidates.push(...Object.keys(BUILTINS), ...shell.funcs.keys(), ...shell.aliases.keys());
-    for (const dir of (shell.env.PATH || '').split(':').filter(Boolean)) {
-      try {
-        for (const name of fs.readdirSync(dir)) candidates.push(name);
-      } catch { /* unreadable PATH entry */ }
-    }
-  }
-
-  const slash = partial.lastIndexOf('/');
-  const dirPart = slash === -1 ? '' : partial.slice(0, slash + 1);
-  const basePart = slash === -1 ? partial : partial.slice(slash + 1);
+function loadHistory(shell) {
   try {
-    const dir = dirPart ? shell.resolve(dirPart) : shell.cwd;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.name.startsWith(basePart)) continue;
-      candidates.push(dirPart + entry.name + (entry.isDirectory() ? '/' : ''));
-    }
-  } catch { /* not a directory */ }
-
-  const hits = [...new Set(candidates)].filter((c) => c.startsWith(partial)).sort();
-  return [hits.length ? hits : [], partial];
+    if (!fs.existsSync(HISTORY_FILE)) return;
+    const lines = fs.readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean);
+    shell.history.push(...lines.slice(-HISTORY_LIMIT));
+  } catch { /* history is best-effort */ }
 }
 
-function runRepl() {
-  const shell = new Shell({ interactive: true });
-  shell.setVar('PROMPT', shell.getVar('PROMPT') || 'maxshell %~ %# ');
-  sourceRcFile(shell);
+function saveHistory(shell) {
+  try {
+    fs.writeFileSync(HISTORY_FILE, `${shell.history.slice(-HISTORY_LIMIT).join('\n')}\n`);
+  } catch { /* history is best-effort */ }
+}
 
-  const rl = readline.createInterface({
+function remember(shell, source) {
+  const entry = source.replace(/\n/g, '; ').trim();
+  if (!entry) return;
+  if (shell.history[shell.history.length - 1] === entry) return;
+  shell.history.push(entry);
+}
+
+function continuationPrompt(shell) {
+  return expandPrompt(shell.getVar('PS2') || '%F{gray}   ...>%f ', shell);
+}
+
+function banner() {
+  const dim = ansi.dim();
+  const r = ansi.reset();
+  process.stdout.write(
+    `${ansi.bold()}maxshell ${VERSION}${r} ${dim}— zsh-flavoured, on Node.js${r}\n`
+    + `${dim}help · tab completes · → accepts suggestions · ctrl-c cancels · ctrl-d exits${r}\n`,
+  );
+}
+
+// Interactive loop backed by the custom line editor.
+async function runEditorRepl(shell) {
+  const editor = new LineEditor({
     input: process.stdin,
     output: process.stdout,
-    completer: (line) => completer(line, shell),
-    historySize: 1000,
+    shell,
+    highlight,
+    complete: completions,
+    history: shell.history,
   });
 
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const lines = fs.readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean);
-      shell.history.push(...lines);
-      rl.history = lines.slice(-1000).reverse();
-    }
-  } catch { /* no usable history */ }
-
-  process.stdout.write(`maxshell ${VERSION} — a zsh-flavoured shell on Node.js. Type 'help' for the language, Ctrl+D to exit.\n`);
-
+  banner();
   let buffer = '';
 
-  const prompt = () => {
-    const template = buffer
-      ? (shell.getVar('PS2') || '%_> ').replace('%_', '   ...')
-      : (shell.getVar('PROMPT') || shell.getVar('PS1') || 'maxshell %~ %# ');
-    rl.setPrompt(buffer ? '   ...> ' : expandPrompt(template, shell));
-    rl.prompt();
-  };
+  for (;;) {
+    const prompt = buffer ? continuationPrompt(shell) : leftPrompt(shell);
+    const rprompt = buffer ? '' : rightPrompt(shell);
 
-  prompt();
-
-  rl.on('line', (line) => {
-    buffer = buffer ? `${buffer}\n${line}` : line;
-
-    if (buffer.trim() === '') { buffer = ''; prompt(); return; }
-
-    const source = buffer;
+    let result;
     try {
-      shell.history.push(source.replace(/\n/g, '; '));
-      shell.run(source);
+      result = await editor.read(prompt, rprompt);
+    } catch (e) {
+      reportError(e);
+      break;
+    }
+
+    if (result.eof) break;
+    if (result.aborted) { buffer = ''; continue; }
+
+    buffer = buffer ? `${buffer}\n${result.line}` : result.line;
+    if (!buffer.trim()) { buffer = ''; continue; }
+
+    try {
+      shell.run(buffer);
+      remember(shell, buffer);
       buffer = '';
     } catch (e) {
-      if (e instanceof IncompleteError) { prompt(); return; }
+      if (e instanceof IncompleteError) continue;
+      remember(shell, buffer);
       buffer = '';
-      if (e instanceof ExitSignal) { rl.close(); return; }
       reportError(e);
     }
-    prompt();
-  });
 
-  rl.on('SIGINT', () => {
-    buffer = '';
-    process.stdout.write('\n');
-    prompt();
-  });
+    if (shell.exited) break;
+  }
 
-  rl.on('close', () => {
-    try {
-      fs.writeFileSync(HISTORY_FILE, `${shell.history.slice(-1000).join('\n')}\n`);
-    } catch { /* history is best-effort */ }
-    process.stdout.write('\n');
-    process.exit(shell.status);
+  saveHistory(shell);
+  return shell.status;
+}
+
+// Fallback for terminals that can't support the editor (no tty on one side).
+function runPlainRepl(shell) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let buffer = '';
+
+    const prompt = () => {
+      rl.setPrompt(buffer ? '   ...> ' : 'maxshell %# '.replace('%#', '%'));
+      rl.prompt();
+    };
+
+    banner();
+    prompt();
+
+    rl.on('line', (line) => {
+      buffer = buffer ? `${buffer}\n${line}` : line;
+      if (!buffer.trim()) { buffer = ''; prompt(); return; }
+      try {
+        shell.run(buffer);
+        remember(shell, buffer);
+        buffer = '';
+      } catch (e) {
+        if (e instanceof IncompleteError) { prompt(); return; }
+        remember(shell, buffer);
+        buffer = '';
+        reportError(e);
+      }
+      if (shell.exited) { rl.close(); return; }
+      prompt();
+    });
+
+    rl.on('close', () => {
+      saveHistory(shell);
+      process.stdout.write('\n');
+      resolve(shell.status);
+    });
   });
+}
+
+async function runRepl() {
+  const interactive = !!(process.stdin.isTTY && process.stdout.isTTY);
+  ansi.setEnabled(!!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb');
+
+  const shell = new Shell({ interactive: true });
+  sourceRcFile(shell);
+  loadHistory(shell);
+
+  const status = interactive ? await runEditorRepl(shell) : await runPlainRepl(shell);
+  process.exit(status);
 }
 
 function runSource(src, name, args) {
+  ansi.setEnabled(false);
   const shell = new Shell({ name, positional: args });
   try {
     return shell.run(src);

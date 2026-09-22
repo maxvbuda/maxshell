@@ -194,6 +194,70 @@ Functions get their own positional parameters (`$1`, `$@`, `$#`) and can declare
 `*`, `?`, `[abc]`, `[!abc]`, alternation `(a|b)`, and recursive `**/` are
 expanded against the filesystem. A pattern with no matches is left alone.
 
+## Interactive shell
+
+maxshell ships its own line editor rather than using Node's `readline`, so the
+prompt is a live surface:
+
+**Syntax highlighting as you type.** Commands are resolved against builtins,
+functions, aliases and `PATH` while you type — a name that resolves goes green,
+one that doesn't goes red, so you see a typo before you run it. Strings are
+yellow, `$variables` and `$(substitutions)` cyan, operators magenta, comments
+grey.
+
+**Ghost suggestions.** The most recent matching history entry appears dimmed
+ahead of the cursor. Press `→` or `ctrl-e` at the end of the line to accept it.
+
+**Git-aware prompt.** Inside a repository the prompt shows the branch plus
+markers: `↑2` ahead, `↓1` behind, `+` staged, `!` modified, `?` untracked.
+Git state is cached briefly so redrawing stays cheap even in large repos.
+
+**Right-hand prompt.** `RPROMPT` is drawn flush right on the first row and
+hidden automatically when the line grows long enough to need the space.
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `→` / `ctrl-e` | accept the ghost suggestion (at end of line) |
+| `tab` | complete; lists candidates when ambiguous |
+| `↑` / `↓`, `ctrl-p` / `ctrl-n` | walk history |
+| `ctrl-a` / `ctrl-e` | start / end of line |
+| `ctrl-b` / `ctrl-f`, `←` / `→` | move by character |
+| `alt-b` / `alt-f` | move by word |
+| `ctrl-w` | delete previous word |
+| `ctrl-u` / `ctrl-k` | kill to start / end of line |
+| `ctrl-l` | clear the screen |
+| `ctrl-c` | cancel the line |
+| `ctrl-d` | exit on an empty line |
+
+### Configuring the prompt
+
+Set `PROMPT` (or `PS1`), `RPROMPT`, and `PS2` for continuation lines — in
+`~/.maxshellrc` to make it stick:
+
+```sh
+PROMPT='%F{cyan}%~%f%g %# '
+RPROMPT='%F{244}%V · %T%f'
+PS2='%F{gray}   ...>%f '
+```
+
+| Escape | Expands to |
+|---|---|
+| `%~` / `%d` / `%c` | cwd with `~` / full cwd / basename |
+| `%g` | git segment (branch and markers), empty outside a repo |
+| `%n` / `%m` / `%M` | user / short host / full host |
+| `%T` / `%t` | time `HH:MM` / `HH:MM:SS` |
+| `%V` | node version |
+| `%?` | last exit status |
+| `%#` | `%` normally, `#` for root |
+| `%F{name}` … `%f` | colour on / off (name or 0-255) |
+| `%B` … `%b`, `%U` … `%u` | bold, underline |
+
+Colour is disabled automatically when output is not a terminal, when `NO_COLOR`
+is set, or when `TERM=dumb`. If either stdin or stdout is not a tty, maxshell
+falls back to a plain line-buffered REPL.
+
 ## Builtins
 
 | Builtin | Purpose |
@@ -217,7 +281,7 @@ Anything that is not a builtin, function, or alias is run as a real program.
 ## Project layout
 
 ```
-bin/maxshell.js     CLI entry point, REPL, tab completion
+bin/maxshell.js     CLI entry point and the interactive loop
 src/lexer.js        Tokenizer: words, quoting, operators, here-documents
 src/parser.js       Recursive-descent parser producing an AST
 src/expand.js       Word expansion: parameters, fields, globbing, patterns
@@ -225,8 +289,15 @@ src/arith.js        Arithmetic expression evaluator
 src/builtins.js     Builtin commands and test primitives
 src/interpreter.js  The Shell: execution, redirection, pipelines, scope
 src/signals.js      break / continue / return / exit control-flow signals
+src/lineeditor.js   Line editor: keys, history, suggestions, rendering
+src/highlight.js    Tolerant syntax highlighter for partial input
+src/complete.js     Tab-completion candidates
+src/prompt.js       Prompt escape expansion
+src/gitprompt.js    Cached git repository status
+src/ansi.js         Colour helpers and escape-aware width
 examples/demo.mxsh  A tour of the language
-test/run.js         Test suite (npm test)
+test/run.js         Language test suite
+test/interactive.js Editor, highlighter and prompt test suite
 ```
 
 ## Differences from zsh

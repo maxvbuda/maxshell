@@ -36,6 +36,7 @@ class Shell {
     this.positional = opts.positional || [];
     this.scriptName = opts.name || 'maxshell';
     this.status = 0;
+    this.exited = false;
     this.history = [];
     this.dirStack = [];
     this.jobs = [];
@@ -238,7 +239,7 @@ class Shell {
     try {
       return this.runSource(src, this.defaultIo());
     } catch (e) {
-      if (e instanceof ExitSignal) return this.setStatus(e.status);
+      if (e instanceof ExitSignal) { this.exited = true; return this.setStatus(e.status); }
       throw e;
     } finally {
       this.flush();
