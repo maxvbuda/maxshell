@@ -1,0 +1,101 @@
+#!/usr/bin/env maxshell
+#
+# A tour of the maxshell language. Run it with:
+#
+#   maxshell examples/demo.mxsh
+
+name=${1:-world}
+greeting="Hello, $name!"
+echo $greeting
+
+# --- arithmetic -------------------------------------------------------------
+
+echo "2 + 3 * 4 = $((2 + 3 * 4))"
+
+total=0
+for ((i = 1; i <= 10; i++)); do
+  (( total += i ))
+done
+echo "sum of 1..10 is $total"
+
+# --- arrays (1-indexed, like zsh) -------------------------------------------
+
+fruits=(apple banana cherry)
+echo "there are ${#fruits} fruits, and the second is $fruits[2]"
+
+for fruit in $fruits; do
+  echo " - $fruit"
+done
+
+# --- parameter expansion ----------------------------------------------------
+
+file=archive.tar.gz
+echo "stem:      ${file%%.*}"
+echo "extension: ${file#*.}"
+echo "renamed:   ${file/archive/backup}"
+
+# --- conditionals -----------------------------------------------------------
+
+if [[ -d /tmp && -r /tmp ]]; then
+  echo "/tmp is a readable directory"
+elif [[ -e /tmp ]]; then
+  echo "/tmp exists but is not a readable directory"
+else
+  echo "no /tmp here"
+fi
+
+case $name in
+  world)    echo "the default greeting" ;;
+  [A-Z]*)   echo "capitalised name" ;;
+  *)        echo "hello again, $name" ;;
+esac
+
+# --- functions --------------------------------------------------------------
+
+shout() {
+  local text=$1
+  echo "${text}!!!"
+}
+
+shout "maxshell rocks"
+
+count_lines() {
+  local n=0
+  while read -r line; do
+    (( n++ ))
+  done
+  echo $n
+}
+
+printf 'a\nb\nc\n' | count_lines
+
+# --- loops and control flow -------------------------------------------------
+
+n=0
+while (( n < 5 )); do
+  (( n++ ))
+  if (( n == 2 )); then
+    continue
+  fi
+  if (( n == 4 )); then
+    break
+  fi
+  echo "n is $n"
+done
+
+repeat 3 do
+  echo "again"
+done
+
+# --- pipelines, redirection, substitution -----------------------------------
+
+here=$(pwd)
+echo "running in $here"
+
+printf 'pear\napple\nfig\n' | sort | head -n 2
+
+cat <<EOF
+This here-document interpolates: $name
+EOF
+
+echo "done" >&2

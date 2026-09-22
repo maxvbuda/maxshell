@@ -1,16 +1,18 @@
 # maxshell
 
-A terminal, but its scripting language isn't bash and isn't JavaScript either.
-maxshell is a Node.js program that behaves like an ordinary terminal —
-`ls`, `git status`, `cd ..`, `./script.sh` all just run — but also hosts a
-small language of its own, **MaxScript**, for variables, functions, and
-control flow (`if`/`while`) when you want more than one-off commands.
+A shell language in the zsh/bash family, implemented from scratch in Node.js.
 
-A line is treated as MaxScript only if it starts with a MaxScript keyword
-(`let`, `fn`, `if`, `while`, `for`, `break`, `continue`, `print`, `return`,
-`cd`, `pwd`, `which`, `alias`, `env`, `history`, `help`, `exit`) or is a
-call to a function you defined (`greet("world")`). Everything else is run
-exactly as you'd expect from a normal shell.
+maxshell is not a wrapper around `/bin/zsh`. It has its own lexer, recursive-descent
+parser, word-expansion engine, arithmetic evaluator, and tree-walking interpreter.
+It runs real programs with `child_process`, but every piece of *language* —
+quoting, expansion, pipelines, redirection, control flow, functions — is
+implemented here.
+
+```sh
+maxshell %~ % for f in src/*.js; do
+   ...>   echo "${f:t} has $(wc -l < $f | tr -d ' ') lines"
+   ...> done
+```
 
 ## Install / run
 
@@ -22,131 +24,222 @@ node bin/maxshell.js
 
 ## Usage
 
-Start a REPL:
+```sh
+maxshell                      # interactive shell
+maxshell script.mxsh a b c    # run a script with arguments
+maxshell -c 'echo hello'      # run one command
+maxshell --version
+```
+
+The interactive shell reads `~/.maxshellrc` at startup and saves input to
+`~/.maxshell_history`. Tab completion works for commands and file paths.
+
+## The language
+
+### Commands, pipelines, and lists
 
 ```sh
-maxshell
+ls -la                      # run a program
+sort file | uniq -c | head  # pipeline
+cmd |& grep error           # pipe stdout *and* stderr
+make && ./run || echo fail  # run on success / on failure
+a; b; c                     # sequence
+sleep 5 &                   # background
+! grep -q foo file          # negate the exit status
 ```
 
-Run a script:
+### Redirection
 
 ```sh
-maxshell examples/demo.msh
+echo hi > out.txt        # truncate
+echo hi >> out.txt       # append
+wc -l < in.txt           # stdin from a file
+cmd 2> errors.txt        # stderr only
+cmd &> all.txt           # stdout and stderr
+cmd 2>&1 | less          # merge stderr into stdout
+cat <<< "a here-string"
+
+cat <<EOF                # here-document (expands $vars)
+home is $HOME
+EOF
+
+cat <<'EOF'              # quoted delimiter: no expansion
+literal $HOME
+EOF
 ```
 
-## The language (MaxScript)
+### Variables and parameter expansion
 
+```sh
+name=World               # assignment (no spaces around =)
+greeting="Hi, $name"
+export PATH="$PATH:$HOME/bin"
+readonly=no local=yes    # ordinary names, nothing special
+
+echo $name  ${name}      # expand
+echo "${name:-default}"  # default if unset or empty
+echo "${name:=default}"  # assign a default
+echo "${name:+set}"      # alternate value if set
+echo "${name:?message}"  # error if unset
+echo ${#name}            # length
+echo ${name#prefix}      # remove shortest prefix     (## = longest)
+echo ${name%suffix}      # remove shortest suffix     (%% = longest)
+echo ${name/a/b}         # replace first              (// = all)
+echo ${name:2:3}         # substring
 ```
-let name = "World"
-print "Hello, " + name
 
-fn greet(person) do
-  print "Hi there, " + person + "!"
-end
+Special parameters: `$?` (last exit status), `$#` (argument count), `$@` and
+`$*` (all arguments), `$0`–`$9` (positional), `$$` (pid), `$!` (last background
+pid), `$RANDOM`, `$SECONDS`, `$PWD`, `$OLDPWD`.
 
-greet("maxshell")
+### Arrays
 
-fn fib(n) do
-  if n < 2 do
-    return n
-  end
-  return fib(n - 1) + fib(n - 2)
-end
+Arrays are **1-indexed**, as in zsh, and a bare array name expands to all of its
+elements:
 
-let i = 0
-while i < 10 do
-  print fib(i)
-  let i = i + 1
-end
+```sh
+fruits=(apple banana cherry)
+echo $fruits[2]           # banana
+echo ${fruits[2]}         # banana
+echo ${fruits[-1]}        # cherry
+echo ${#fruits}           # 3
+fruits+=(date)            # append
+for f in $fruits; do echo $f; done
+```
 
-if i > 5 do
-  print "big"
-else if i > 0 do
-  print "medium"
+### Arithmetic
+
+```sh
+echo $((2 + 3 * 4))       # arithmetic expansion
+(( count = 10 ))          # arithmetic command; status 0 if non-zero
+(( count++ ))
+if (( count > 5 )); then echo big; fi
+let 'x = 3 * 3'
+```
+
+Supports `+ - * / % **`, comparisons, `&& || !`, bitwise `& | ^ ~ << >>`,
+`?:`, and assignment forms like `+=` and `++`. Integer division truncates.
+
+### Conditionals
+
+```sh
+if [[ -f config && $mode == prod* ]]; then
+  echo ready
+elif [[ -d config ]]; then
+  echo directory
 else
-  print "small"
-end
+  echo missing
+fi
 ```
 
-Blocks are opened with `do` and closed with `end` — no braces, no
-significant indentation. `let` both declares and reassigns.
+`[[ ... ]]` supports file tests (`-e -f -d -r -w -x -s -L`), string tests
+(`-z -n`), pattern matching (`==` and `!=` treat the right side as a glob),
+regex matching (`=~`), numeric comparison (`-eq -ne -lt -le -gt -ge`), file
+comparison (`-nt -ot -ef`), grouping with `( )`, and `! && ||`.
 
-### Arrays and loops
+The POSIX `test` / `[ ... ]` builtins are available too.
 
-```
-let nums = [1, 2, 3, 4, 5]
-print nums[0]
-print len(nums)
+### Loops
 
-for n in nums do
-  if n == 3 do
-    continue
-  end
-  if n == 5 do
-    break
-  end
-  print n
-end
-
-for i in range(3) do
-  print i
-end
+```sh
+for x in a b c; do echo $x; done
+for x (a b c) { echo $x }           # zsh short forms
+foreach x (a b c) echo $x; end
+for ((i = 0; i < 10; i++)); do echo $i; done
+while read -r line; do echo "> $line"; done < input.txt
+until (( done )); do work; done
+repeat 3 do echo again; done
 ```
 
-### Built-in functions
+`break` and `continue` accept a level count (`break 2`).
 
-`len`, `upper`, `lower`, `abs`, `min`, `max`, `sqrt`, `range`, `split`,
-`join`, `str`, `num` — called like any function: `print upper("hi")`.
+### case
 
-### Running real commands
-
-Just type them — no prefix needed:
-
-```
-ls -la | grep ".js"
-git status
-echo $HOME
+```sh
+case $answer in
+  yes|y)  echo affirmative ;;
+  n*)     echo negative ;;
+  *)      echo unknown ;;
+esac
 ```
 
-These run through `zsh` (falling back to `/bin/sh` if zsh isn't installed), so pipes, redirects, and everything else work
-exactly as in a regular terminal. Prefixing a line with `!` runs it as a
-command too; it's only needed to force shell execution for a line that
-would otherwise look like MaxScript (e.g. a line that happens to start
-with a MaxScript keyword).
+### Functions
 
-### Built-ins
+```sh
+greet() {
+  local who=${1:-world}
+  echo "hello, $who"
+  return 0
+}
 
-| Command       | Behavior                                   |
-|---------------|---------------------------------------------|
-| `print <expr>`| Print a value                                |
-| `let x = ...` | Declare or reassign a variable               |
-| `fn f(a,b) do ... end` | Define a function                  |
-| `if / else if / else / end` | Conditionals                  |
-| `while <cond> do ... end` | Loop                             |
-| `for x in <arr> do ... end` | Loop over an array (or a string's characters) |
-| `break` / `continue` | Exit or skip to the next loop iteration |
-| `return <expr>` | Return from a function                     |
-| `[1, 2, 3]`, `arr[i]` | Array literal and indexing           |
-| `cd <path>`   | Change maxshell's working directory (`..`, `~`, relative or absolute paths all work) |
-| `pwd`         | Print the working directory                  |
-| `which <name>` | Show what a name refers to — keyword, function, variable, alias, or real command |
-| `alias name = "value"` | Define a command alias; `alias name` shows it, `alias` alone lists all |
-| `env NAME = <expr>` | Set an environment variable for subsequent commands; `env NAME` shows it, `env` alone lists all |
-| `history`     | Show real commands run so far this session   |
-| `help`        | Show maxshell's own built-in command list    |
-| `exit`        | Quit                                         |
-| `<anything else>` | Run as a real system command (e.g. `ls -la`, `git status`) |
-| `!<command>`  | Force `<command>` to run as a real system command |
+function shout {
+  echo "$1!!!"
+}
+
+greet maxshell
+```
+
+Functions get their own positional parameters (`$1`, `$@`, `$#`) and can declare
+`local` variables. `return` exits a function with a status.
+
+### Grouping and subshells
+
+```sh
+{ echo a; echo b; } > both.txt    # same shell
+( cd /tmp; pwd )                  # subshell: cd doesn't escape
+```
+
+### Globbing
+
+`*`, `?`, `[abc]`, `[!abc]`, alternation `(a|b)`, and recursive `**/` are
+expanded against the filesystem. A pattern with no matches is left alone.
+
+## Builtins
+
+| Builtin | Purpose |
+|---|---|
+| `cd`, `pwd`, `pushd`, `popd`, `dirs` | directory navigation and the directory stack |
+| `echo`, `print`, `printf` | output (`echo` interprets `\n`-style escapes, like zsh) |
+| `export`, `unset`, `declare`, `typeset`, `local` | variable scope and environment |
+| `alias`, `unalias` | command aliases |
+| `source` / `.`, `eval`, `command` | run code from a file, a string, or bypassing functions |
+| `read` | read a line of stdin into variables |
+| `set`, `shift` | shell options (`-e`, `-u`, `-x`, `-o pipefail`) and positional parameters |
+| `test`, `[`, `let` | conditionals and arithmetic |
+| `true`, `false`, `:` | trivial exit statuses |
+| `type`, `whence`, `which` | what does this name refer to? |
+| `history`, `jobs`, `help` | session information |
+| `break`, `continue`, `return`, `exit` | control flow |
+| `unfunction` | remove a function |
+
+Anything that is not a builtin, function, or alias is run as a real program.
 
 ## Project layout
 
 ```
-bin/maxshell.js     CLI entry point / REPL
-src/lexer.js        Tokenizer for MaxScript
-src/parser.js        Recursive-descent parser producing an AST
-src/interpreter.js  Tree-walking interpreter
-examples/demo.msh   Sample script
+bin/maxshell.js     CLI entry point, REPL, tab completion
+src/lexer.js        Tokenizer: words, quoting, operators, here-documents
+src/parser.js       Recursive-descent parser producing an AST
+src/expand.js       Word expansion: parameters, fields, globbing, patterns
+src/arith.js        Arithmetic expression evaluator
+src/builtins.js     Builtin commands and test primitives
+src/interpreter.js  The Shell: execution, redirection, pipelines, scope
+src/signals.js      break / continue / return / exit control-flow signals
+examples/demo.mxsh  A tour of the language
+test/run.js         Test suite (npm test)
 ```
+
+## Differences from zsh
+
+- Arrays are 1-indexed and bare `$arr` expands to all elements (zsh behaviour),
+  not bash behaviour.
+- Pipelines run stage by stage: each stage completes before the next starts, so
+  output is buffered rather than streamed. Interactive programs work when run on
+  their own, not in the middle of a pipeline.
+- Background jobs (`&`) start a detached process; there is no job control
+  (`fg`, `bg`, `%1`).
+- Not implemented: `trap`, `getopts`, process substitution `<(...)`, coprocesses,
+  zsh glob qualifiers, and zsh's parameter expansion flags like `${(U)x}`.
 
 ## License
 
