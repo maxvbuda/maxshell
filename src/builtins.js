@@ -288,8 +288,12 @@ Control flow
 Builtins
   :  .  alias  bg-style jobs  break  cd  command  continue  declare  dirs
   echo  eval  exit  export  false  help  history  let  local  popd  print
-  printf  pushd  pwd  read  return  set  shift  source  test  true  type
-  typeset  unalias  unfunction  unset  whence  which  [
+  printf  pushd  pwd  pyedit  read  return  set  shift  source  test  true
+  type  typeset  unalias  unfunction  unset  whence  which  [
+
+Editing
+  pyedit [file]             nano-style Python editor: highlighting, auto-indent,
+                            ^T runs the buffer, ^G shows the key list
 
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
@@ -603,6 +607,11 @@ BUILTINS.type = (args, io, shell) => {
 };
 
 BUILTINS.whence = BUILTINS.type;
+
+BUILTINS.pyedit = (args, io, shell) => {
+  const { runEditor } = require('./pyedit');
+  return runEditor(args, io, shell);
+};
 
 BUILTINS.which = (args, io, shell) => {
   let status = 0;

@@ -258,6 +258,51 @@ Colour is disabled automatically when output is not a terminal, when `NO_COLOR`
 is set, or when `TERM=dumb`. If either stdin or stdout is not a tty, maxshell
 falls back to a plain line-buffered REPL.
 
+## pyedit — the built-in Python editor
+
+maxshell ships a nano-style editor tuned for Python. It reuses the shell's own
+terminal layer, so there is nothing to install:
+
+```sh
+pyedit script.py      # open (or create) a file
+pyedit                # start an empty buffer
+```
+
+It looks and behaves like nano — modeless, with the shortcut bar along the
+bottom — but knows Python:
+
+**Syntax highlighting** for keywords, builtins, constants, numbers, decorators,
+comments, and strings, including triple-quoted strings tracked across lines and
+`f`/`r`/`b` prefixes.
+
+**Indentation that understands the language.** Enter keeps the current indent
+and adds a level after a line ending in `:` or an opening bracket — but not
+when that colon is inside a trailing comment. Backspace inside leading
+whitespace removes a whole four-space stop rather than one character. `Tab` and
+`Shift-Tab` indent and dedent.
+
+**Run without leaving the editor.** `^T` pipes the buffer straight to `python3`
+and shows the output in a pager, so you can run code you have not saved yet.
+
+**Syntax check on save.** Writing a `.py` file parses it with `ast.parse` and
+reports the first syntax error, with its line number, in the status bar.
+
+### Keys
+
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `^O` | write the file out | `^X` | exit, offering to save |
+| `^T` | run the buffer with python3 | `^G` | help screen |
+| `^W` | search | `M-W` | search again |
+| `^K` | cut the line (repeat to cut a run) | `^U` | paste |
+| `^Z` / `M-U` | undo | `M-E` | redo |
+| `M-3` | toggle a `#` comment | `M-N` | toggle line numbers |
+| `^A` / `^E` | start / end of line | `^_` | go to line |
+| `^Y` / `^V` | page up / down | `^D` | delete character |
+
+`pyedit` needs an interactive terminal; it exits with an error if stdin or
+stdout is redirected.
+
 ## Builtins
 
 | Builtin | Purpose |
@@ -275,6 +320,7 @@ falls back to a plain line-buffered REPL.
 | `history`, `jobs`, `help` | session information |
 | `break`, `continue`, `return`, `exit` | control flow |
 | `unfunction` | remove a function |
+| `pyedit` | the built-in Python editor (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
 
@@ -295,9 +341,13 @@ src/complete.js     Tab-completion candidates
 src/prompt.js       Prompt escape expansion
 src/gitprompt.js    Cached git repository status
 src/ansi.js         Colour helpers and escape-aware width
+src/pyedit.js       nano-style Python editor (buffer model + screen)
+src/pyhighlight.js  Python tokenizer and syntax colouring
+src/keys.js         Blocking key reader for full-screen editing
 examples/demo.mxsh  A tour of the language
 test/run.js         Language test suite
-test/interactive.js Editor, highlighter and prompt test suite
+test/interactive.js Line editor, highlighter and prompt test suite
+test/pyedit.js      Python editor, tokenizer and key reader test suite
 ```
 
 ## Differences from zsh
