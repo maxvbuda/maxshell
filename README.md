@@ -287,6 +287,12 @@ and shows the output in a pager, so you can run code you have not saved yet.
 **Syntax check on save.** Writing a `.py` file parses it with `ast.parse` and
 reports the first syntax error, with its line number, in the status bar.
 
+**It watches the file.** If another program writes the file while it is open,
+pyedit notices within about half a second, without you touching a key. An
+untouched buffer is reloaded for you. If you have unsaved edits of your own it
+says so in the title bar instead of choosing for you — `^R` takes their
+version, and `^O` asks before overwriting it with yours.
+
 ### Keys
 
 | Key | Action | Key | Action |
@@ -296,6 +302,7 @@ reports the first syntax error, with its line number, in the status bar.
 | `^W` | search | `M-W` | search again |
 | `^K` | cut the line (repeat to cut a run) | `^U` | paste |
 | `^Z` / `M-U` | undo | `M-E` | redo |
+| `^R` | re-read the file from disk | | |
 | `M-3` | toggle a `#` comment | `M-N` | toggle line numbers |
 | `^A` / `^E` | start / end of line | `^_` | go to line |
 | `^Y` / `^V` | page up / down | `^D` | delete character |

@@ -12,6 +12,17 @@ const { findInPath } = require('./builtins');
 const TAB_WIDTH = 4;
 const INDENT = ' '.repeat(TAB_WIDTH);
 const UNDO_LIMIT = 300;
+const DISK_POLL_MS = 400;
+
+// Cheap fingerprint of a file, used to notice writes by other programs.
+function statSig(file) {
+  try {
+    const st = fs.statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+}
 
 // --- the document model (pure, so it can be tested without a terminal) ------
 
@@ -220,7 +231,7 @@ class EditorBuffer {
 
 const HELP_ROWS = [
   [['^O', 'Save'], ['^X', 'Exit'], ['^W', 'Find'], ['^T', 'Run'], ['^G', 'Help'], ['^K', 'Cut']],
-  [['^U', 'Paste'], ['^Z', 'Undo'], ['M-3', 'Comment'], ['Tab', 'Indent'], ['M-N', 'Numbers'], ['^_', 'Go to']],
+  [['^U', 'Paste'], ['^Z', 'Undo'], ['M-3', 'Comment'], ['Tab', 'Indent'], ['^R', 'Reload'], ['^_', 'Go to']],
 ];
 
 class PyEditor {
@@ -244,6 +255,9 @@ class PyEditor {
     this.status = 0;
     this.stateVersion = -1;
     this.states = [];
+    this.diskSig = null;
+    this.diskChanged = false;
+    this.lastCheck = 0;
   }
 
   get rows() { return this.output.rows || 24; }
@@ -279,7 +293,7 @@ class PyEditor {
 
   titleBar() {
     const name = this.filename || 'new buffer';
-    const flag = this.buf.modified ? '  Modified' : '';
+    const flag = `${this.diskChanged ? '  Changed on disk' : ''}${this.buf.modified ? '  Modified' : ''}`;
     const left = `  maxshell pyedit  ${name}`;
     const room = this.cols - left.length - flag.length;
     return this.bar(left + (room > 0 ? ' '.repeat(room) : '') + flag);
@@ -369,17 +383,103 @@ class PyEditor {
     this.prompt = { label, value: initial || '', onDone };
   }
 
+  // Re-reads the file when another program has written it. Returns true when
+  // anything changed, so the caller knows to redraw.
+  checkDisk(force = false) {
+    if (!this.filename) return false;
+    const now = Date.now();
+    if (!force && now - this.lastCheck < DISK_POLL_MS) return false;
+    this.lastCheck = now;
+
+    const sig = statSig(this.shell.resolve(this.filename));
+    if (sig === this.diskSig) return false;
+    this.diskSig = sig;
+
+    if (sig === null) {
+      this.message = 'file is no longer on disk — ^O writes it back';
+      return true;
+    }
+    if (!this.buf.modified) {
+      this.loadFromDisk();
+      this.message = 'reloaded — the file changed on disk';
+      this.diskChanged = false;
+      return true;
+    }
+    // Both copies have moved on; let the user choose rather than guessing.
+    this.diskChanged = true;
+    this.message = 'changed on disk — ^R reloads, ^O overwrites';
+    return true;
+  }
+
+  loadFromDisk() {
+    const file = this.shell.resolve(this.filename);
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      this.message = `cannot read ${this.filename}: ${e.code || e.message}`;
+      return false;
+    }
+    const { row, col } = this.buf;
+    this.buf.pushUndo();
+    this.buf.lines = text.length ? text.split('\n') : [''];
+    this.buf.row = Math.min(row, this.buf.lines.length - 1);
+    this.buf.col = col;
+    this.buf.clamp();
+    this.buf.modified = false;
+    this.stateVersion = -1;
+    this.diskSig = statSig(file);
+    return true;
+  }
+
+  tryReload() {
+    if (!this.filename) { this.message = 'no file to reload'; return; }
+    if (!this.buf.modified) {
+      if (this.loadFromDisk()) this.message = 'reloaded from disk';
+      this.diskChanged = false;
+      return;
+    }
+    this.askPrompt('Discard your edits and reload? (y/n) ', '', (value) => {
+      const answer = value.trim().toLowerCase();
+      if (answer === 'y' || answer === 'yes') {
+        if (this.loadFromDisk()) this.message = 'reloaded from disk';
+        this.diskChanged = false;
+      } else {
+        this.message = 'kept your version';
+      }
+    });
+  }
+
   save(name) {
     const target = name || this.filename;
     if (!target) { this.askPrompt('File name to write: ', '', (v) => this.save(v)); return; }
+
+    this.checkDisk(true);
+    if (this.diskChanged && target === this.filename) {
+      this.diskChanged = false;
+      this.askPrompt('It changed on disk since you opened it. Overwrite? (y/n) ', '', (value) => {
+        const answer = value.trim().toLowerCase();
+        if (answer === 'y' || answer === 'yes') this.writeOut(target);
+        else this.message = 'not saved — ^R reloads the version on disk';
+      });
+      return;
+    }
+    this.writeOut(target);
+  }
+
+  writeOut(target) {
+    const file = this.shell.resolve(target);
     try {
-      fs.writeFileSync(this.shell.resolve(target), this.buf.text);
+      fs.writeFileSync(file, this.buf.text);
     } catch (e) {
       this.message = `cannot write ${target}: ${e.code || e.message}`;
       return;
     }
     this.filename = target;
     this.buf.modified = false;
+    this.diskChanged = false;
+    this.diskSig = statSig(file);
+    this.lastCheck = Date.now();
     const lines = this.buf.lines.length;
     const problem = /\.py$/.test(target) ? this.checkSyntax() : null;
     this.message = problem
@@ -489,6 +589,7 @@ class PyEditor {
         case 'e': this.buf.end(); break;
         case 'd': this.buf.deleteChar(); break;
         case 't': this.runPython(); break;
+        case 'r': this.tryReload(); break;
         case 'l': this.output.write('\x1b[2J'); break;
         case 'c': this.message = `line ${this.buf.row + 1}, col ${this.buf.col + 1}`; break;
         case 'w':
@@ -540,9 +641,17 @@ class PyEditor {
 
   loop() {
     const reader = new KeyReader(0);
+    this.render();
     while (!this.done) {
-      this.render();
-      this.handleKey(reader.next());
+      const key = reader.next(DISK_POLL_MS);
+      if (key.name === 'timeout') {
+        // Idle: only redraw if the file moved underneath us.
+        if (this.checkDisk()) this.render();
+        continue;
+      }
+      this.checkDisk();
+      this.handleKey(key);
+      if (!this.done) this.render();
     }
     return this.status;
   }
@@ -560,6 +669,11 @@ const HELP_TEXT_LINES = `
  Files
    ^O                 write the buffer out (asks for a name)
    ^X                 exit, offering to save first
+   ^R                 re-read the file from disk (asks first if you have edits)
+
+ If another program writes the file while it is open, pyedit notices within
+ half a second. An untouched buffer is reloaded for you; if you have your own
+ unsaved edits it says so instead, and ^O will ask before overwriting.
    On saving a .py file the buffer is parsed with python3 and any syntax
    error is reported in the status line.
 
@@ -607,6 +721,7 @@ function runEditor(args, io, shell) {
   }
 
   const editor = new PyEditor({ shell, io, filename, text });
+  if (filename) editor.diskSig = statSig(shell.resolve(filename));
   const wasRaw = process.stdin.isRaw;
 
   try {

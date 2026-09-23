@@ -40,13 +40,20 @@ class KeyReader {
     this.eof = false;
   }
 
-  fill() {
+  // Returns -1 if `deadline` (ms since epoch) passed with no input. That only
+  // happens where the tty yields EAGAIN; on platforms whose reads block, this
+  // waits as before.
+  fill(deadline = 0) {
     for (;;) {
       let n;
       try {
         n = fs.readSync(this.fd, this.chunk, 0, this.chunk.length, null);
       } catch (e) {
-        if (e.code === 'EAGAIN') { sleepSync(4); continue; }
+        if (e.code === 'EAGAIN') {
+          if (deadline && Date.now() >= deadline) return -1;
+          sleepSync(4);
+          continue;
+        }
         if (e.code === 'EOF') { this.eof = true; return 0; }
         throw e;
       }
@@ -61,9 +68,10 @@ class KeyReader {
 
   consume(n) { this.buf = this.buf.subarray(n); }
 
-  next() {
+  next(timeoutMs = 0) {
     if (!this.buf.length) {
-      this.fill();
+      const got = this.fill(timeoutMs ? Date.now() + timeoutMs : 0);
+      if (got === -1) return { name: 'timeout' };
       if (!this.buf.length) return { name: 'eof' };
     }
     return this.parse();
@@ -76,7 +84,7 @@ class KeyReader {
     if (c === 0x1b) {
       if (b.length === 1) {
         // A lone ESC; give the rest of a sequence a moment to arrive.
-        this.fill();
+        this.fill(Date.now() + 30);
         if (this.buf.length === 1) { this.consume(1); return { name: 'escape' }; }
         return this.parse();
       }

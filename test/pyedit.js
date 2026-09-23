@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { EditorBuffer } = require('../src/pyedit');
+const { EditorBuffer, PyEditor } = require('../src/pyedit');
 const { tokenizeLine, computeStates, renderSlice } = require('../src/pyhighlight');
 const { KeyReader } = require('../src/keys');
 const ansi = require('../src/ansi');
@@ -313,6 +313,139 @@ test('key reader decodes escape sequences and control keys', () => {
   assert.ok(got[14].shift, 'shift-tab should be flagged shift');
   assert.ok(got[15].meta, 'meta-b should be flagged meta');
   assert.strictEqual(got[16].str, 'é');
+});
+
+
+// --- noticing changes made by other programs --------------------------------
+
+function tempEditor(initial) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxedit-'));
+  const file = path.join(dir, 'thing.py');
+  fs.writeFileSync(file, initial);
+  const shell = {
+    cwd: dir,
+    env: process.env,
+    options: new Set(),
+    resolve: (f) => (path.isAbsolute(f) ? f : path.join(dir, f)),
+    writeTo() {},
+  };
+  const editor = new PyEditor({ shell, io: {}, filename: file, text: initial });
+  editor.diskSig = `${fs.statSync(file).mtimeMs}:${fs.statSync(file).size}`;
+  return { editor, file, dir };
+}
+
+// mtime resolution is coarse, so nudge it to guarantee a different signature.
+function writeExternally(file, text) {
+  fs.writeFileSync(file, text);
+  const later = new Date(Date.now() + 2000);
+  fs.utimesSync(file, later, later);
+}
+
+test('an untouched buffer reloads when the file changes on disk', () => {
+  const { editor, file, dir } = tempEditor('x = 1\n');
+  writeExternally(file, 'x = 99\ny = 2\n');
+
+  assert.strictEqual(editor.checkDisk(true), true, 'should report a change');
+  assert.strictEqual(editor.buf.text, 'x = 99\ny = 2\n');
+  assert.strictEqual(editor.diskChanged, false);
+  assert.match(editor.message, /reloaded/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a modified buffer is not clobbered by a change on disk', () => {
+  const { editor, file, dir } = tempEditor('x = 1\n');
+  editor.buf.col = 0;
+  editor.buf.insert('# mine\n');
+  const mine = editor.buf.text;
+
+  writeExternally(file, 'theirs = True\n');
+  assert.strictEqual(editor.checkDisk(true), true);
+  assert.strictEqual(editor.buf.text, mine, 'my edits must survive');
+  assert.strictEqual(editor.diskChanged, true);
+  assert.match(editor.message, /changed on disk/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('saving over a changed file asks first', () => {
+  const { editor, file, dir } = tempEditor('x = 1\n');
+  editor.buf.col = 0;
+  editor.buf.insert('mine = 1\n');
+  writeExternally(file, 'theirs = 1\n');
+  editor.checkDisk(true);
+
+  editor.save();
+  assert.strictEqual(editor.mode, 'prompt', 'expected a confirmation prompt');
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'theirs = 1\n', 'must not write yet');
+
+  // Decline: their version stays.
+  editor.handleKey({ name: 'n', printable: true, str: 'n' });
+  editor.handleKey({ name: 'return' });
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'theirs = 1\n');
+  assert.match(editor.message, /not saved/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('confirming the overwrite writes the buffer', () => {
+  const { editor, file, dir } = tempEditor('x = 1\n');
+  editor.buf.col = 0;
+  editor.buf.insert('mine = 1\n');
+  writeExternally(file, 'theirs = 1\n');
+  editor.checkDisk(true);
+
+  editor.save();
+  editor.handleKey({ name: 'y', printable: true, str: 'y' });
+  editor.handleKey({ name: 'return' });
+
+  assert.ok(fs.readFileSync(file, 'utf8').startsWith('mine = 1'));
+  assert.strictEqual(editor.buf.modified, false);
+  assert.strictEqual(editor.diskChanged, false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('our own save does not look like an external change', () => {
+  const { editor, file, dir } = tempEditor('x = 1\n');
+  editor.buf.col = 0;
+  editor.buf.insert('y = 2\n');
+  editor.save();
+  assert.strictEqual(editor.mode, 'edit', 'a clean save should not prompt');
+  assert.strictEqual(editor.checkDisk(true), false, 'no phantom reload after saving');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a deleted file is reported rather than blanking the buffer', () => {
+  const { editor, file, dir } = tempEditor('keep = 1\n');
+  fs.rmSync(file);
+  assert.strictEqual(editor.checkDisk(true), true);
+  assert.strictEqual(editor.buf.text, 'keep = 1\n');
+  assert.match(editor.message, /no longer on disk/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('reload is throttled but force bypasses it', () => {
+  const { editor, file, dir } = tempEditor('a = 1\n');
+  editor.lastCheck = Date.now();
+  writeExternally(file, 'a = 2\n');
+  assert.strictEqual(editor.checkDisk(), false, 'throttled call should do nothing');
+  assert.strictEqual(editor.checkDisk(true), true, 'forced call should notice');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the key reader can time out so idle polling works', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mxkeys2-')), 'empty.bin');
+  fs.writeFileSync(file, '');
+  const fd = fs.openSync(file, 'r');
+  const reader = new KeyReader(fd);
+  // A regular file reports EOF rather than EAGAIN, so this must not hang.
+  assert.strictEqual(reader.next(50).name, 'eof');
+  fs.closeSync(fd);
+  fs.rmSync(path.dirname(file), { recursive: true, force: true });
 });
 
 if (failures) {
