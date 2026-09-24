@@ -413,21 +413,40 @@ case-insensitive unless you type a capital; matches are highlighted and `n` /
 When its output is not a terminal (`view f > out`), `view` just prints, like
 `cat`.
 
-### files — a file browser
+### files — a Finder-style browser
 
 ```sh
 files            # browse from here
 files ~/code     # or from somewhere else
 ```
 
-Two panes: the directory on the left, a live preview on the right — the
-highlighted start of a file, the contents of a folder, or a note that a file is
-binary. `→` enters a folder and `←` goes back up with the cursor on the folder
-you came from. `Enter` opens a file in `edit`, `v` in `view`, and both return
-you to the browser. `/` filters as you type, `.` shows hidden files.
+Laid out like Finder's column view: a **Favorites sidebar** (Home, Desktop,
+Documents, Downloads, Applications, iCloud Drive, your disks), the enclosing
+folder, the current folder, and a **preview** of the selected item — its kind,
+size and date, then the highlighted start of a file or a folder's contents. A
+path bar and a status bar ("7 items, 176G available") run along the bottom.
+Items get Finder-style icons and kinds (🐍 Python source, 🎨 PNG image, 📦 ZIP
+archive…); set `MAXSHELL_ICONS=0` for plain text.
 
-`q` quits **and leaves your shell in the directory you were looking at**, so
-`files` doubles as a visual `cd`. `Q` quits without moving.
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `→` `Enter` | open folder | `←` `Backspace` | enclosing folder |
+| `[` `]` | back / forward | `Tab`, `1`–`9` | sidebar, jump to a favorite |
+| `Enter` on a file | text and code open in `edit`; anything else in its Mac app | `Space` | **Quick Look** (text in a pager, the rest in macOS Quick Look) |
+| `o` | open with the default app | `e` / `v` | edit / view |
+| `n` / `N` | new folder / new file | `r` | rename |
+| `d` | duplicate ("name copy") | `c` `x` `p` | copy / cut / paste |
+| `t` `Delete` | **move to Trash** | `u` `^Z` | **undo** |
+| `m` | mark, to act on several | `a` / `A` | mark all / none |
+| `s` | sort by name, date, size, kind | `i` | **Get Info** (incl. folder size) |
+| `/` | filter this folder | `f` | search subfolders by name |
+| `.` | show hidden files | `b` | hide the sidebar |
+| `q` | quit, **leaving the shell in this folder** | `Q` | quit without moving |
+
+Nothing is ever deleted outright: `t` moves things to the Trash, and every
+change — new, rename, duplicate, copy, move, trash — can be undone with `u`.
+Pasting over a name that exists keeps both, like Finder's "Keep Both". The
+view refreshes by itself when another program changes the folder.
 
 ### top — a process monitor
 
@@ -493,7 +512,8 @@ src/syntax.js       Language table, detection, and the JS/C/C++/shell/JSON/Markd
 src/paint.js        Token colours and selection-aware line painting
 src/tui.js          Shared full-screen plumbing: raw mode, bars, meters
 src/view.js         view: pager model and screen
-src/files.js        files: browser model, previews, screen
+src/files.js        files: browser model, column view, sidebar, previews
+src/fileops.js      Undoable file operations: new, rename, copy, move, Trash
 src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing

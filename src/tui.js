@@ -24,11 +24,39 @@ function fullscreen(fn, { cursor = true } = {}) {
   }
 }
 
-// Truncates or pads plain text to exactly `width` columns.
+// Terminal columns a code point occupies: 0 for combining marks and joiners,
+// 2 for emoji and East Asian wide characters, otherwise 1.
+function charWidth(cp) {
+  if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x300 && cp <= 0x36f)) return 0;
+  if ((cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x1f000 && cp <= 0x1f2ff)
+    || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3)
+    || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f)
+    || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)
+    || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
+  return 1;
+}
+
+function textWidth(text) {
+  let w = 0;
+  for (const ch of String(text)) w += charWidth(ch.codePointAt(0));
+  return w;
+}
+
+// Truncates or pads plain text to exactly `width` columns, counting wide
+// characters (emoji icons, CJK) as two.
 function fit(text, width) {
+  if (width <= 0) return '';
   const chars = [...String(text)];
-  if (chars.length > width) return `${chars.slice(0, Math.max(0, width - 1)).join('')}…`;
-  return chars.join('') + ' '.repeat(width - chars.length);
+  if (textWidth(text) <= width) return chars.join('') + ' '.repeat(width - textWidth(text));
+  let out = '';
+  let w = 0;
+  for (const ch of chars) {
+    const cw = charWidth(ch.codePointAt(0));
+    if (w + cw > width - 1) break;
+    out += ch;
+    w += cw;
+  }
+  return `${out}…${' '.repeat(Math.max(0, width - w - 1))}`;
 }
 
 // A full-width reverse-video bar.
@@ -54,4 +82,4 @@ function meter(fraction, width) {
   return `[${color}${'|'.repeat(filled)}${ansi.reset()}${' '.repeat(inner - filled)}]`;
 }
 
-module.exports = { requireTty, fullscreen, fit, bar, humanBytes, meter };
+module.exports = { requireTty, fullscreen, fit, bar, humanBytes, meter, charWidth, textWidth };

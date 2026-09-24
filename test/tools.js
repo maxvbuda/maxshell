@@ -9,7 +9,8 @@ const ansi = require('../src/ansi');
 const syntax = require('../src/syntax');
 const { EditorBuffer, PyEditor } = require('../src/pyedit');
 const { Pager, PagerScreen } = require('../src/view');
-const { FileBrowser, previewOf } = require('../src/files');
+const { FileBrowser, FilesScreen, previewOf, describe, isTextual, finderDate } = require('../src/files');
+const ops = require('../src/fileops');
 const { ProcessTable, parsePs, coreUsage } = require('../src/top');
 const { fit, humanBytes, meter } = require('../src/tui');
 
@@ -545,6 +546,294 @@ test('--lang accepts cpp and c', () => {
   assert.strictEqual(LANG_ALIASES.cpp, 'cpp');
   assert.strictEqual(LANG_ALIASES['c++'], 'cpp');
   assert.strictEqual(LANG_ALIASES.c, 'c');
+});
+
+
+// --- files: the Finder-style browser ---------------------------------------------
+
+const scratch = [];
+process.on('exit', () => { for (const d of scratch) fs.rmSync(d, { recursive: true, force: true }); });
+
+function finderTree() {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mxfinder-')));
+  scratch.push(dir);
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(path.join(work, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(work, 'photos'));
+  fs.writeFileSync(path.join(work, 'notes.txt'), 'hello\n');
+  fs.writeFileSync(path.join(work, 'big.py'), 'x = 1\n'.repeat(500));
+  fs.writeFileSync(path.join(work, 'docs', 'deep-recipe.md'), '# soup\n');
+  process.env.MAXSHELL_TRASH = path.join(dir, 'Trash');
+  return { dir, work };
+}
+
+function finderScreen(work) {
+  const out = { rows: 24, columns: 120, data: '', write(s) { this.data += s; } };
+  return new FilesScreen(new FileBrowser(work), { shell: { cwd: work }, io: {}, output: out });
+}
+
+const press = (scr, name, extra = {}) => scr.handleKey({ name, ...extra });
+const type = (scr, text) => { for (const ch of text) scr.handleKey({ name: ch, printable: true, str: ch }); };
+const names = (scr) => scr.browser.visible().map((e) => e.name);
+const select = (scr, name) => scr.browser.moveTo(scr.browser.visible().findIndex((e) => e.name === name));
+
+test('kinds and icons follow Finder naming', () => {
+  const k = (name, extra = {}) => describe({ name, path: name, ...extra }).kind;
+  assert.strictEqual(k('a.py'), 'Python source');
+  assert.strictEqual(k('a.cpp'), 'C++ source');
+  assert.strictEqual(k('photo.JPG'), 'JPEG image');
+  assert.strictEqual(k('stuff', { isDir: true }), 'Folder');
+  assert.strictEqual(k('Safari.app', { isDir: true }), 'Application');
+  assert.strictEqual(k('tool', { exec: true }), 'Unix executable');
+  assert.strictEqual(k('data.xyz'), 'XYZ file');
+  assert.strictEqual(describe({ name: 'a.py' }).icon, '🐍');
+});
+
+test('Enter edits text and code, and hands media to apps', () => {
+  const { work } = finderTree();
+  assert.strictEqual(isTextual({ name: 'notes.txt', path: path.join(work, 'notes.txt') }), true);
+  assert.strictEqual(isTextual({ name: 'pic.png', path: '/nope.png' }), false);
+  assert.strictEqual(isTextual({ name: 'docs', isDir: true }), false);
+  const noExt = path.join(work, 'README');
+  fs.writeFileSync(noExt, 'plain words');
+  assert.strictEqual(isTextual({ name: 'README', path: noExt }), true, 'extensionless text is sniffed');
+});
+
+test('dates read like Finder', () => {
+  assert.match(finderDate(Date.now()), /^Today at \d\d:\d\d$/);
+  assert.match(finderDate(Date.now() - 86400000), /^Yesterday at/);
+  assert.match(finderDate(new Date('2025-03-04T10:00:00').getTime()), /^Mar 4, 2025 at 10:00$/);
+});
+
+test('sorting cycles name, date, size, kind with folders on top', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  assert.deepStrictEqual(names(scr), ['docs', 'photos', 'big.py', 'notes.txt']);
+  press(scr, 's');
+  assert.strictEqual(scr.browser.sortKey, 'date');
+  press(scr, 's');
+  assert.strictEqual(scr.browser.sortKey, 'size');
+  assert.deepStrictEqual(names(scr).slice(2), ['big.py', 'notes.txt'], 'largest first');
+  press(scr, 's');
+  press(scr, 's');
+  assert.strictEqual(scr.browser.sortKey, 'name');
+});
+
+test('back and forward remember where you have been', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'docs');
+  press(scr, 'right');
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+  press(scr, '[');
+  assert.strictEqual(scr.browser.cwd, work);
+  assert.strictEqual(scr.browser.current.name, 'docs', 'back lands on the folder you left');
+  press(scr, ']');
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+  press(scr, '[');
+  press(scr, '[');
+  assert.match(scr.message, /no earlier folder/);
+});
+
+test('n makes a new folder and selects it', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'n');
+  assert.ok(scr.prompt, 'asks for a name');
+  press(scr, 'return');
+  assert.ok(fs.existsSync(path.join(work, 'untitled folder')));
+  assert.strictEqual(scr.browser.current.name, 'untitled folder');
+  press(scr, 'n');
+  press(scr, 'return');
+  assert.ok(fs.existsSync(path.join(work, 'untitled folder 2')), 'a second one gets a free name');
+});
+
+test('N makes a new file with a chosen name', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'N');
+  press(scr, 'u', { ctrl: true });
+  type(scr, 'todo.md');
+  press(scr, 'return');
+  assert.ok(fs.existsSync(path.join(work, 'todo.md')));
+  assert.strictEqual(scr.browser.current.name, 'todo.md');
+});
+
+test('r renames, refusing names that are taken', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'notes.txt');
+  press(scr, 'r');
+  assert.strictEqual(scr.prompt.value, 'notes.txt', 'starts from the current name');
+  press(scr, 'u', { ctrl: true });
+  type(scr, 'journal.txt');
+  press(scr, 'return');
+  assert.ok(fs.existsSync(path.join(work, 'journal.txt')));
+  assert.strictEqual(scr.browser.current.name, 'journal.txt');
+
+  press(scr, 'r');
+  press(scr, 'u', { ctrl: true });
+  type(scr, 'big.py');
+  press(scr, 'return');
+  assert.match(scr.message, /already exists/);
+  assert.ok(fs.existsSync(path.join(work, 'journal.txt')));
+});
+
+test('d duplicates as “name copy”', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'notes.txt');
+  press(scr, 'd');
+  assert.ok(fs.existsSync(path.join(work, 'notes copy.txt')));
+  assert.strictEqual(scr.browser.current.name, 'notes copy.txt');
+});
+
+test('c then p copies into another folder; x then p moves', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'notes.txt');
+  press(scr, 'c');
+  select(scr, 'docs');
+  press(scr, 'right');
+  press(scr, 'p');
+  assert.ok(fs.existsSync(path.join(work, 'docs', 'notes.txt')));
+  assert.ok(fs.existsSync(path.join(work, 'notes.txt')), 'copy leaves the original');
+
+  press(scr, 'left');
+  select(scr, 'big.py');
+  press(scr, 'x');
+  select(scr, 'photos');
+  press(scr, 'right');
+  press(scr, 'p');
+  assert.ok(fs.existsSync(path.join(work, 'photos', 'big.py')));
+  assert.ok(!fs.existsSync(path.join(work, 'big.py')), 'cut moves it');
+  assert.strictEqual(scr.clipboard, null, 'a cut is used up by pasting');
+});
+
+test('t moves to the Trash and u puts it back', () => {
+  const { dir, work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'notes.txt');
+  press(scr, 't');
+  assert.ok(!fs.existsSync(path.join(work, 'notes.txt')));
+  assert.ok(fs.existsSync(path.join(dir, 'Trash', 'notes.txt')), 'it is in the Trash, not deleted');
+  assert.match(scr.message, /Trash — u to undo/);
+  press(scr, 'u');
+  assert.ok(fs.existsSync(path.join(work, 'notes.txt')));
+  assert.match(scr.message, /undid move to Trash/);
+});
+
+test('marked items are acted on together', () => {
+  const { dir, work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'big.py');
+  press(scr, 'm');
+  press(scr, 'm');
+  assert.strictEqual(scr.browser.targets().length, 2);
+  press(scr, 't');
+  assert.deepStrictEqual(names(scr), ['docs', 'photos']);
+  assert.strictEqual(fs.readdirSync(path.join(dir, 'Trash')).length, 2);
+  press(scr, 'z', { ctrl: true });
+  assert.deepStrictEqual(names(scr), ['docs', 'photos', 'big.py', 'notes.txt']);
+});
+
+test('undo reverses a rename and a new folder', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'n');
+  press(scr, 'return');
+  select(scr, 'notes.txt');
+  press(scr, 'r');
+  press(scr, 'u', { ctrl: true });
+  type(scr, 'x.txt');
+  press(scr, 'return');
+  press(scr, 'u');
+  assert.ok(fs.existsSync(path.join(work, 'notes.txt')), 'rename undone');
+  press(scr, 'u');
+  assert.ok(!fs.existsSync(path.join(work, 'untitled folder')), 'new folder undone (to the Trash)');
+  press(scr, 'u');
+  assert.match(scr.message, /nothing to undo/);
+});
+
+test('f searches subfolders and Enter reveals the result', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'f');
+  type(scr, 'recipe');
+  press(scr, 'return');
+  assert.deepStrictEqual(scr.search.results.map((p) => path.relative(work, p)), [path.join('docs', 'deep-recipe.md')]);
+  scr.render();
+  press(scr, 'return');
+  assert.strictEqual(scr.search, null);
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+  assert.strictEqual(scr.browser.current.name, 'deep-recipe.md');
+});
+
+test('i shows Get Info with a folder’s total size', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'docs');
+  press(scr, 'i');
+  const text = scr.info.map((l) => ansi.strip(l)).join('\n');
+  assert.match(text, /Kind:\s+Folder/);
+  assert.match(text, /Size:\s+7B for 1 item/);
+  press(scr, 'x');
+  assert.strictEqual(scr.info, null, 'any key closes it');
+  assert.strictEqual(scr.clipboard, null, 'the closing key does nothing else');
+});
+
+test('the browser notices changes made elsewhere', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  fs.writeFileSync(path.join(work, 'arrived.txt'), 'new');
+  const later = new Date(Date.now() + 2000);
+  fs.utimesSync(work, later, later);
+  assert.strictEqual(scr.browser.changedOnDisk(), true);
+  scr.browser.reload();
+  assert.ok(names(scr).includes('arrived.txt'));
+});
+
+test('Tab focuses the sidebar and Escape returns', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'tab');
+  assert.strictEqual(scr.focus, 'sidebar');
+  press(scr, 'down');
+  press(scr, 'escape');
+  assert.strictEqual(scr.focus, 'files');
+});
+
+test('q quits and leaves the shell in the folder; Q does not', () => {
+  const { work } = finderTree();
+  const a = finderScreen(work);
+  press(a, 'q');
+  assert.deepStrictEqual([a.done, a.cdOnExit], [true, true]);
+  const b = finderScreen(work);
+  press(b, 'Q');
+  assert.deepStrictEqual([b.done, b.cdOnExit], [true, false]);
+});
+
+test('every rendered line is exactly the terminal width', () => {
+  ansi.setEnabled(true);
+  const { textWidth } = require('../src/tui');
+  const { work } = finderTree();
+  for (const [cols, rows] of [[60, 18], [95, 24], [140, 30]]) {
+    const out = { rows, columns: cols, data: '', write(x) { this.data += x; } };
+    const scr = new FilesScreen(new FileBrowser(work), { shell: {}, io: {}, output: out });
+    scr.render();
+    const lines = out.data.replace(/^\x1b\[H/, '').split('\r\n').map((l) => ansi.strip(l.replace(/\x1b\[K/g, '')));
+    assert.strictEqual(lines.length, rows);
+    lines.forEach((l, i) => assert.strictEqual(textWidth(l), cols, `${cols}x${rows} line ${i}: ${JSON.stringify(l)}`));
+  }
+  ansi.setEnabled(false);
+});
+
+test('fileops never deletes: undoing a copy sends it to the Trash', () => {
+  const { dir, work } = finderTree();
+  const rec = ops.copyInto([path.join(work, 'notes.txt')], path.join(work, 'docs'));
+  ops.undo(rec);
+  assert.ok(!fs.existsSync(path.join(work, 'docs', 'notes.txt')));
+  assert.ok(fs.readdirSync(path.join(dir, 'Trash')).includes('notes.txt'));
 });
 
 if (failures) {
