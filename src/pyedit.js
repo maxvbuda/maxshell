@@ -6,7 +6,8 @@ const { spawnSync } = require('child_process');
 
 const ansi = require('./ansi');
 const { KeyReader } = require('./keys');
-const { computeStates, renderSlice } = require('./pyhighlight');
+const { computeStates, renderSlice, detectLanguage, languageById } = require('./syntax');
+const { fullscreen, requireTty } = require('./tui');
 const { findInPath } = require('./builtins');
 
 const TAB_WIDTH = 4;
@@ -27,7 +28,8 @@ function statSig(file) {
 // --- the document model (pure, so it can be tested without a terminal) ------
 
 class EditorBuffer {
-  constructor(text = '') {
+  constructor(text = '', { lang } = {}) {
+    this.lang = lang || languageById('python');
     this.lines = text.length ? text.split('\n') : [''];
     if (!this.lines.length) this.lines = [''];
     this.row = 0;
@@ -92,22 +94,63 @@ class EditorBuffer {
     this.modified = true;
   }
 
-  // Enter keeps the current indentation, and adds a level after `:` or an
-  // opening bracket — the thing that makes editing Python bearable.
+  // Code with any trailing line comment removed, for indentation decisions.
+  stripComment(text) {
+    const marker = this.lang.comment;
+    if (!marker) return text;
+    const at = text.indexOf(marker);
+    return at === -1 ? text : text.slice(0, at);
+  }
+
+  // Enter keeps the current indentation and adds a level where the language
+  // opens a block — after ':' in Python, after '{' in JavaScript, after
+  // 'then'/'do' in shell. Between a bracket pair it opens the pair up:
+  // `f(|)` becomes three lines with the cursor indented in the middle.
   newline() {
     this.pushUndo();
     this.mark = null;
     const l = this.line;
     const before = l.slice(0, this.col);
     const after = l.slice(this.col);
-    let indent = /^[ \t]*/.exec(before)[0];
-    const code = before.replace(/#.*$/, '').trimEnd();
-    if (/[:([{]$/.test(code)) indent += INDENT;
+    const base = /^[ \t]*/.exec(before)[0];
+    let indent = base;
+    const code = this.stripComment(before).trimEnd();
+    if (this.lang.indentAfter && this.lang.indentAfter.test(code)) indent += INDENT;
+
+    const PAIRS = { '(': ')', '[': ']', '{': '}' };
+    const opener = before[before.length - 1];
+    if (this.lang.pairs && PAIRS[opener] && after.trimStart().startsWith(PAIRS[opener])) {
+      this.lines[this.row] = before;
+      this.lines.splice(this.row + 1, 0, indent, base + after.trimStart());
+      this.row++;
+      this.col = indent.length;
+      this.modified = true;
+      return;
+    }
+
     this.lines[this.row] = before;
     this.lines.splice(this.row + 1, 0, indent + after);
     this.row++;
     this.col = indent.length;
     this.modified = true;
+  }
+
+  // Types one character. A closing bracket typed into leading whitespace
+  // steps back one indent level, so `}` lines up with the line that opened.
+  typeChar(ch) {
+    const before = this.line.slice(0, this.col);
+    if (this.lang.closers.includes(ch) && /^ +$/.test(before) && before.length >= TAB_WIDTH) {
+      this.pushUndo();
+      this.lines[this.row] = before.slice(TAB_WIDTH) + this.line.slice(this.col);
+      this.col -= TAB_WIDTH;
+      const l = this.line;
+      this.lines[this.row] = l.slice(0, this.col) + ch + l.slice(this.col);
+      this.col += 1;
+      this.mark = null;
+      this.modified = true;
+      return;
+    }
+    this.insert(ch);
   }
 
   backspace() {
@@ -248,14 +291,20 @@ class EditorBuffer {
     for (let r = from; r <= to; r++) if (this.lines[r].trim()) rows.push(r);
     if (!rows.length) rows.push(this.row);
 
+    const marker = this.lang.comment;
+    if (!marker) return false;
+    const esc = marker.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+    const isCommented = new RegExp(`^\\s*${esc}`);
+    const parts = new RegExp(`^(\\s*)(${esc} ?)?(.*)$`);
+
     this.pushUndo();
-    const allCommented = rows.every((r) => /^\s*#/.test(this.lines[r]));
+    const allCommented = rows.every((r) => isCommented.test(this.lines[r]));
     for (const r of rows) {
-      const m = /^(\s*)(#\s?)?(.*)$/.exec(this.lines[r]);
+      const m = parts.exec(this.lines[r]);
       if (allCommented) {
         if (m[2]) this.lines[r] = m[1] + m[3];
       } else if (!m[2]) {
-        this.lines[r] = `${m[1]}# ${m[3]}`;
+        this.lines[r] = `${m[1]}${marker} ${m[3]}`;
       }
     }
     this.modified = true;
@@ -406,13 +455,15 @@ const HELP_ROWS = [
 ];
 
 class PyEditor {
-  constructor({ shell, io, filename, text, input, output }) {
+  constructor({ shell, io, filename, text, input, output, lang, tool = 'edit' }) {
     this.shell = shell;
     this.io = io;
     this.input = input || process.stdin;
     this.output = output || process.stdout;
     this.filename = filename || '';
-    this.buf = new EditorBuffer(text || '');
+    this.lang = lang || detectLanguage(filename, (text || '').split('\n', 1)[0]);
+    this.tool = tool;
+    this.buf = new EditorBuffer(text || '', { lang: this.lang });
     this.topRow = 0;
     this.leftCol = 0;
     this.message = filename ? '' : 'New buffer';
@@ -445,12 +496,13 @@ class PyEditor {
     return this._python;
   }
 
+  // Multi-line construct state, recomputed only when the text changes. Keyed on
+  // the text itself: a length-based key misses same-length edits.
   syntaxState() {
-    // Triple-quote state is only recomputed when the document changes.
-    const version = this.buf.lines.length + this.buf.text.length;
-    if (version !== this.stateVersion) {
-      this.states = computeStates(this.buf.lines);
-      this.stateVersion = version;
+    const text = this.buf.text;
+    if (text !== this.stateVersion) {
+      this.states = computeStates(this.lang, this.buf.lines);
+      this.stateVersion = text;
     }
     return this.states;
   }
@@ -465,7 +517,7 @@ class PyEditor {
   titleBar() {
     const name = this.filename || 'new buffer';
     const flag = `${this.diskChanged ? '  Changed on disk' : ''}${this.buf.modified ? '  Modified' : ''}`;
-    const left = `  maxshell pyedit  ${name}`;
+    const left = `  maxshell ${this.tool}  ${name}  [${this.lang.name}]`;
     const room = this.cols - left.length - flag.length;
     return this.bar(left + (room > 0 ? ' '.repeat(room) : '') + flag);
   }
@@ -516,7 +568,7 @@ class PyEditor {
   }
 
   render() {
-    if (this.mode === 'help') return this.renderPager('pyedit help', HELP_TEXT_LINES);
+    if (this.mode === 'help') return this.renderPager(`${this.tool} help`, HELP_TEXT_LINES);
     if (this.mode === 'output') return this.renderPager('output — any key returns', this.view || []);
 
     this.scroll();
@@ -538,7 +590,7 @@ class PyEditor {
         s += `${color}${num}${ansi.reset()} `;
       }
       s += renderSlice(
-        this.buf.lines[row], states[row] || null,
+        this.lang, this.buf.lines[row], states[row] || null,
         this.leftCol, this.leftCol + width, this.rowRanges(row),
       );
       s += '\x1b[K';
@@ -688,29 +740,81 @@ class PyEditor {
     this.diskSig = statSig(file);
     this.lastCheck = Date.now();
     const lines = this.buf.lines.length;
-    const problem = /\.py$/.test(target) ? this.checkSyntax() : null;
+    const problem = this.checkSyntax(file);
     this.message = problem
       ? `wrote ${lines} lines — ${problem}`
       : `wrote ${lines} lines`;
   }
 
-  checkSyntax() {
-    const py = this.pythonPath();
-    if (!py) return null;
-    const res = spawnSync(py, ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
-      input: this.buf.text, encoding: 'utf8', timeout: 10000,
-    });
-    if (!res || res.error || res.status === 0) return null;
-    const err = (res.stderr || '').trim().split('\n');
-    const detail = err[err.length - 1] || 'syntax error';
-    const where = /line (\d+)/.exec(res.stderr || '');
-    return where ? `${detail} (line ${where[1]})` : detail;
+  // The first syntax error in the buffer, or null. Uses each language's own
+  // parser: python's ast, node --check, JSON.parse, and maxshell's parser.
+  checkSyntax(file) {
+    const text = this.buf.text;
+    switch (this.lang.check) {
+      case 'python': {
+        const py = this.pythonPath();
+        if (!py) return null;
+        const res = spawnSync(py, ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
+          input: text, encoding: 'utf8', timeout: 10000,
+        });
+        if (!res || res.error || res.status === 0) return null;
+        const err = (res.stderr || '').trim().split('\n');
+        const where = /line (\d+)/.exec(res.stderr || '');
+        const detail = err[err.length - 1] || 'syntax error';
+        return where ? `${detail} (line ${where[1]})` : detail;
+      }
+      case 'node': {
+        if (!file) return null;
+        const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', timeout: 10000 });
+        if (!res || res.error || res.status === 0) return null;
+        const lines = (res.stderr || '').split('\n');
+        const where = new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+)`).exec(res.stderr || '');
+        const detail = lines.find((l) => /Error/.test(l)) || 'syntax error';
+        return where ? `${detail.trim()} (line ${where[1]})` : detail.trim();
+      }
+      case 'json': {
+        try {
+          JSON.parse(text);
+          return null;
+        } catch (e) {
+          const pos = /position (\d+)/.exec(e.message);
+          const line = pos ? text.slice(0, Number(pos[1])).split('\n').length : null;
+          const detail = e.message.replace(/^JSON\.parse: /, '');
+          return line ? `${detail} (line ${line})` : detail;
+        }
+      }
+      case 'maxshell': {
+        try {
+          const { Parser } = require('./parser');
+          new Parser(text).parseProgram();
+          return null;
+        } catch (e) {
+          return e.message;
+        }
+      }
+      default:
+        return null;
+    }
   }
 
-  runPython() {
-    const py = this.pythonPath();
-    if (!py) { this.message = 'python3 not found on PATH'; return; }
-    const res = spawnSync(py, ['-'], {
+  // What ^T runs the buffer with: [command, args], or null.
+  runner() {
+    switch (this.lang.run) {
+      case 'python': {
+        const py = this.pythonPath();
+        return py ? [py, ['-']] : null;
+      }
+      case 'node': return [process.execPath, ['-']];
+      case 'maxshell': return [process.execPath, [path.join(__dirname, '..', 'bin', 'maxshell.js')]];
+      default: return null;
+    }
+  }
+
+  runBuffer() {
+    if (!this.lang.run) { this.message = `nothing to run for ${this.lang.name}`; return; }
+    const cmd = this.runner();
+    if (!cmd) { this.message = `no interpreter found for ${this.lang.name}`; return; }
+    const res = spawnSync(cmd[0], cmd[1], {
       input: this.buf.text,
       encoding: 'utf8',
       cwd: this.shell.cwd,
@@ -718,8 +822,10 @@ class PyEditor {
       timeout: 30000,
       maxBuffer: 8 * 1024 * 1024,
     });
-    const out = `${res.stdout || ''}${res.stderr || ''}`;
-    const header = `$ ${path.basename(py)} ${this.filename || '-'}   (exit ${res.status ?? '?'})`;
+    // Programs may colour their output (FORCE_COLOR etc.); the output pager
+    // slices lines by character, which would cut escape sequences in half.
+    const out = ansi.strip(`${res.stdout || ''}${res.stderr || ''}`);
+    const header = `$ ${path.basename(cmd[0])} ${this.filename || '-'}   (exit ${res.status ?? '?'})`;
     this.view = [header, ''].concat(out.split('\n'));
     this.viewTop = 0;
     this.mode = 'output';
@@ -795,7 +901,7 @@ class PyEditor {
         case 'a': this.buf.col = 0; break;
         case 'e': this.buf.end(); break;
         case 'd': this.buf.deleteChar(); break;
-        case 't': this.runPython(); break;
+        case 't': this.runBuffer(); break;
         case 'r': this.tryReload(); break;
         case 'l': this.output.write('\x1b[2J'); break;
         case 'c': this.message = `line ${this.buf.row + 1}, col ${this.buf.col + 1}`; break;
@@ -818,7 +924,9 @@ class PyEditor {
     if (key.meta) {
       if (key.name === 'u') this.buf.undo();
       else if (key.name === 'e') this.buf.redo();
-      else if (key.name === '3') this.buf.toggleComment();
+      else if (key.name === '3') {
+        if (this.buf.toggleComment() === false) this.message = `${this.lang.name} has no line comments`;
+      }
       else if (key.name === 'n') this.showNumbers = !this.showNumbers;
       else if (key.name === 'w') this.doSearch(this.searchTerm);
       else if (key.name === 'a') {
@@ -858,7 +966,7 @@ class PyEditor {
         if (this.buf.mark) { this.buf.clearMark(); this.message = 'mark cleared'; }
         break;
       default:
-        if (key.printable) this.buf.insert(key.str);
+        if (key.printable) this.buf.typeChar(key.str);
         break;
     }
     this.buf.lastWasCut = false;
@@ -883,13 +991,18 @@ class PyEditor {
 }
 
 const HELP_TEXT_LINES = `
- pyedit — a nano-style editor for Python, built into maxshell
+ edit — a nano-style editor built into maxshell (pyedit opens it in Python mode)
+
+ Languages: Python, JavaScript, shell, JSON, Markdown — picked from the file
+ extension or #! line. Force one with  edit --lang=js file
 
  Writing
    Tab / Shift-Tab    indent / dedent by four spaces
-   Enter              keeps the current indent, and adds one after ':' or '(['
+   Enter              keeps the indent, adds one where a block opens (':' in
+                      Python, '{' in JS, then/do in shell), and splits f(|)
+   }  ]  )            typed at the start of a line, steps back a level
    Backspace          removes a whole indent stop inside leading whitespace
-   M-3                toggle '#' comment (the whole selection, if there is one)
+   M-3                toggle a line comment (# or //) on the line or selection
 
  Selecting
    M-A                set or clear the mark, then move to select
@@ -904,15 +1017,16 @@ const HELP_TEXT_LINES = `
    ^X                 exit, offering to save first
    ^R                 re-read the file from disk (asks first if you have edits)
 
- If another program writes the file while it is open, pyedit notices within
+ If another program writes the file while it is open, the editor notices within
  half a second. An untouched buffer is reloaded for you; if you have your own
  unsaved edits it says so instead, and ^O will ask before overwriting.
-   On saving a .py file the buffer is parsed with python3 and any syntax
-   error is reported in the status line.
+   On saving, the file is checked with its language's own parser (python's
+   ast, node --check, JSON.parse, maxshell's parser) and the first error is
+   reported in the status line.
 
  Running
-   ^T                 run the current buffer with python3 and show the output
-                      (the buffer is piped to python, so it need not be saved)
+   ^T                 run the buffer (python3, node, or maxshell) and show the
+                      output — it is piped in, so it need not be saved
 
  Moving
    arrows, PgUp/PgDn  move around          ^A / ^E   start / end of line
@@ -931,40 +1045,60 @@ const HELP_TEXT_LINES = `
    ^L                 redraw the screen
 `.split('\n');
 
-function runEditor(args, io, shell) {
-  const files = args.filter((a) => !a.startsWith('-'));
-  const filename = files[0] || '';
+const LANG_ALIASES = {
+  py: 'python', python: 'python', js: 'javascript', javascript: 'javascript', node: 'javascript',
+  sh: 'shell', shell: 'shell', bash: 'shell', zsh: 'shell', json: 'json',
+  md: 'markdown', markdown: 'markdown', txt: 'plain', text: 'plain', plain: 'plain',
+};
 
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    shell.writeTo(io.stderr, 'pyedit: needs an interactive terminal\n');
-    return 1;
-  }
-
-  let text = '';
-  if (filename) {
-    const target = shell.resolve(filename);
-    try {
-      text = fs.readFileSync(target, 'utf8');
-    } catch (e) {
-      if (e.code !== 'ENOENT') {
-        shell.writeTo(io.stderr, `pyedit: cannot read ${filename}: ${e.code}\n`);
-        return 1;
-      }
-    }
-  }
-
-  const editor = new PyEditor({ shell, io, filename, text });
-  if (filename) editor.diskSig = statSig(shell.resolve(filename));
-  const wasRaw = process.stdin.isRaw;
-
+function readForEditing(filename, shell) {
+  if (!filename) return { text: '' };
   try {
-    process.stdin.setRawMode(true);
-    process.stdout.write('\x1b[?1049h\x1b[?25h');
-    return editor.loop();
-  } finally {
-    process.stdout.write('\x1b[?1049l');
-    try { process.stdin.setRawMode(!!wasRaw); } catch { /* not a tty any more */ }
+    return { text: fs.readFileSync(shell.resolve(filename), 'utf8') };
+  } catch (e) {
+    if (e.code === 'ENOENT') return { text: '' };
+    return { error: e.code || e.message };
   }
 }
 
-module.exports = { EditorBuffer, PyEditor, runEditor, TAB_WIDTH };
+// Runs an editor inside a screen that is already full-screen and raw. Used by
+// `files` to open a file without leaving its own session.
+function openEditor(shell, io, filename, { lang, tool = 'edit' } = {}) {
+  const { text, error } = readForEditing(filename, shell);
+  if (error) return { status: 1, error };
+  const editor = new PyEditor({ shell, io, filename, text, lang, tool });
+  if (filename) editor.diskSig = statSig(shell.resolve(filename));
+  return { status: editor.loop() };
+}
+
+// The `edit` and `pyedit` builtins.
+function runEditor(args, io, shell, { tool = 'edit', lang: forced } = {}) {
+  let lang = forced ? languageById(forced) : null;
+  const files = [];
+  for (const a of args) {
+    const m = /^--lang=(.+)$/.exec(a);
+    if (m) {
+      const id = LANG_ALIASES[m[1].toLowerCase()];
+      if (!id) {
+        shell.writeTo(io.stderr, `${tool}: unknown language '${m[1]}' (try py, js, sh, json, md)\n`);
+        return 2;
+      }
+      lang = languageById(id);
+    } else if (!a.startsWith('-')) {
+      files.push(a);
+    }
+  }
+  const filename = files[0] || '';
+
+  if (!requireTty(tool, io, shell)) return 1;
+
+  const { error } = readForEditing(filename, shell);
+  if (error) {
+    shell.writeTo(io.stderr, `${tool}: cannot read ${filename}: ${error}\n`);
+    return 1;
+  }
+
+  return fullscreen(() => openEditor(shell, io, filename, { lang, tool }).status);
+}
+
+module.exports = { EditorBuffer, PyEditor, runEditor, openEditor, TAB_WIDTH, LANG_ALIASES };

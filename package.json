@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node bin/maxshell.js",
-    "test": "node test/run.js && node test/interactive.js && node test/pyedit.js && node test/gitui.js"
+    "test": "node test/run.js && node test/interactive.js && node test/pyedit.js && node test/gitui.js && node test/tools.js"
   },
   "keywords": [
     "shell",

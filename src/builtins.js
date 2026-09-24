@@ -295,6 +295,10 @@ Editing
   pyedit [file]             nano-style Python editor: highlighting, auto-indent,
                             selection and block indent, ^T runs the buffer
   gitui                     browse the repository: stage, diff, commit and push
+  edit [file]               the same editor for JS, shell, JSON and Markdown too
+  view [file] | ... | view  pager with highlighting, search and follow (F)
+  files [dir]               file browser with previews; q leaves you in that dir
+  top                       live process monitor: sort, filter, k to kill
 
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
@@ -616,7 +620,27 @@ BUILTINS.gitui = (args, io, shell) => {
 
 BUILTINS.pyedit = (args, io, shell) => {
   const { runEditor } = require('./pyedit');
-  return runEditor(args, io, shell);
+  return runEditor(args, io, shell, { tool: 'pyedit', lang: 'python' });
+};
+
+BUILTINS.edit = (args, io, shell) => {
+  const { runEditor } = require('./pyedit');
+  return runEditor(args, io, shell, { tool: 'edit' });
+};
+
+BUILTINS.view = (args, io, shell) => {
+  const { runView } = require('./view');
+  return runView(args, io, shell);
+};
+
+BUILTINS.files = (args, io, shell) => {
+  const { runFiles } = require('./files');
+  return runFiles(args, io, shell);
+};
+
+BUILTINS.top = (args, io, shell) => {
+  const { runTop } = require('./top');
+  return runTop(args, io, shell);
 };
 
 BUILTINS.which = (args, io, shell) => {

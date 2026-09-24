@@ -1,6 +1,6 @@
 'use strict';
 
-const ansi = require('./ansi');
+const { colorFor, paintSpans } = require('./paint');
 
 const KEYWORDS = new Set([
   'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del',
@@ -149,58 +149,11 @@ function computeStates(lines) {
   return states;
 }
 
-function colorFor(cls) {
-  switch (cls) {
-    case 'kw': return ansi.bold() + ansi.fg('magenta');
-    case 'const': return ansi.fg(('213'));
-    case 'builtin': return ansi.fg('cyan');
-    case 'str': return ansi.fg('yellow');
-    case 'num': return ansi.fg('green');
-    case 'comment': return ansi.fg('gray');
-    case 'decorator': return ansi.fg(214);
-    case 'defname': return ansi.bold() + ansi.fg('blue');
-    case 'op': return ansi.fg(('252'));
-    default: return '';
-  }
-}
-
 // Renders columns [from, to) of a line, preserving colour across the slice.
 // `ranges` are [start, end) column pairs to show in reverse video, used for
 // the selection and for matching-bracket highlighting.
 function renderSlice(line, state, from, to, ranges = []) {
-  const { spans } = tokenizeLine(line, state);
-  const marked = (i) => {
-    for (const [a, b] of ranges) if (i >= a && i < b) return true;
-    return false;
-  };
-
-  let out = '';
-  let col = 0;
-  let curColor = null;
-  let curMark = null;
-  let done = false;
-
-  for (const span of spans) {
-    if (done) break;
-    const color = colorFor(span.cls);
-    for (const ch of span.text) {
-      const i = col++;
-      if (i < from) continue;
-      if (i >= to) { done = true; break; }
-      const mark = marked(i);
-      if (color !== curColor || mark !== curMark) {
-        out += ansi.reset();
-        if (mark) out += ansi.reverse();
-        out += color;
-        curColor = color;
-        curMark = mark;
-      }
-      out += ch;
-    }
-  }
-
-  if (curColor !== null || curMark) out += ansi.reset();
-  return out;
+  return paintSpans(tokenizeLine(line, state).spans, from, to, ranges);
 }
 
 module.exports = { tokenizeLine, computeStates, renderSlice, colorFor, KEYWORDS, BUILTINS, CONSTANTS };

@@ -258,15 +258,25 @@ Colour is disabled automatically when output is not a terminal, when `NO_COLOR`
 is set, or when `TERM=dumb`. If either stdin or stdout is not a tty, maxshell
 falls back to a plain line-buffered REPL.
 
-## pyedit — the built-in Python editor
+## edit / pyedit — the built-in editor
 
-maxshell ships a nano-style editor tuned for Python. It reuses the shell's own
-terminal layer, so there is nothing to install:
+maxshell ships a nano-style editor. It reuses the shell's own terminal layer,
+so there is nothing to install:
 
 ```sh
-pyedit script.py      # open (or create) a file
-pyedit                # start an empty buffer
+edit app.js           # language picked from the extension or #! line
+edit --lang=sh deploy # or forced: py, js, sh, json, md
+pyedit script.py      # the same editor, always in Python mode
 ```
+
+It knows **Python, JavaScript, shell, JSON and Markdown**. Each language brings
+its own highlighting, its own rule for where Enter adds an indent (`:` in
+Python, `{` in JavaScript, `then`/`do` in shell), its own comment marker for
+`M-3`, its own interpreter for `^T` (python3, node, or maxshell itself), and
+its own syntax check on save (Python's `ast`, `node --check`, `JSON.parse`, and
+maxshell's parser). Enter between a pair like `f(|)` opens it onto three lines,
+and a `}`, `]` or `)` typed at the start of a line steps back a level. The rest
+of this section describes Python, the language it started with.
 
 It looks and behaves like nano — modeless, with the shortcut bar along the
 bottom — but knows Python:
@@ -369,6 +379,59 @@ until you unstage it.
 Status is re-read every couple of seconds, so a commit or checkout you make in
 another terminal shows up on its own.
 
+## view, files and top
+
+Three more full-screen tools, sharing the editor's highlighting and terminal
+layer.
+
+### view — a pager
+
+```sh
+view server.log              # open a file
+git log -p | view            # or read a pipe — the language is sniffed
+view -f server.log           # start in follow mode, like tail -f
+```
+
+Like `less`, with syntax highlighting. `/` and `?` search forwards and back,
+case-insensitive unless you type a capital; matches are highlighted and `n` /
+`N` step through them, wrapping at the ends. `F` follows a file as it grows.
+`#` toggles line numbers, `←` `→` scroll sideways, `g` / `G` jump to the ends.
+When its output is not a terminal (`view f > out`), `view` just prints, like
+`cat`.
+
+### files — a file browser
+
+```sh
+files            # browse from here
+files ~/code     # or from somewhere else
+```
+
+Two panes: the directory on the left, a live preview on the right — the
+highlighted start of a file, the contents of a folder, or a note that a file is
+binary. `→` enters a folder and `←` goes back up with the cursor on the folder
+you came from. `Enter` opens a file in `edit`, `v` in `view`, and both return
+you to the browser. `/` filters as you type, `.` shows hidden files.
+
+`q` quits **and leaves your shell in the directory you were looking at**, so
+`files` doubles as a visual `cd`. `Q` quits without moving.
+
+### top — a process monitor
+
+A live view in the spirit of htop: a meter per CPU core, memory in use, load
+average and uptime, then every process with its CPU, memory and command line.
+It refreshes every second and a half.
+
+| Key | Action |
+|---|---|
+| `c` `m` `p` `n` | sort by CPU, memory, pid, or name |
+| `/` | filter by command, user, or pid |
+| `k` / `K` | send SIGTERM / SIGKILL to the selected process (asks first) |
+| `r` | refresh now |
+| `↑` `↓` | select — the selection follows the process, not the row |
+
+`view` and `top` share names with system commands. The builtins win inside
+maxshell; `command top` or `command view` reaches the system ones.
+
 ## Builtins
 
 | Builtin | Purpose |
@@ -386,7 +449,8 @@ another terminal shows up on its own.
 | `history`, `jobs`, `help` | session information |
 | `break`, `continue`, `return`, `exit` | control flow |
 | `unfunction` | remove a function |
-| `pyedit` | the built-in Python editor (see above) |
+| `edit`, `pyedit` | the built-in editor (see above) |
+| `view`, `files`, `top` | pager, file browser, process monitor (see above) |
 | `gitui` | the built-in git browser (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
@@ -408,9 +472,15 @@ src/complete.js     Tab-completion candidates
 src/prompt.js       Prompt escape expansion
 src/gitprompt.js    Cached git repository status
 src/ansi.js         Colour helpers and escape-aware width
-src/pyedit.js       nano-style Python editor (buffer model + screen)
+src/pyedit.js       the editor (buffer model + screen), for every language
 src/pyhighlight.js  Python tokenizer and syntax colouring
 src/keys.js         Blocking key reader for full-screen editing
+src/syntax.js       Language table, detection, and the JS/shell/JSON/Markdown tokenizers
+src/paint.js        Token colours and selection-aware line painting
+src/tui.js          Shared full-screen plumbing: raw mode, bars, meters
+src/view.js         view: pager model and screen
+src/files.js        files: browser model, previews, screen
+src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 examples/demo.mxsh  A tour of the language
@@ -418,6 +488,7 @@ test/run.js         Language test suite
 test/interactive.js Line editor, highlighter and prompt test suite
 test/pyedit.js      Python editor, tokenizer and key reader test suite
 test/gitui.js       git layer and browser test suite
+test/tools.js       Languages, view, files and top test suite
 ```
 
 ## Differences from zsh
