@@ -461,6 +461,92 @@ test('view acts like cat when its output is not a terminal', () => {
   assert.deepStrictEqual(lines, ['a', 'b']);
 });
 
+
+// --- C and C++ --------------------------------------------------------------
+
+test('C and C++ are detected by extension', () => {
+  const d = (f) => syntax.detectLanguage(f).id;
+  for (const f of ['a.cpp', 'a.cc', 'a.cxx', 'a.hpp', 'a.hh', 'a.h', 'sketch.ino']) assert.strictEqual(d(f), 'cpp', f);
+  assert.strictEqual(d('a.c'), 'c');
+});
+
+test('the C tokenizer reproduces its input and tracks block comments', () => {
+  const cpp = lang('cpp');
+  const lines = ['#include <vector>', '#define N 10', 'class W : public B {', "  int n = 1'000;",
+    '  /* a', '     b */ char c = \'\\n\';', '  auto s = u8"x"; // c', '};', ''];
+  const states = syntax.computeStates(cpp, lines);
+  lines.forEach((l, i) => assert.strictEqual(joined(cpp, l, states[i]), l, JSON.stringify(l)));
+  assert.strictEqual(states[5].kind, 'block');
+  assert.strictEqual(states[6], null);
+});
+
+test('C++ tokens are classified', () => {
+  const cpp = lang('cpp');
+  assert.strictEqual(classOf(cpp, '#include <map>', '#include'), 'decorator');
+  assert.strictEqual(classOf(cpp, '#include <map>', '<map>'), 'str');
+  assert.strictEqual(classOf(cpp, 'struct Point {', 'Point'), 'defname');
+  assert.strictEqual(classOf(cpp, 'template <typename T>', 'template'), 'kw');
+  assert.strictEqual(classOf(cpp, 'unsigned long x;', 'unsigned'), 'builtin');
+  assert.strictEqual(classOf(cpp, 'p = nullptr;', 'nullptr'), 'const');
+  assert.strictEqual(classOf(cpp, "int n = 1'000'000;", "1'000'000"), 'num');
+  assert.strictEqual(classOf(cpp, 'float f = 1.5f;', '1.5f'), 'num');
+});
+
+test('C++ editing: Enter opens {} and M-3 uses //', () => {
+  const b = buf('int main() {}', 'cpp', 12);
+  b.newline();
+  assert.deepStrictEqual(b.lines, ['int main() {', '    ', '}']);
+  const c = buf('x++;', 'cpp', 0);
+  c.toggleComment();
+  assert.strictEqual(c.line, '// x++;');
+  assert.strictEqual(syntax.languageById('c').comment, '//');
+});
+
+const { findInPath } = require('../src/builtins');
+const haveCompiler = !!(findInPath('c++', { env: process.env, resolve: (f) => f })
+  && findInPath('cc', { env: process.env, resolve: (f) => f }));
+
+test('C++ is checked on save and compiled and run with ^T', () => {
+  if (!haveCompiler) { console.log('  (skipped: no C/C++ compiler)'); return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxcpp-'));
+  const shell = stubShell(dir);
+  const open = (name, text) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, text);
+    return { e: new PyEditor({ shell, io: {}, filename: file, text }), file };
+  };
+
+  const ok = open('ok.cpp', '#include <iostream>\nint main() { std::cout << 6 * 7 << "\\n"; }\n');
+  assert.strictEqual(ok.e.checkSyntax(ok.file), null);
+  ok.e.runBuffer();
+  assert.ok(ok.e.view.includes('42'), JSON.stringify(ok.e.view));
+  assert.match(ok.e.view[0], /exit 0/);
+
+  const bad = open('bad.cpp', 'int main() {\n  int x = ;\n}\n');
+  assert.match(bad.e.checkSyntax(bad.file), /error: .*\(line 2\)/);
+  bad.e.runBuffer();
+  assert.match(bad.e.view[0], /compile failed/);
+
+  fs.writeFileSync(path.join(dir, 'local.h'), '#define ANSWER 7\n');
+  const local = open('local.cpp', '#include "local.h"\n#include <cstdio>\nint main() { std::printf("%d\\n", ANSWER); }\n');
+  local.e.runBuffer();
+  assert.ok(local.e.view.includes('7'), 'a local #include resolves from the file\'s directory');
+
+  const c = open('prog.c', '#include <stdio.h>\nint main(void) { puts("from C"); return 3; }\n');
+  c.e.runBuffer();
+  assert.ok(c.e.view.includes('from C'));
+  assert.match(c.e.view[0], /exit 3/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('--lang accepts cpp and c', () => {
+  const { LANG_ALIASES } = require('../src/pyedit');
+  assert.strictEqual(LANG_ALIASES.cpp, 'cpp');
+  assert.strictEqual(LANG_ALIASES['c++'], 'cpp');
+  assert.strictEqual(LANG_ALIASES.c, 'c');
+});
+
 if (failures) {
   console.error(`\n${failures} tools test(s) failed`);
   process.exit(1);

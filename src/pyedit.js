@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -783,6 +784,17 @@ class PyEditor {
           return line ? `${detail} (line ${line})` : detail;
         }
       }
+      case 'c':
+      case 'cpp': {
+        const cc = this.compiler();
+        if (!cc || !file) return null;
+        const res = spawnSync(cc, ['-fsyntax-only', '-x', this.lang.check === 'c' ? 'c' : 'c++', file], {
+          encoding: 'utf8', cwd: path.dirname(file), timeout: 30000,
+        });
+        if (!res || res.error || res.status === 0) return null;
+        const first = /:(\d+):\d+: (?:fatal )?error: (.*)/.exec(ansi.strip(res.stderr || ''));
+        return first ? `error: ${first[2]} (line ${first[1]})` : 'does not compile';
+      }
       case 'maxshell': {
         try {
           const { Parser } = require('./parser');
@@ -795,6 +807,57 @@ class PyEditor {
       default:
         return null;
     }
+  }
+
+  // The C or C++ compiler on PATH, or null.
+  compiler() {
+    const names = this.lang.id === 'c' ? ['cc', 'clang', 'gcc'] : ['c++', 'clang++', 'g++'];
+    for (const name of names) {
+      const found = findInPath(name, this.shell);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // C and C++ are compiled to a scratch binary, then run. Local #includes
+  // still resolve because the file's own directory is on the include path.
+  compileAndRun() {
+    const cc = this.compiler();
+    if (!cc) { this.message = `no ${this.lang.name} compiler found (need ${this.lang.id === 'c' ? 'cc' : 'c++'})`; return; }
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'maxshell-run-'));
+    const src = path.join(dir, this.lang.id === 'c' ? 'main.c' : 'main.cpp');
+    const bin = path.join(dir, 'main');
+    const includeDir = this.filename ? path.dirname(this.shell.resolve(this.filename)) : this.shell.cwd;
+    const lines = [];
+
+    try {
+      fs.writeFileSync(src, this.buf.text);
+      const build = spawnSync(cc, [src, '-o', bin, '-I', includeDir], {
+        encoding: 'utf8', cwd: dir, timeout: 60000, maxBuffer: 8 * 1024 * 1024,
+      });
+      if (build.error || build.status !== 0) {
+        const errs = ansi.strip(`${build.stderr || ''}${build.stdout || ''}`).split(src).join(this.filename || 'buffer');
+        lines.push(`$ ${path.basename(cc)} ${this.filename || '-'}   (compile failed)`, '', ...errs.split('\n'));
+      } else {
+        const run = spawnSync(bin, [], {
+          input: '', encoding: 'utf8', cwd: this.shell.cwd, env: this.shell.env,
+          timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+        });
+        const why = run.error && run.error.code === 'ETIMEDOUT' ? 'timed out after 30s'
+          : run.signal ? `killed by ${run.signal}` : `exit ${run.status ?? '?'}`;
+        const warnings = ansi.strip(build.stderr || '').trim();
+        lines.push(`$ ${path.basename(cc)} ${this.filename || '-'} && ./main   (${why})`, '');
+        if (warnings) lines.push(...warnings.split(src).join(this.filename || 'buffer').split('\n'), '');
+        lines.push(...ansi.strip(`${run.stdout || ''}${run.stderr || ''}`).split('\n'));
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    this.view = lines;
+    this.viewTop = 0;
+    this.mode = 'output';
   }
 
   // What ^T runs the buffer with: [command, args], or null.
@@ -812,6 +875,7 @@ class PyEditor {
 
   runBuffer() {
     if (!this.lang.run) { this.message = `nothing to run for ${this.lang.name}`; return; }
+    if (this.lang.run === 'c' || this.lang.run === 'cpp') { this.compileAndRun(); return; }
     const cmd = this.runner();
     if (!cmd) { this.message = `no interpreter found for ${this.lang.name}`; return; }
     const res = spawnSync(cmd[0], cmd[1], {
@@ -993,8 +1057,8 @@ class PyEditor {
 const HELP_TEXT_LINES = `
  edit — a nano-style editor built into maxshell (pyedit opens it in Python mode)
 
- Languages: Python, JavaScript, shell, JSON, Markdown — picked from the file
- extension or #! line. Force one with  edit --lang=js file
+ Languages: Python, JavaScript, C, C++, shell, JSON, Markdown — picked from the
+ file extension or #! line. Force one with  edit --lang=cpp file
 
  Writing
    Tab / Shift-Tab    indent / dedent by four spaces
@@ -1025,7 +1089,8 @@ const HELP_TEXT_LINES = `
    reported in the status line.
 
  Running
-   ^T                 run the buffer (python3, node, or maxshell) and show the
+   ^T                 run the buffer (python3, node, maxshell, or compile C/C++
+                      and run the binary) and show the
                       output — it is piped in, so it need not be saved
 
  Moving
@@ -1049,6 +1114,7 @@ const LANG_ALIASES = {
   py: 'python', python: 'python', js: 'javascript', javascript: 'javascript', node: 'javascript',
   sh: 'shell', shell: 'shell', bash: 'shell', zsh: 'shell', json: 'json',
   md: 'markdown', markdown: 'markdown', txt: 'plain', text: 'plain', plain: 'plain',
+  cpp: 'cpp', 'c++': 'cpp', cxx: 'cpp', cc: 'cpp', hpp: 'cpp', c: 'c',
 };
 
 function readForEditing(filename, shell) {
@@ -1080,7 +1146,7 @@ function runEditor(args, io, shell, { tool = 'edit', lang: forced } = {}) {
     if (m) {
       const id = LANG_ALIASES[m[1].toLowerCase()];
       if (!id) {
-        shell.writeTo(io.stderr, `${tool}: unknown language '${m[1]}' (try py, js, sh, json, md)\n`);
+        shell.writeTo(io.stderr, `${tool}: unknown language '${m[1]}' (try py, js, sh, cpp, c, json, md)\n`);
         return 2;
       }
       lang = languageById(id);

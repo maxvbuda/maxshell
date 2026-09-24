@@ -265,16 +265,30 @@ so there is nothing to install:
 
 ```sh
 edit app.js           # language picked from the extension or #! line
-edit --lang=sh deploy # or forced: py, js, sh, json, md
+edit --lang=sh deploy # or forced: py, js, cpp, c, sh, json, md
 pyedit script.py      # the same editor, always in Python mode
 ```
 
-It knows **Python, JavaScript, shell, JSON and Markdown**. Each language brings
-its own highlighting, its own rule for where Enter adds an indent (`:` in
-Python, `{` in JavaScript, `then`/`do` in shell), its own comment marker for
-`M-3`, its own interpreter for `^T` (python3, node, or maxshell itself), and
-its own syntax check on save (Python's `ast`, `node --check`, `JSON.parse`, and
-maxshell's parser). Enter between a pair like `f(|)` opens it onto three lines,
+It knows **Python, JavaScript, C, C++, shell, JSON and Markdown**. Each
+language brings its own highlighting, its own rule for where Enter adds an
+indent (`:` in Python, `{` in JavaScript and C/C++, `then`/`do` in shell), its
+own comment marker for `M-3`, its own way to run for `^T`, and its own syntax
+check on save:
+
+| Language | Extensions | `^T` runs it with | Checked on save by |
+|---|---|---|---|
+| Python | `.py` | `python3` | `ast.parse` |
+| JavaScript | `.js` `.mjs` `.cjs` | `node` | `node --check` |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.h` … | compiles with `c++`, runs the binary | `c++ -fsyntax-only` |
+| C | `.c` | compiles with `cc`, runs the binary | `cc -fsyntax-only` |
+| shell | `.sh` `.zsh` `.mxsh` | maxshell | maxshell's parser |
+| JSON | `.json` | — | `JSON.parse` |
+| Markdown | `.md` | — | — |
+
+C and C++ are compiled into a scratch directory and the binary is run from
+your current directory; the file's own folder is on the include path, so
+`#include "local.h"` works. Compile errors show in the output view with the
+file's name. Anything unrecognised opens as plain text; `--lang=` overrides. Enter between a pair like `f(|)` opens it onto three lines,
 and a `}`, `]` or `)` typed at the start of a line steps back a level. The rest
 of this section describes Python, the language it started with.
 
@@ -475,7 +489,7 @@ src/ansi.js         Colour helpers and escape-aware width
 src/pyedit.js       the editor (buffer model + screen), for every language
 src/pyhighlight.js  Python tokenizer and syntax colouring
 src/keys.js         Blocking key reader for full-screen editing
-src/syntax.js       Language table, detection, and the JS/shell/JSON/Markdown tokenizers
+src/syntax.js       Language table, detection, and the JS/C/C++/shell/JSON/Markdown tokenizers
 src/paint.js        Token colours and selection-aware line painting
 src/tui.js          Shared full-screen plumbing: raw mode, bars, meters
 src/view.js         view: pager model and screen

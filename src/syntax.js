@@ -121,6 +121,116 @@ function tokenizeJs(line, state = null) {
   return { spans, endState: null };
 }
 
+// --- C and C++ --------------------------------------------------------------
+
+const C_KEYWORDS = new Set([
+  'alignas', 'alignof', 'asm', 'auto', 'break', 'case', 'catch', 'class', 'concept',
+  'const', 'consteval', 'constexpr', 'constinit', 'const_cast', 'continue', 'co_await',
+  'co_return', 'co_yield', 'decltype', 'default', 'delete', 'do', 'dynamic_cast', 'else',
+  'enum', 'explicit', 'export', 'extern', 'final', 'for', 'friend', 'goto', 'if', 'import',
+  'inline', 'module', 'mutable', 'namespace', 'new', 'noexcept', 'operator', 'override',
+  'private', 'protected', 'public', 'register', 'reinterpret_cast', 'requires', 'return',
+  'sizeof', 'static', 'static_assert', 'static_cast', 'struct', 'switch', 'template',
+  'throw', 'try', 'typedef', 'typeid', 'typename', 'union', 'using', 'virtual',
+  'volatile', 'while',
+]);
+const C_TYPES = new Set([
+  'void', 'bool', 'char', 'char8_t', 'char16_t', 'char32_t', 'wchar_t', 'short', 'int',
+  'long', 'float', 'double', 'signed', 'unsigned', 'size_t', 'ssize_t', 'ptrdiff_t',
+  'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t',
+  'uint64_t', 'intptr_t', 'uintptr_t', 'std', 'string', 'string_view', 'vector', 'map',
+  'unordered_map', 'set', 'unordered_set', 'array', 'deque', 'list', 'pair', 'tuple',
+  'optional', 'variant', 'unique_ptr', 'shared_ptr', 'weak_ptr', 'function', 'cout',
+  'cin', 'cerr', 'endl', 'printf', 'scanf', 'puts', 'malloc', 'calloc', 'realloc', 'free',
+  'FILE', 'main',
+]);
+const C_CONSTANTS = new Set(['true', 'false', 'nullptr', 'NULL', 'this', 'EOF']);
+const C_NAMERS = new Set(['class', 'struct', 'enum', 'union', 'namespace', 'concept']);
+
+// Numbers may use ' as a digit separator (1'000'000) and carry u/l/f suffixes.
+function scanCNumber(line, i) {
+  const m = /^(0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*\.?[\d']*([eE][-+]?\d+)?)[uUlLfFzZ]*/.exec(line.slice(i));
+  return m ? m[0].length : 1;
+}
+
+function tokenizeC(line, state = null) {
+  const { spans, push } = spanner();
+  let i = 0;
+
+  if (state && state.kind === 'block') {
+    const end = line.indexOf('*/');
+    if (end === -1) { push(line, 'comment'); return { spans, endState: state }; }
+    push(line.slice(0, end + 2), 'comment');
+    i = end + 2;
+  } else {
+    // Preprocessor directive: #include <x>, #define, #ifdef ...
+    const pre = /^(\s*)(#\s*[A-Za-z_]+)/.exec(line);
+    if (pre) {
+      push(pre[1], 'plain');
+      push(pre[2], 'decorator');
+      i = pre[0].length;
+      if (/include|import/.test(pre[2])) {
+        const ws = /^\s*/.exec(line.slice(i))[0];
+        push(ws, 'plain');
+        i += ws.length;
+        const hdr = /^(<[^>]*>?)/.exec(line.slice(i));
+        if (hdr) { push(hdr[1], 'str'); i += hdr[1].length; }
+      }
+    }
+  }
+
+  let prevWord = null;
+  while (i < line.length) {
+    const c = line[i];
+    const rest = line.slice(i);
+
+    if (rest.startsWith('//')) { push(rest, 'comment'); break; }
+    if (rest.startsWith('/*')) {
+      const end = line.indexOf('*/', i + 2);
+      if (end === -1) { push(rest, 'comment'); return { spans, endState: { kind: 'block' } }; }
+      push(line.slice(i, end + 2), 'comment');
+      i = end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const { end } = scanQuoted(line, i, c);
+      push(line.slice(i, end), 'str');
+      i = end;
+      continue;
+    }
+    if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(line[i + 1] || ''))) {
+      const n = scanCNumber(line, i);
+      push(line.slice(i, i + n), 'num');
+      i += n;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest)[0];
+      // String and character prefixes: L"..", u8"..", R"(..)"
+      if (/^(L|u8?|U|R|LR|u8R|uR|UR)$/.test(word) && (line[i + word.length] === '"' || line[i + word.length] === "'")) {
+        const q = i + word.length;
+        const { end } = scanQuoted(line, q, line[q]);
+        push(line.slice(i, end), 'str');
+        i = end;
+        continue;
+      }
+      let cls = 'plain';
+      if (C_NAMERS.has(prevWord)) cls = 'defname';
+      else if (C_KEYWORDS.has(word)) cls = 'kw';
+      else if (C_CONSTANTS.has(word)) cls = 'const';
+      else if (C_TYPES.has(word)) cls = 'builtin';
+      push(word, cls);
+      prevWord = word;
+      i += word.length;
+      continue;
+    }
+    if (c === ' ' || c === '\t') { push(c, 'plain'); i++; continue; }
+    push(c, 'op');
+    i++;
+  }
+  return { spans, endState: null };
+}
+
 // --- shell ------------------------------------------------------------------
 
 const SH_KEYWORDS = new Set([
@@ -336,6 +446,18 @@ const LANGUAGES = {
     comment: '#', indentAfter: /(\b(then|do|else)|[{(])$/, closers: ')}', pairs: true,
     tokenize: tokenizeShell, run: 'maxshell', check: 'maxshell',
   },
+  cpp: {
+    id: 'cpp', name: 'C++',
+    exts: ['.cpp', '.cc', '.cxx', '.c++', '.cp', '.hpp', '.hh', '.hxx', '.h++', '.h', '.ipp', '.tpp', '.ino'],
+    shebang: null,
+    comment: '//', indentAfter: /[{[(]$/, closers: ')]}', pairs: true,
+    tokenize: tokenizeC, run: 'cpp', check: 'cpp',
+  },
+  c: {
+    id: 'c', name: 'C', exts: ['.c'], shebang: null,
+    comment: '//', indentAfter: /[{[(]$/, closers: ')]}', pairs: true,
+    tokenize: tokenizeC, run: 'c', check: 'c',
+  },
   json: {
     id: 'json', name: 'JSON', exts: ['.json', '.jsonc', '.webmanifest'], shebang: null,
     comment: null, indentAfter: /[{[]$/, closers: ']}', pairs: true,
@@ -405,6 +527,7 @@ module.exports = {
   computeStates,
   renderSlice,
   tokenizeJs,
+  tokenizeC,
   tokenizeShell,
   tokenizeJson,
   tokenizeMarkdown,
