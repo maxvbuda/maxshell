@@ -322,6 +322,53 @@ version, and `^O` asks before overwriting it with yours.
 `pyedit` needs an interactive terminal; it exits with an error if stdin or
 stdout is redirected.
 
+## gitui — the built-in git browser
+
+`gitui` stages, diffs and commits without leaving the shell:
+
+```sh
+gitui
+```
+
+```
+  gitui  on main ↑2              1 staged, 2 changed, 3 untracked
+ Staged (1)
+    M src/pyedit.js
+ Unstaged (2)
+  ▸ M README.md
+    M package.json
+ Untracked (3)
+    ? notes.txt
+ ── diff: README.md ──────────────────────────────────────────────
+ @@ -180,6 +180,12 @@
+ +**Selection and block editing.** `M-A` sets a mark and moving
+ +selects from it; shift-arrows select without setting one first.
+```
+
+The file list is grouped into staged, unstaged and untracked, and the pane
+below always shows the diff for whatever is selected — the staged diff for a
+staged file, the worktree diff otherwise, and the whole file for something
+untracked.
+
+### Keys
+
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `↑` / `↓`, `k` / `j` | move between files | `space` | stage, or unstage if staged |
+| `a` | stage everything | `U` | unstage everything |
+| `c` | commit what is staged | `^T` | push |
+| `^D` / `^U` | scroll the diff | `PgUp` / `PgDn` | scroll a page |
+| `d` | discard changes | `r` | re-read the repository |
+| `^G` or `?` | help | `q` or `^X` | quit |
+
+Anything irreversible asks first: `d` makes you type `yes` in full, because it
+throws away changes (or deletes an untracked file) with no way back, and `^T`
+names the remote before pushing to it. A staged file cannot be discarded at all
+until you unstage it.
+
+Status is re-read every couple of seconds, so a commit or checkout you make in
+another terminal shows up on its own.
+
 ## Builtins
 
 | Builtin | Purpose |
@@ -340,6 +387,7 @@ stdout is redirected.
 | `break`, `continue`, `return`, `exit` | control flow |
 | `unfunction` | remove a function |
 | `pyedit` | the built-in Python editor (see above) |
+| `gitui` | the built-in git browser (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
 
@@ -363,10 +411,13 @@ src/ansi.js         Colour helpers and escape-aware width
 src/pyedit.js       nano-style Python editor (buffer model + screen)
 src/pyhighlight.js  Python tokenizer and syntax colouring
 src/keys.js         Blocking key reader for full-screen editing
+src/gitui.js        git browser: status, staging, diffs, commit
+src/git.js          git plumbing and porcelain v2 status parsing
 examples/demo.mxsh  A tour of the language
 test/run.js         Language test suite
 test/interactive.js Line editor, highlighter and prompt test suite
 test/pyedit.js      Python editor, tokenizer and key reader test suite
+test/gitui.js       git layer and browser test suite
 ```
 
 ## Differences from zsh

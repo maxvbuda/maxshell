@@ -293,7 +293,8 @@ Builtins
 
 Editing
   pyedit [file]             nano-style Python editor: highlighting, auto-indent,
-                            ^T runs the buffer, ^G shows the key list
+                            selection and block indent, ^T runs the buffer
+  gitui                     browse the repository: stage, diff, commit and push
 
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
@@ -607,6 +608,11 @@ BUILTINS.type = (args, io, shell) => {
 };
 
 BUILTINS.whence = BUILTINS.type;
+
+BUILTINS.gitui = (args, io, shell) => {
+  const { runGitUI } = require('./gitui');
+  return runGitUI(args, io, shell);
+};
 
 BUILTINS.pyedit = (args, io, shell) => {
   const { runEditor } = require('./pyedit');
