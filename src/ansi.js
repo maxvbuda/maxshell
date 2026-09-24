@@ -28,6 +28,8 @@ const dim = () => sgr(2);
 const underline = () => sgr(4);
 const noBold = () => sgr(22);
 const noUnderline = () => sgr(24);
+const reverse = () => sgr(7);
+const noReverse = () => sgr(27);
 
 function strip(s) { return String(s).replace(ANSI_RE, ''); }
 
@@ -35,5 +37,6 @@ function strip(s) { return String(s).replace(ANSI_RE, ''); }
 function width(s) { return [...strip(s)].length; }
 
 module.exports = {
-  setEnabled, isEnabled, fg, sgr, reset, bold, dim, underline, noBold, noUnderline, strip, width, NAMED,
+  setEnabled, isEnabled, fg, sgr, reset, bold, dim, underline, noBold, noUnderline,
+  reverse, noReverse, strip, width, NAMED,
 };

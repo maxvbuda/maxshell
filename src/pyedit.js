@@ -35,8 +35,9 @@ class EditorBuffer {
     this.modified = false;
     this.undoStack = [];
     this.redoStack = [];
-    this.cutBuffer = [];
+    this.clipboard = { text: '', linewise: true };
     this.lastWasCut = false;
+    this.mark = null;
   }
 
   get text() { return this.lines.join('\n'); }
@@ -84,6 +85,7 @@ class EditorBuffer {
 
   insert(text) {
     this.pushUndo();
+    this.mark = null;
     const l = this.line;
     this.lines[this.row] = l.slice(0, this.col) + text + l.slice(this.col);
     this.col += text.length;
@@ -94,6 +96,7 @@ class EditorBuffer {
   // opening bracket — the thing that makes editing Python bearable.
   newline() {
     this.pushUndo();
+    this.mark = null;
     const l = this.line;
     const before = l.slice(0, this.col);
     const after = l.slice(this.col);
@@ -108,6 +111,7 @@ class EditorBuffer {
   }
 
   backspace() {
+    if (this.deleteSelection()) return;
     if (this.col > 0) {
       const before = this.line.slice(0, this.col);
       // Inside leading whitespace, delete a whole indent stop.
@@ -129,6 +133,7 @@ class EditorBuffer {
   }
 
   deleteChar() {
+    if (this.deleteSelection()) return;
     if (this.col < this.line.length) {
       this.pushUndo();
       this.lines[this.row] = this.line.slice(0, this.col) + this.line.slice(this.col + 1);
@@ -142,35 +147,142 @@ class EditorBuffer {
     this.modified = true;
   }
 
-  indent() {
+  // --- selection ------------------------------------------------------------
+
+  setMark() { this.mark = { row: this.row, col: this.col }; }
+
+  clearMark() { this.mark = null; }
+
+  toggleMark() {
+    if (this.mark) this.mark = null;
+    else this.setMark();
+    return !!this.mark;
+  }
+
+  // The marked region, ordered start-before-end, or null when nothing is
+  // selected.
+  selectionRange() {
+    if (!this.mark) return null;
+    const a = this.mark;
+    const b = { row: this.row, col: this.col };
+    if (a.row === b.row && a.col === b.col) return null;
+    const aFirst = a.row < b.row || (a.row === b.row && a.col < b.col);
+    return {
+      start: { ...(aFirst ? a : b) },
+      end: { ...(aFirst ? b : a) },
+    };
+  }
+
+  selectedText() {
+    const range = this.selectionRange();
+    if (!range) return '';
+    const { start, end } = range;
+    if (start.row === end.row) return this.lines[start.row].slice(start.col, end.col);
+    const parts = [this.lines[start.row].slice(start.col)];
+    for (let r = start.row + 1; r < end.row; r++) parts.push(this.lines[r]);
+    parts.push(this.lines[end.row].slice(0, end.col));
+    return parts.join('\n');
+  }
+
+  deleteSelection() {
+    const range = this.selectionRange();
+    if (!range) return false;
     this.pushUndo();
-    this.lines[this.row] = INDENT + this.line;
-    this.col += TAB_WIDTH;
+    const { start, end } = range;
+    const head = this.lines[start.row].slice(0, start.col);
+    const tail = this.lines[end.row].slice(end.col);
+    this.lines.splice(start.row, end.row - start.row + 1, head + tail);
+    this.row = start.row;
+    this.col = start.col;
+    this.mark = null;
     this.modified = true;
+    return true;
+  }
+
+  // Rows the next block operation should touch.
+  activeRows() {
+    const range = this.selectionRange();
+    return range ? [range.start.row, range.end.row] : [this.row, this.row];
+  }
+
+  // --- indentation and comments ---------------------------------------------
+
+  indent() {
+    const [from, to] = this.activeRows();
+    this.pushUndo();
+    for (let r = from; r <= to; r++) {
+      if (from !== to && !this.lines[r].trim()) continue;
+      this.lines[r] = INDENT + this.lines[r];
+    }
+    this.col += TAB_WIDTH;
+    if (this.mark && this.mark.row >= from && this.mark.row <= to) this.mark.col += TAB_WIDTH;
+    this.modified = true;
+    this.clamp();
   }
 
   dedent() {
-    const m = /^[ ]{1,4}/.exec(this.line);
-    if (!m) return;
+    const [from, to] = this.activeRows();
+    let touched = false;
+    let atCursor = 0;
+    let atMark = 0;
     this.pushUndo();
-    this.lines[this.row] = this.line.slice(m[0].length);
-    this.col = Math.max(0, this.col - m[0].length);
+    for (let r = from; r <= to; r++) {
+      const m = /^[ ]{1,4}/.exec(this.lines[r]);
+      if (!m) continue;
+      this.lines[r] = this.lines[r].slice(m[0].length);
+      touched = true;
+      if (r === this.row) atCursor = m[0].length;
+      if (this.mark && r === this.mark.row) atMark = m[0].length;
+    }
+    if (!touched) { this.undoStack.pop(); return; }
+    this.col = Math.max(0, this.col - atCursor);
+    if (this.mark) this.mark.col = Math.max(0, this.mark.col - atMark);
     this.modified = true;
+    this.clamp();
   }
 
+  // Comments the block, or uncomments it when every line is already commented.
   toggleComment() {
+    const [from, to] = this.activeRows();
+    const rows = [];
+    for (let r = from; r <= to; r++) if (this.lines[r].trim()) rows.push(r);
+    if (!rows.length) rows.push(this.row);
+
     this.pushUndo();
-    const l = this.line;
-    const m = /^(\s*)(#\s?)?(.*)$/.exec(l);
-    this.lines[this.row] = m[2] ? m[1] + m[3] : `${m[1]}# ${m[3]}`;
-    this.col = Math.max(0, this.col + (m[2] ? -m[2].length : 2));
+    const allCommented = rows.every((r) => /^\s*#/.test(this.lines[r]));
+    for (const r of rows) {
+      const m = /^(\s*)(#\s?)?(.*)$/.exec(this.lines[r]);
+      if (allCommented) {
+        if (m[2]) this.lines[r] = m[1] + m[3];
+      } else if (!m[2]) {
+        this.lines[r] = `${m[1]}# ${m[3]}`;
+      }
+    }
     this.modified = true;
+    this.clamp();
+  }
+
+  // --- clipboard ------------------------------------------------------------
+
+  copy() {
+    const text = this.selectedText();
+    this.clipboard = text
+      ? { text, linewise: false }
+      : { text: this.lines[this.row], linewise: true };
+    return this.clipboard;
   }
 
   cutLine() {
+    if (this.selectionRange()) {
+      this.clipboard = { text: this.selectedText(), linewise: false };
+      this.deleteSelection();
+      return;
+    }
     this.pushUndo();
-    if (!this.lastWasCut) this.cutBuffer = [];
-    this.cutBuffer.push(this.lines[this.row]);
+    const text = this.lines[this.row];
+    this.clipboard = this.lastWasCut && this.clipboard.linewise
+      ? { text: `${this.clipboard.text}\n${text}`, linewise: true }
+      : { text, linewise: true };
     this.lines.splice(this.row, 1);
     if (!this.lines.length) this.lines = [''];
     this.row = Math.min(this.row, this.lines.length - 1);
@@ -179,13 +291,72 @@ class EditorBuffer {
   }
 
   paste() {
-    if (!this.cutBuffer.length) return;
+    if (!this.clipboard || !this.clipboard.text) return;
     this.pushUndo();
-    this.lines.splice(this.row, 0, ...this.cutBuffer);
-    this.row += this.cutBuffer.length;
-    this.row = Math.min(this.row, this.lines.length - 1);
-    this.col = 0;
+    this.mark = null;
+    if (this.clipboard.linewise) {
+      const lines = this.clipboard.text.split('\n');
+      this.lines.splice(this.row, 0, ...lines);
+      this.row = Math.min(this.row + lines.length, this.lines.length - 1);
+      this.col = 0;
+    } else {
+      this.insertMultiline(this.clipboard.text);
+    }
     this.modified = true;
+  }
+
+  // Inserts text that may span lines. Callers push their own undo entry.
+  insertMultiline(text) {
+    const parts = text.split('\n');
+    const before = this.line.slice(0, this.col);
+    const after = this.line.slice(this.col);
+    if (parts.length === 1) {
+      this.lines[this.row] = before + parts[0] + after;
+      this.col += parts[0].length;
+      return;
+    }
+    const last = parts[parts.length - 1];
+    const block = [before + parts[0], ...parts.slice(1, -1), last + after];
+    this.lines.splice(this.row, 1, ...block);
+    this.row += parts.length - 1;
+    this.col = last.length;
+  }
+
+  // --- brackets -------------------------------------------------------------
+
+  // The partner of the bracket at (row, col), searching outward. Returns null
+  // when the character is not a bracket or the pair is unbalanced.
+  findMatch(row, col) {
+    const OPEN = '([{';
+    const CLOSE = ')]}';
+    const ch = (this.lines[row] || '')[col];
+    const oi = OPEN.indexOf(ch);
+    const ci = CLOSE.indexOf(ch);
+    if (oi === -1 && ci === -1) return null;
+
+    if (oi !== -1) {
+      const want = CLOSE[oi];
+      let depth = 0;
+      for (let r = row; r < this.lines.length; r++) {
+        const line = this.lines[r];
+        for (let c = r === row ? col : 0; c < line.length; c++) {
+          if (line[c] === ch) depth++;
+          else if (line[c] === want && --depth === 0) return { row: r, col: c };
+        }
+      }
+      return null;
+    }
+
+    const want = OPEN[ci];
+    let depth = 0;
+    for (let r = row; r >= 0; r--) {
+      const line = this.lines[r];
+      for (let c = r === row ? col : line.length - 1; c >= 0; c--) {
+        if (line[c] === ch) depth++;
+        else if (line[c] === want && --depth === 0) return { row: r, col: c };
+      }
+    }
+    return null;
   }
 
   moveLeft() {
@@ -230,8 +401,8 @@ class EditorBuffer {
 // --- the screen -------------------------------------------------------------
 
 const HELP_ROWS = [
-  [['^O', 'Save'], ['^X', 'Exit'], ['^W', 'Find'], ['^T', 'Run'], ['^G', 'Help'], ['^K', 'Cut']],
-  [['^U', 'Paste'], ['^Z', 'Undo'], ['M-3', 'Comment'], ['Tab', 'Indent'], ['^R', 'Reload'], ['^_', 'Go to']],
+  [['^O', 'Save'], ['^X', 'Exit'], ['^W', 'Find'], ['^T', 'Run'], ['^G', 'Help'], ['M-A', 'Mark']],
+  [['^K', 'Cut'], ['M-6', 'Copy'], ['^U', 'Paste'], ['Tab', 'Indent'], ['M-3', 'Comment'], ['^R', 'Reload']],
 ];
 
 class PyEditor {
@@ -316,11 +487,40 @@ class PyEditor {
     if (this.buf.col >= this.leftCol + width) this.leftCol = this.buf.col - width + 1;
   }
 
+  // The bracket under (or just before) the cursor, with its partner.
+  bracketHighlight() {
+    for (const probe of [this.buf.col, this.buf.col - 1]) {
+      if (probe < 0) continue;
+      const partner = this.buf.findMatch(this.buf.row, probe);
+      if (partner) return [{ row: this.buf.row, col: probe }, partner];
+    }
+    return null;
+  }
+
+  // Column ranges on this row to show in reverse video.
+  rowRanges(row) {
+    const ranges = [];
+    const sel = this.buf.selectionRange();
+    if (sel && row >= sel.start.row && row <= sel.end.row) {
+      const from = row === sel.start.row ? sel.start.col : 0;
+      // Past the end of a fully selected row, so the newline reads as selected.
+      const to = row === sel.end.row ? sel.end.col : this.buf.lines[row].length + 1;
+      ranges.push([from, to]);
+    }
+    if (this.bracketPair) {
+      for (const point of this.bracketPair) {
+        if (point.row === row) ranges.push([point.col, point.col + 1]);
+      }
+    }
+    return ranges;
+  }
+
   render() {
     if (this.mode === 'help') return this.renderPager('pyedit help', HELP_TEXT_LINES);
     if (this.mode === 'output') return this.renderPager('output — any key returns', this.view || []);
 
     this.scroll();
+    this.bracketPair = this.bracketHighlight();
     const states = this.syntaxState();
     const width = Math.max(1, this.cols - this.gutter);
     const gutterWidth = this.gutter;
@@ -337,7 +537,10 @@ class PyEditor {
         const color = row === this.buf.row ? ansi.fg(250) : ansi.fg('gray');
         s += `${color}${num}${ansi.reset()} `;
       }
-      s += renderSlice(this.buf.lines[row], states[row] || null, this.leftCol, this.leftCol + width);
+      s += renderSlice(
+        this.buf.lines[row], states[row] || null,
+        this.leftCol, this.leftCol + width, this.rowRanges(row),
+      );
       s += '\x1b[K';
     }
 
@@ -345,7 +548,11 @@ class PyEditor {
     if (this.mode === 'prompt') {
       s += this.bar(` ${this.prompt.label}${this.prompt.value}`);
     } else {
-      const pos = `line ${this.buf.row + 1}/${this.buf.lines.length}  col ${this.buf.col + 1}`;
+      const sel = this.buf.selectionRange();
+      const selected = sel
+        ? `  ${sel.end.row - sel.start.row + 1} line${sel.end.row === sel.start.row ? '' : 's'} selected`
+        : (this.buf.mark ? '  mark set' : '');
+      const pos = `line ${this.buf.row + 1}/${this.buf.lines.length}  col ${this.buf.col + 1}${selected}`;
       const msg = this.message ? `  ${this.message}` : '';
       s += `${ansi.fg('gray')}${pos}${ansi.reset()}${ansi.fg(214)}${msg}${ansi.reset()}\x1b[K`;
     }
@@ -614,9 +821,19 @@ class PyEditor {
       else if (key.name === '3') this.buf.toggleComment();
       else if (key.name === 'n') this.showNumbers = !this.showNumbers;
       else if (key.name === 'w') this.doSearch(this.searchTerm);
+      else if (key.name === 'a') {
+        this.message = this.buf.toggleMark() ? 'mark set — move to select' : 'mark cleared';
+      } else if (key.name === '6') {
+        const { linewise } = this.buf.copy();
+        this.message = linewise ? 'copied the line' : 'copied the selection';
+      }
       this.buf.lastWasCut = false;
       return;
     }
+
+    // Shift with a movement key starts a selection if one isn't open.
+    const MOVES = ['up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown'];
+    if (key.shift && MOVES.includes(key.name) && !this.buf.mark) this.buf.setMark();
 
     switch (key.name) {
       case 'return': this.buf.newline(); break;
@@ -630,8 +847,16 @@ class PyEditor {
       case 'end': this.buf.end(); break;
       case 'pageup': this.buf.moveUp(this.bodyRows); break;
       case 'pagedown': this.buf.moveDown(this.bodyRows); break;
-      case 'tab': if (key.shift) this.buf.dedent(); else this.buf.insert(INDENT); break;
-      case 'escape': break;
+      case 'tab':
+        // With a selection Tab shifts the whole block; without one it just
+        // types an indent at the cursor.
+        if (key.shift) this.buf.dedent();
+        else if (this.buf.selectionRange()) this.buf.indent();
+        else this.buf.insert(INDENT);
+        break;
+      case 'escape':
+        if (this.buf.mark) { this.buf.clearMark(); this.message = 'mark cleared'; }
+        break;
       default:
         if (key.printable) this.buf.insert(key.str);
         break;
@@ -664,7 +889,15 @@ const HELP_TEXT_LINES = `
    Tab / Shift-Tab    indent / dedent by four spaces
    Enter              keeps the current indent, and adds one after ':' or '(['
    Backspace          removes a whole indent stop inside leading whitespace
-   M-3                toggle '#' comment on the current line
+   M-3                toggle '#' comment (the whole selection, if there is one)
+
+ Selecting
+   M-A                set or clear the mark, then move to select
+   shift-arrows       select without setting the mark first
+   Escape             clear the mark
+   Tab / Shift-Tab    with a selection, indent or dedent every line in it
+   M-6                copy          ^K  cut          ^U  paste
+   Matching brackets around the cursor are highlighted as you move.
 
  Files
    ^O                 write the buffer out (asks for a name)

@@ -165,21 +165,41 @@ function colorFor(cls) {
 }
 
 // Renders columns [from, to) of a line, preserving colour across the slice.
-function renderSlice(line, state, from, to) {
+// `ranges` are [start, end) column pairs to show in reverse video, used for
+// the selection and for matching-bracket highlighting.
+function renderSlice(line, state, from, to, ranges = []) {
   const { spans } = tokenizeLine(line, state);
-  let col = 0;
+  const marked = (i) => {
+    for (const [a, b] of ranges) if (i >= a && i < b) return true;
+    return false;
+  };
+
   let out = '';
+  let col = 0;
+  let curColor = null;
+  let curMark = null;
+  let done = false;
+
   for (const span of spans) {
-    const start = col;
-    const end = col + span.text.length;
-    col = end;
-    if (end <= from) continue;
-    if (start >= to) break;
-    const text = span.text.slice(Math.max(0, from - start), Math.min(span.text.length, to - start));
-    if (!text) continue;
+    if (done) break;
     const color = colorFor(span.cls);
-    out += color ? color + text + ansi.reset() : text;
+    for (const ch of span.text) {
+      const i = col++;
+      if (i < from) continue;
+      if (i >= to) { done = true; break; }
+      const mark = marked(i);
+      if (color !== curColor || mark !== curMark) {
+        out += ansi.reset();
+        if (mark) out += ansi.reverse();
+        out += color;
+        curColor = color;
+        curMark = mark;
+      }
+      out += ch;
+    }
   }
+
+  if (curColor !== null || curMark) out += ansi.reset();
   return out;
 }
 

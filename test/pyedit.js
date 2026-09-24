@@ -133,7 +133,8 @@ test('consecutive cuts accumulate into one block', () => {
   b.lastWasCut = true;
   b.cutLine();
   assert.deepStrictEqual(b.lines, ['c']);
-  assert.deepStrictEqual(b.cutBuffer, ['a', 'b']);
+  assert.strictEqual(b.clipboard.text, 'a\nb');
+  assert.strictEqual(b.clipboard.linewise, true);
   b.paste();
   assert.deepStrictEqual(b.lines, ['a', 'b', 'c']);
 });
@@ -446,6 +447,200 @@ test('the key reader can time out so idle polling works', () => {
   assert.strictEqual(reader.next(50).name, 'eof');
   fs.closeSync(fd);
   fs.rmSync(path.dirname(file), { recursive: true, force: true });
+});
+
+
+// --- selection and block editing --------------------------------------------
+
+function selected(text, from, to) {
+  const b = new EditorBuffer(text);
+  b.row = from[0]; b.col = from[1];
+  b.setMark();
+  b.row = to[0]; b.col = to[1];
+  return b;
+}
+
+test('no selection until the cursor leaves the mark', () => {
+  const b = new EditorBuffer('abc');
+  assert.strictEqual(b.selectionRange(), null);
+  b.setMark();
+  assert.strictEqual(b.selectionRange(), null, 'an empty region is not a selection');
+  b.col = 2;
+  assert.ok(b.selectionRange());
+});
+
+test('the selection is ordered however it was made', () => {
+  const forward = selected('hello', [0, 1], [0, 4]);
+  const backward = selected('hello', [0, 4], [0, 1]);
+  assert.deepStrictEqual(forward.selectionRange(), backward.selectionRange());
+  assert.strictEqual(forward.selectedText(), 'ell');
+  assert.strictEqual(backward.selectedText(), 'ell');
+});
+
+test('selected text spans lines', () => {
+  const b = selected('one\ntwo\nthree', [0, 1], [2, 2]);
+  assert.strictEqual(b.selectedText(), 'ne\ntwo\nth');
+});
+
+test('deleting a selection joins the remainder', () => {
+  const b = selected('one\ntwo\nthree', [0, 1], [2, 2]);
+  assert.strictEqual(b.deleteSelection(), true);
+  assert.deepStrictEqual(b.lines, ['oree']);
+  assert.deepStrictEqual([b.row, b.col], [0, 1]);
+  assert.strictEqual(b.mark, null, 'the mark is consumed');
+});
+
+test('toggleMark reports and clears', () => {
+  const b = new EditorBuffer('x');
+  assert.strictEqual(b.toggleMark(), true);
+  assert.strictEqual(b.toggleMark(), false);
+  assert.strictEqual(b.mark, null);
+});
+
+test('Tab indents every selected line', () => {
+  const b = selected('a = 1\nb = 2\nc = 3', [0, 0], [1, 1]);
+  b.indent();
+  assert.deepStrictEqual(b.lines, ['    a = 1', '    b = 2', 'c = 3']);
+});
+
+test('Shift-Tab dedents every selected line', () => {
+  const b = selected('    a = 1\n    b = 2\nc = 3', [0, 0], [1, 1]);
+  b.dedent();
+  assert.deepStrictEqual(b.lines, ['a = 1', 'b = 2', 'c = 3']);
+});
+
+test('block indent skips blank lines', () => {
+  const b = selected('a = 1\n\nb = 2', [0, 0], [2, 1]);
+  b.indent();
+  assert.deepStrictEqual(b.lines, ['    a = 1', '', '    b = 2']);
+});
+
+test('dedent with nothing to remove does not stack an undo', () => {
+  const b = new EditorBuffer('a = 1');
+  const depth = b.undoStack.length;
+  b.dedent();
+  assert.strictEqual(b.undoStack.length, depth);
+  assert.strictEqual(b.lines[0], 'a = 1');
+});
+
+test('block comment comments all, then uncomments all', () => {
+  const b = selected('a = 1\nb = 2', [0, 0], [1, 1]);
+  b.toggleComment();
+  assert.deepStrictEqual(b.lines, ['# a = 1', '# b = 2']);
+  b.toggleComment();
+  assert.deepStrictEqual(b.lines, ['a = 1', 'b = 2']);
+});
+
+test('a partly commented block is commented, not uncommented', () => {
+  const b = selected('# a = 1\nb = 2', [0, 0], [1, 1]);
+  b.toggleComment();
+  assert.deepStrictEqual(b.lines, ['# a = 1', '# b = 2']);
+});
+
+test('cutting a selection is character-wise and pastes back', () => {
+  const b = selected('one\ntwo', [0, 1], [1, 1]);
+  b.cutLine();
+  assert.deepStrictEqual(b.lines, ['owo']);
+  assert.strictEqual(b.clipboard.linewise, false);
+  assert.strictEqual(b.clipboard.text, 'ne\nt');
+  b.paste();
+  assert.deepStrictEqual(b.lines, ['one\ntwo'.split('\n')[0], 'two']);
+});
+
+test('copy without a selection takes the whole line', () => {
+  const b = new EditorBuffer('alpha\nbeta');
+  assert.deepStrictEqual(b.copy(), { text: 'alpha', linewise: true });
+});
+
+test('typing replaces nothing but drops the mark', () => {
+  const b = selected('abcd', [0, 0], [0, 2]);
+  b.insert('X');
+  assert.strictEqual(b.mark, null);
+});
+
+test('backspace and delete remove the selection when there is one', () => {
+  const back = selected('abcdef', [0, 1], [0, 4]);
+  back.backspace();
+  assert.strictEqual(back.text, 'aef');
+
+  const del = selected('abcdef', [0, 1], [0, 4]);
+  del.deleteChar();
+  assert.strictEqual(del.text, 'aef');
+});
+
+test('matching brackets are found in both directions', () => {
+  const b = new EditorBuffer('f(a, (b, c))');
+  assert.deepStrictEqual(b.findMatch(0, 1), { row: 0, col: 11 });
+  assert.deepStrictEqual(b.findMatch(0, 11), { row: 0, col: 1 });
+  assert.deepStrictEqual(b.findMatch(0, 5), { row: 0, col: 10 });
+  assert.strictEqual(b.findMatch(0, 0), null, 'not a bracket');
+});
+
+test('matching brackets span lines, and unbalanced ones return null', () => {
+  const b = new EditorBuffer('items = [\n    1,\n]');
+  assert.deepStrictEqual(b.findMatch(0, 8), { row: 2, col: 0 });
+  assert.strictEqual(new EditorBuffer('f(a').findMatch(0, 1), null);
+});
+
+test('the editor paints the selection and the bracket pair', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxsel-'));
+  const shell = { cwd: dir, env: process.env, options: new Set(), resolve: (f) => f, writeTo() {} };
+  const editor = new PyEditor({ shell, io: {}, filename: '', text: 'f(x)\ny = 1' });
+
+  editor.buf.row = 0; editor.buf.col = 0;
+  editor.buf.setMark();
+  editor.buf.row = 1; editor.buf.col = 1;
+  editor.bracketPair = null;
+  const first = editor.rowRanges(0);
+  assert.deepStrictEqual(first, [[0, 5]], 'a fully selected row runs past its end');
+  assert.deepStrictEqual(editor.rowRanges(1), [[0, 1]]);
+
+  editor.buf.clearMark();
+  editor.buf.row = 0; editor.buf.col = 1;
+  editor.bracketPair = editor.bracketHighlight();
+  assert.deepStrictEqual(editor.rowRanges(0), [[1, 2], [3, 4]], 'both brackets highlighted');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test('Tab indents the whole selection through the key bindings', () => {
+  const shell = { cwd: '.', env: process.env, options: new Set(), resolve: (f) => f, writeTo() {} };
+  const editor = new PyEditor({ shell, io: {}, filename: '', text: 'a = 1\nb = 2' });
+
+  editor.handleKey({ name: 'a', meta: true, printable: true, str: 'a' });
+  assert.ok(editor.buf.mark, 'M-A should set the mark');
+  editor.handleKey({ name: 'down' });
+  assert.ok(editor.buf.selectionRange(), 'moving should open a selection');
+  editor.handleKey({ name: 'tab' });
+
+  assert.deepStrictEqual(editor.buf.lines, ['    a = 1', '    b = 2']);
+});
+
+test('Tab without a selection still types an indent at the cursor', () => {
+  const shell = { cwd: '.', env: process.env, options: new Set(), resolve: (f) => f, writeTo() {} };
+  const editor = new PyEditor({ shell, io: {}, filename: '', text: 'ab' });
+  editor.buf.col = 1;
+  editor.handleKey({ name: 'tab' });
+  assert.strictEqual(editor.buf.text, 'a    b');
+});
+
+test('Shift-Tab dedents the selected block through the key bindings', () => {
+  const shell = { cwd: '.', env: process.env, options: new Set(), resolve: (f) => f, writeTo() {} };
+  const editor = new PyEditor({ shell, io: {}, filename: '', text: '    a = 1\n    b = 2' });
+  editor.handleKey({ name: 'a', meta: true, printable: true, str: 'a' });
+  editor.handleKey({ name: 'down' });
+  editor.handleKey({ name: 'tab', shift: true });
+  assert.deepStrictEqual(editor.buf.lines, ['a = 1', 'b = 2']);
+});
+
+test('shift-arrow opens a selection without setting the mark first', () => {
+  const shell = { cwd: '.', env: process.env, options: new Set(), resolve: (f) => f, writeTo() {} };
+  const editor = new PyEditor({ shell, io: {}, filename: '', text: 'a = 1\nb = 2' });
+  editor.handleKey({ name: 'down', shift: true });
+  assert.ok(editor.buf.selectionRange(), 'shift-down should select');
+  editor.handleKey({ name: 'tab' });
+  assert.deepStrictEqual(editor.buf.lines, ['    a = 1', '    b = 2']);
 });
 
 if (failures) {

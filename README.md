@@ -281,6 +281,15 @@ when that colon is inside a trailing comment. Backspace inside leading
 whitespace removes a whole four-space stop rather than one character. `Tab` and
 `Shift-Tab` indent and dedent.
 
+**Selection and block editing.** `M-A` sets a mark and moving selects from it;
+shift-arrows select without setting one first. With a selection open, `Tab` and
+`Shift-Tab` shift every line in it, and `M-3` comments or uncomments the whole
+block — commenting it unless every line already is. `^K` cuts the selection,
+`M-6` copies it, `^U` pastes. `Escape` drops the mark.
+
+**Matching brackets** on either side of the cursor are highlighted as you move,
+across lines.
+
 **Run without leaving the editor.** `^T` pipes the buffer straight to `python3`
 and shows the output in a pager, so you can run code you have not saved yet.
 
@@ -303,7 +312,10 @@ version, and `^O` asks before overwriting it with yours.
 | `^K` | cut the line (repeat to cut a run) | `^U` | paste |
 | `^Z` / `M-U` | undo | `M-E` | redo |
 | `^R` | re-read the file from disk | | |
-| `M-3` | toggle a `#` comment | `M-N` | toggle line numbers |
+| `M-3` | comment / uncomment the block | `M-N` | toggle line numbers |
+| `M-A` | set or clear the mark | shift-arrows | select |
+| `M-6` | copy the selection | `Escape` | clear the mark |
+| `Tab` / `Shift-Tab` | indent / dedent the block | | |
 | `^A` / `^E` | start / end of line | `^_` | go to line |
 | `^Y` / `^V` | page up / down | `^D` | delete character |
 
