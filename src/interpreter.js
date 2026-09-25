@@ -39,6 +39,9 @@ class Shell {
     this.exited = false;
     this.history = [];
     this.dirStack = [];
+    this.dirBack = [];
+    this.dirForward = [];
+    this.lastNotFound = null;
     this.jobs = [];
     this.lastBgPid = null;
     this.startTime = Date.now();
@@ -127,7 +130,9 @@ class Shell {
     return path.isAbsolute(p) ? p : path.resolve(this.cwd, p);
   }
 
-  setCwd(dir) {
+  // Changes directory. Every move is remembered for `back` / `forward`;
+  // those pass { record: false } so walking the history doesn't rewrite it.
+  setCwd(dir, { record = true } = {}) {
     const home = this.getVar('HOME') || os.homedir();
     const target = this.resolve(dir.replace(/^~(?=$|\/)/, home));
     const st = fs.statSync(target);
@@ -137,6 +142,11 @@ class Shell {
       throw e;
     }
     const real = fs.realpathSync(target);
+    if (record && real !== this.cwd) {
+      this.dirBack.push(this.cwd);
+      if (this.dirBack.length > 100) this.dirBack.shift();
+      this.dirForward = [];
+    }
     this.env.OLDPWD = this.cwd;
     this.setVar('OLDPWD', this.cwd);
     this.cwd = real;
@@ -747,7 +757,11 @@ class Shell {
 
     if (res.error) {
       if (res.error.code === 'ENOENT') {
-        this.writeTo(io.stderr, `maxshell: command not found: ${argv[0]}\n`);
+        let guess = null;
+        try { guess = require('./suggest').suggestCommand(argv[0], this); } catch { /* best effort */ }
+        this.lastNotFound = { name: argv[0], guess };
+        const hint = guess ? ` — did you mean ${guess}?` : '';
+        this.writeTo(io.stderr, `maxshell: command not found: ${argv[0]}${hint}\n`);
         return 127;
       }
       if (res.error.code === 'EACCES') {
@@ -760,7 +774,8 @@ class Shell {
 
     if (res.stdout) this.writeTo(io.stdout, res.stdout);
     if (res.stderr) this.writeTo(io.stderr, res.stderr);
-    if (res.signal) return 128;
+    // Killed by a signal: 128 + its number, as shells report (Ctrl-C → 130).
+    if (res.signal) return 128 + (os.constants.signals[res.signal] || 0);
     return res.status ?? 0;
   }
 }

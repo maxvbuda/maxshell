@@ -9,13 +9,14 @@ const { commonPrefix } = require('./complete');
 // from history, inline completion, and a right-hand prompt. Terminal I/O is
 // injectable so the editing logic can be tested without a tty.
 class LineEditor {
-  constructor({ input, output, shell, highlight, complete, history }) {
+  constructor({ input, output, shell, highlight, complete, history, searchHistory }) {
     this.input = input;
     this.output = output;
     this.shell = shell;
     this.highlightFn = highlight || ((s) => s);
     this.completeFn = complete;
     this.history = history || [];
+    this.searchHistory = searchHistory || null;
     this.attached = false;
   }
 
@@ -29,8 +30,12 @@ class LineEditor {
     this.attached = true;
   }
 
-  read(prompt, rprompt) {
+  // `fix` is a corrected command offered after a typo: shown dimmed while the
+  // line is empty, and run by pressing Enter.
+  read(prompt, rprompt, { fix = null } = {}) {
     this.attach();
+    this.fix = fix;
+    this.search = null;
     this.prompt = prompt || '';
     this.rprompt = rprompt || '';
     this.buf = '';
@@ -199,13 +204,95 @@ class LineEditor {
     this.lastEndRow = 0;
   }
 
+  // --- Ctrl-R: fuzzy history search -------------------------------------------
+
+  startSearch() {
+    if (!this.searchHistory) return;
+    this.search = { query: '', index: 0, saved: this.buf, savedCursor: this.cursor, rows: [] };
+    this.refreshSearch();
+  }
+
+  refreshSearch() {
+    const s = this.search;
+    s.rows = this.searchHistory(s.query);
+    s.index = Math.min(s.index, Math.max(0, s.rows.length - 1));
+  }
+
+  endSearch(accept) {
+    const s = this.search;
+    this.search = null;
+    const row = s.rows[s.index];
+    if (accept && row) {
+      this.buf = row.cmd;
+      this.cursor = this.buf.length;
+    } else {
+      this.buf = s.saved;
+      this.cursor = s.savedCursor;
+    }
+  }
+
+  handleSearchKey(str, key) {
+    const s = this.search;
+    const name = key.name;
+    if ((key.ctrl && (name === 'c' || name === 'g')) || name === 'escape') {
+      this.endSearch(false);
+    } else if (name === 'return' || name === 'enter') {
+      this.endSearch(true);
+      this.suggestion = '';
+      this.render();
+      return this.finish({ line: this.buf });
+    } else if (name === 'tab' || name === 'right') {
+      this.endSearch(true);
+    } else if (name === 'up' || (key.ctrl && name === 'p')) {
+      s.index = Math.max(0, s.index - 1);
+    } else if (name === 'down' || (key.ctrl && (name === 'n' || name === 'r'))) {
+      s.index = Math.min(Math.max(0, s.rows.length - 1), s.index + 1);
+    } else if (name === 'backspace') {
+      s.query = s.query.slice(0, -1);
+      s.index = 0;
+      this.refreshSearch();
+    } else if (key.ctrl && name === 'u') {
+      s.query = '';
+      s.index = 0;
+      this.refreshSearch();
+    } else if (str && !key.ctrl && !key.meta && str.charCodeAt(0) >= 32) {
+      s.query += str;
+      s.index = 0;
+      this.refreshSearch();
+    }
+    this.updateSuggestion();
+    return this.render();
+  }
+
   // --- key handling ---------------------------------------------------------
 
   handleKey(str, key) {
     const name = key.name;
+    if (this.search) return this.handleSearchKey(str, key);
+
+    // An offered fix is run by Enter on an empty line, taken into the line
+    // by → or ^E, and forgotten as soon as anything else is typed.
+    if (this.fix && !this.buf) {
+      if (name === 'return' || name === 'enter') {
+        const line = this.fix;
+        this.fix = null;
+        this.buf = line;
+        this.cursor = line.length;
+        this.render();
+        return this.finish({ line });
+      }
+      if (name === 'right' || (key.ctrl && name === 'e')) {
+        this.buf = this.fix;
+        this.cursor = this.buf.length;
+        this.fix = null;
+        return this.render();
+      }
+      if (!(key.ctrl && name === 'r')) this.fix = null;
+    }
 
     if (key.ctrl) {
       switch (name) {
+        case 'r': this.startSearch(); break;
         case 'c':
           this.output.write(`${ansi.fg('gray')}^C${ansi.reset()}`);
           return this.finish({ line: '', aborted: true });
@@ -274,6 +361,7 @@ class LineEditor {
   // --- rendering ------------------------------------------------------------
 
   render() {
+    if (this.search) return this.renderSearch();
     const cols = this.columns;
     let s = '';
 
@@ -281,8 +369,15 @@ class LineEditor {
     s += '\r\x1b[J';
 
     const painted = this.highlightFn(this.buf, this.shell);
-    const ghostText = this.suggestion ? this.suggestion.slice(this.buf.length) : '';
-    const ghost = ghostText ? `${ansi.dim()}${ghostText}${ansi.reset()}` : '';
+    let ghostText = this.suggestion ? this.suggestion.slice(this.buf.length) : '';
+    let ghost = ghostText ? `${ansi.dim()}${ghostText}${ansi.reset()}` : '';
+    if (!this.buf && this.fix) {
+      const hint = '   ⏎ runs it';
+      if (ansi.width(this.prompt) + this.fix.length + hint.length < cols) {
+        ghostText = this.fix + hint;
+        ghost = `${ansi.dim()}${this.fix}${ansi.reset()}${ansi.fg('gray')}${hint}${ansi.reset()}`;
+      }
+    }
 
     const promptW = ansi.width(this.prompt);
     const totalW = promptW + [...this.buf].length + [...ghostText].length;
@@ -310,6 +405,59 @@ class LineEditor {
     this.lastEndRow = endRow;
     this.output.write(s);
   }
+  // The line shows the selected command; the matches are listed underneath,
+  // and the terminal cursor sits in the query field.
+  renderSearch() {
+    const cols = this.columns;
+    const s = this.search;
+    const { ago } = require('./history');
+    const path = require('path');
+    const maxRows = Math.max(3, Math.min(10, (this.output.rows || 24) - 4));
+    const width = cols - 1;
+    let out = '';
+    if (this.cursorRowPos > 0) out += `\x1b[${this.cursorRowPos}A`;
+    out += '\r\x1b[J';
+
+    const current = s.rows[s.index];
+    const shown = current ? current.cmd : '';
+    const promptW = ansi.width(this.prompt);
+    const room = Math.max(0, width - promptW);
+    const clipped = [...shown].slice(0, room).join('');
+    out += this.prompt + this.highlightFn(clipped, this.shell);
+
+    const total = s.rows.length;
+    const count = total ? `${s.index + 1} of ${total}` : 'no matches';
+    const label = `history › ${s.query}`;
+    const pad = Math.max(1, width - ansi.width(label) - count.length);
+    out += `\r\n${ansi.fg(214)}history ›${ansi.reset()} ${s.query}${' '.repeat(pad)}${ansi.fg('gray')}${count}${ansi.reset()}`;
+
+    // Keep the selection inside the visible window.
+    const top = Math.max(0, Math.min(s.index - Math.floor(maxRows / 2), total - maxRows));
+    const rows = s.rows.slice(top, top + maxRows);
+    rows.forEach((row, i) => {
+      const selected = top + i === s.index;
+      const meta = `${row.lastCwd ? path.basename(row.lastCwd) : ''}${row.here ? ' •' : ''}  ${ago(row.lastTs)}`.trim();
+      const cmdRoom = Math.max(4, width - 2 - meta.length - 2);
+      const chars = [...row.cmd];
+      let text = '';
+      for (let c = 0; c < Math.min(chars.length, cmdRoom); c++) {
+        const hit = row.positions && row.positions.has(c);
+        text += hit ? `${ansi.bold()}${ansi.fg(214)}${chars[c]}${ansi.reset()}${selected ? ansi.reverse() : ''}` : chars[c];
+      }
+      const used = Math.min(chars.length, cmdRoom);
+      const gap = ' '.repeat(Math.max(1, width - 2 - used - meta.length));
+      const line = `${selected ? '›' : ' '} ${text}${gap}${ansi.fg('gray')}${meta}${ansi.reset()}`;
+      out += `\r\n${selected ? ansi.reverse() : ''}${line}${ansi.reset()}`;
+    });
+
+    // Park the cursor after the query text on the header row.
+    const listRows = rows.length;
+    out += `\x1b[${listRows}A\r\x1b[${Math.min(width, ansi.width(label))}C`;
+    this.cursorRowPos = 1;
+    this.lastEndRow = 1 + listRows;
+    this.output.write(out);
+  }
+
 }
 
 module.exports = { LineEditor };

@@ -12,9 +12,12 @@ const { highlight } = require('../src/highlight');
 const { completions } = require('../src/complete');
 const { leftPrompt, rightPrompt, expandPrompt } = require('../src/prompt');
 const ansi = require('../src/ansi');
+const { History, historyFile } = require('../src/history');
+const { DirDB } = require('../src/jump');
+const { suggestLine } = require('../src/suggest');
+const alerts = require('../src/alerts');
 
 const VERSION = require('../package.json').version;
-const HISTORY_FILE = path.join(os.homedir(), '.maxshell_history');
 const RC_FILE = path.join(os.homedir(), '.maxshellrc');
 const HISTORY_LIMIT = 2000;
 
@@ -31,25 +34,55 @@ function sourceRcFile(shell) {
   }
 }
 
+// History keeps the folder and time of each command for Ctrl-R. The shell
+// also sees the plain command list, which drives ghost suggestions.
+const history = new History();
+
 function loadHistory(shell) {
-  try {
-    if (!fs.existsSync(HISTORY_FILE)) return;
-    const lines = fs.readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean);
-    shell.history.push(...lines.slice(-HISTORY_LIMIT));
-  } catch { /* history is best-effort */ }
+  history.load(historyFile(), HISTORY_LIMIT);
+  shell.history.push(...history.commands());
 }
 
-function saveHistory(shell) {
-  try {
-    fs.writeFileSync(HISTORY_FILE, `${shell.history.slice(-HISTORY_LIMIT).join('\n')}\n`);
-  } catch { /* history is best-effort */ }
+function saveHistory() {
+  try { history.save(historyFile(), HISTORY_LIMIT); } catch { /* history is best-effort */ }
 }
 
 function remember(shell, source) {
-  const entry = source.replace(/\n/g, '; ').trim();
-  if (!entry) return;
-  if (shell.history[shell.history.length - 1] === entry) return;
-  shell.history.push(entry);
+  if (history.add(source, shell.cwd)) shell.history.push(history.entries[history.entries.length - 1].cmd);
+}
+
+// Seconds a command must run before finishing earns a notification when
+// you're in another app. Set NOTIFY_AFTER (or 0 to turn it off).
+function notifyThreshold(shell) {
+  const v = shell.getVar('NOTIFY_AFTER');
+  const n = v === undefined || v === '' ? 10 : Number(v);
+  return Number.isFinite(n) && n > 0 ? n * 1000 : Infinity;
+}
+
+// After each command: a quiet ✓/✗ line when it was slow or failed, and a
+// desktop notification when something long finished while you were away.
+function afterCommand(shell, source, ms) {
+  if (shell.exited) return;
+  const line = alerts.statusLine(shell.status, ms);
+  if (line) {
+    const color = line.ok ? ansi.fg('green') : ansi.fg('red');
+    process.stdout.write(`${color}${line.text.slice(0, 1)}${ansi.reset()}${ansi.fg('gray')}${line.text.slice(1)}${ansi.reset()}\n`);
+  }
+  const limit = notifyThreshold(shell);
+  if (ms >= limit && alerts.shouldNotify(ms, limit, alerts.frontApp())) {
+    const what = source.split('\n')[0].slice(0, 60);
+    const outcome = shell.status === 0 ? 'finished' : `failed (exit ${shell.status})`;
+    alerts.notify('maxshell', `${what} ${outcome} — ${alerts.formatDuration(ms)}`);
+  }
+}
+
+// A corrected command line to offer after "command not found".
+function fixFor(shell, source) {
+  const miss = shell.lastNotFound;
+  if (!miss || source.includes('\n')) return null;
+  const first = source.trim().split(/\s+/)[0];
+  if (first !== miss.name) return null;
+  return suggestLine(source.trim(), shell);
 }
 
 function continuationPrompt(shell) {
@@ -61,7 +94,7 @@ function banner() {
   const r = ansi.reset();
   process.stdout.write(
     `${ansi.bold()}maxshell ${VERSION}${r} ${dim}— zsh-flavoured, on Node.js${r}\n`
-    + `${dim}help · tab completes · → accepts suggestions · ctrl-c cancels · ctrl-d exits${r}\n`,
+    + `${dim}help · tab completes · → accepts suggestions · ctrl-r searches history · j jumps to folders${r}\n`,
   );
 }
 
@@ -74,10 +107,20 @@ async function runEditorRepl(shell) {
     highlight,
     complete: completions,
     history: shell.history,
+    searchHistory: (q) => history.search(q, { cwd: shell.cwd }),
   });
+
+  // Ctrl-C should stop the running command, not the shell: the child gets
+  // the signal from the terminal, and maxshell simply carries on.
+  process.on('SIGINT', () => {});
+
+  const dirs = new DirDB();
+  dirs.visit(shell.cwd);
+  dirs.save();
 
   banner();
   let buffer = '';
+  let fix = null;
 
   for (;;) {
     const prompt = buffer ? continuationPrompt(shell) : leftPrompt(shell);
@@ -85,11 +128,12 @@ async function runEditorRepl(shell) {
 
     let result;
     try {
-      result = await editor.read(prompt, rprompt);
+      result = await editor.read(prompt, rprompt, { fix: buffer ? null : fix });
     } catch (e) {
       reportError(e);
       break;
     }
+    fix = null;
 
     if (result.eof) break;
     if (result.aborted) { buffer = ''; continue; }
@@ -97,21 +141,33 @@ async function runEditorRepl(shell) {
     buffer = buffer ? `${buffer}\n${result.line}` : result.line;
     if (!buffer.trim()) { buffer = ''; continue; }
 
+    const source = buffer;
+    const cwdBefore = shell.cwd;
+    shell.lastNotFound = null;
+    const started = Date.now();
     try {
-      shell.run(buffer);
-      remember(shell, buffer);
+      shell.run(source);
+      remember(shell, source);
       buffer = '';
     } catch (e) {
       if (e instanceof IncompleteError) continue;
-      remember(shell, buffer);
+      remember(shell, source);
       buffer = '';
       reportError(e);
     }
 
+    afterCommand(shell, source, Date.now() - started);
+    fix = fixFor(shell, source);
+    if (shell.cwd !== cwdBefore) {
+      dirs.visit(shell.cwd);
+      dirs.save();
+    }
+    saveHistory();
+
     if (shell.exited) break;
   }
 
-  saveHistory(shell);
+  saveHistory();
   return shell.status;
 }
 
@@ -147,7 +203,7 @@ function runPlainRepl(shell) {
     });
 
     rl.on('close', () => {
-      saveHistory(shell);
+      saveHistory();
       process.stdout.write('\n');
       resolve(shell.status);
     });

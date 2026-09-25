@@ -483,6 +483,65 @@ It refreshes every second and a half.
 `view` and `top` share names with system commands. The builtins win inside
 maxshell; `command top` or `command view` reaches the system ones.
 
+## Things terminals should have had years ago
+
+### Fuzzy history search — Ctrl-R
+
+`Ctrl-R` opens a live search over every command you've ever run. Type any
+words, in any order (`push git` finds `git push origin main`), or skip letters
+(`gpo`). Results are ranked by how well they match, then by whether you ran
+them **in this folder**, how recently, and how often. Each row shows the folder
+it last ran in (`•` marks this one) and when.
+
+| Key | Action |
+|---|---|
+| type | narrow the search |
+| `↑` `↓`, `Ctrl-R` | move through the matches |
+| `Enter` | run the selected command |
+| `Tab` / `→` | put it on the line to edit first |
+| `Esc` / `Ctrl-G` | cancel, restoring what you had typed |
+
+History now records the folder and time of each command. Existing history
+files keep working.
+
+### Did you mean …?
+
+```
+maxshell % gti stauts
+maxshell: command not found: gti — did you mean git?
+maxshell % git status   ⏎ runs it
+```
+
+A mistyped command gets a suggestion from your builtins, functions, aliases and
+everything on your `PATH`, and the corrected line — subcommands too, for
+git, npm, brew, docker, cargo, pip and gh — waits dimmed on the next prompt.
+**Press Enter to run it**, `→` to edit it first, or just type something else.
+
+### Done alerts
+
+After a command that took a second or more, or that failed, a quiet line says
+how it went: `✓ 42.3s`, `✗ exit 2 · 3.2s`, `✗ interrupted`. When a command runs
+longer than 10 seconds and you've switched to another app, you get a **macOS
+notification** saying it finished (or failed). Set `NOTIFY_AFTER=30` to change
+the threshold, or `NOTIFY_AFTER=0` to turn notifications off.
+
+`Ctrl-C` now stops the running command without taking maxshell down with it.
+
+### Smart folder jumping — j, back, forward
+
+```sh
+j cook          # → ~/cooking, the folder you visit most that matches
+j max src       # → ~/maxshell/src  (words in order, the last in the folder name)
+j -l cook       # list the candidates with their scores
+back            # the previous folder, like a browser
+forward         # and forward again  (back 3 / forward 2 take counts)
+```
+
+`j` learns from where you actually go — every folder you `cd` into, jump to, or
+leave `files` in counts, with recent visits weighing more. It never "jumps" to
+the folder you're already in, forgets folders that have been deleted, and a
+real path still works (`j ../other` acts like `cd`).
+
 ## Builtins
 
 | Builtin | Purpose |
@@ -502,6 +561,7 @@ maxshell; `command top` or `command view` reaches the system ones.
 | `unfunction` | remove a function |
 | `edit`, `pyedit` | the built-in editor (see above) |
 | `view`, `files`, `top` | pager, file browser, process monitor (see above) |
+| `j`, `back`, `forward` | jump to frequent folders; walk folder history (see above) |
 | `gitui` | the built-in git browser (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
@@ -532,6 +592,10 @@ src/tui.js          Shared full-screen plumbing: raw mode, bars, meters
 src/view.js         view: pager model and screen
 src/files.js        files: browser model, column view, sidebar, previews
 src/fileops.js      Undoable file operations: new, rename, copy, move, Trash
+src/history.js      History with folder and time; fuzzy search and ranking
+src/suggest.js      Did-you-mean: edit distance, command and subcommand fixes
+src/jump.js         Frecency folder database for j
+src/alerts.js       Command status lines and desktop notifications
 src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
@@ -541,6 +605,7 @@ test/interactive.js Line editor, highlighter and prompt test suite
 test/pyedit.js      Python editor, tokenizer and key reader test suite
 test/gitui.js       git layer and browser test suite
 test/tools.js       Languages, view, files and top test suite
+test/features.js    History search, did-you-mean, j/back/forward, alerts
 ```
 
 ## Differences from zsh

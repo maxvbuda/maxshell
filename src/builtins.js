@@ -300,6 +300,11 @@ Editing
   files [dir]               file browser with previews; q leaves you in that dir
   top                       live process monitor: sort, filter, k to kill
 
+Getting around
+  j words…                  jump to your most-used folder matching the words
+  back / forward            walk your folder history, like a browser
+  Ctrl-R                    fuzzy-search every command you've run
+
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
 `;
@@ -365,6 +370,78 @@ BUILTINS.cd = (args, io, shell) => {
     err(shell, io, `cd: ${e.code === 'ENOENT' ? 'no such file or directory' : e.message}: ${args[0]}\n`);
     return 1;
   }
+};
+
+// `j words…` jumps to the most-used folder matching the words, learned from
+// where you actually go. `j -l words` lists the candidates.
+BUILTINS.j = (args, io, shell) => {
+  const { DirDB } = require('./jump');
+  let list = false;
+  const words = [];
+  for (const a of args) {
+    if (a === '-l' || a === '--list') list = true;
+    else words.push(a);
+  }
+  if (!words.length && !list) {
+    try { shell.setCwd(shell.getVar('HOME') || os.homedir()); return 0; } catch { return 1; }
+  }
+  if (words.length === 1 && words[0] === '-') return BUILTINS.back([], io, shell);
+
+  // A real path still works, like cd.
+  if (!list && words.length === 1) {
+    const direct = shell.resolve(words[0].replace(/^~(?=$|\/)/, shell.getVar('HOME') || os.homedir()));
+    try {
+      if (fs.statSync(direct).isDirectory()) { shell.setCwd(direct); return 0; }
+    } catch { /* not a path: search instead */ }
+  }
+
+  const db = new DirDB();
+  const hits = db.query(words, { cwd: shell.cwd });
+  db.save();
+  if (list) {
+    if (!hits.length) { err(shell, io, `j: nothing matches ${words.join(' ')}\n`); return 1; }
+    for (const h of hits.slice(0, 20)) out(shell, io, `${h.score.toFixed(1).padStart(7)}  ${h.path}\n`);
+    return 0;
+  }
+  if (!hits.length) {
+    err(shell, io, `j: no folder you've visited matches “${words.join(' ')}” (cd there once and j will remember it)\n`);
+    return 1;
+  }
+  try {
+    shell.setCwd(hits[0].path);
+  } catch (e) {
+    err(shell, io, `j: ${e.message}\n`);
+    return 1;
+  }
+  out(shell, io, `${hits[0].path}\n`);
+  return 0;
+};
+
+// Browser-style folder history: every directory change can be walked back.
+BUILTINS.back = (args, io, shell) => {
+  const steps = Math.max(1, Number(args[0]) || 1);
+  for (let i = 0; i < steps; i++) {
+    const dir = shell.dirBack.pop();
+    if (!dir) { if (i === 0) { err(shell, io, 'back: no earlier folder\n'); return 1; } break; }
+    const from = shell.cwd;
+    try { shell.setCwd(dir, { record: false }); } catch { continue; }
+    shell.dirForward.push(from);
+  }
+  out(shell, io, `${shell.cwd}\n`);
+  return 0;
+};
+
+BUILTINS.forward = (args, io, shell) => {
+  const steps = Math.max(1, Number(args[0]) || 1);
+  for (let i = 0; i < steps; i++) {
+    const dir = shell.dirForward.pop();
+    if (!dir) { if (i === 0) { err(shell, io, 'forward: no later folder\n'); return 1; } break; }
+    const from = shell.cwd;
+    try { shell.setCwd(dir, { record: false }); } catch { continue; }
+    shell.dirBack.push(from);
+  }
+  out(shell, io, `${shell.cwd}\n`);
+  return 0;
 };
 
 BUILTINS.pwd = (args, io, shell) => { out(shell, io, `${shell.cwd}\n`); return 0; };
