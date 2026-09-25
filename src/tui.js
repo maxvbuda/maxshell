@@ -12,14 +12,18 @@ function requireTty(name, io, shell) {
 
 // Runs `fn` on the alternate screen in raw mode, restoring the terminal even
 // if `fn` throws.
-function fullscreen(fn, { cursor = true } = {}) {
+// Asks the terminal to report clicks and the scroll wheel as SGR sequences.
+const MOUSE_ON = '\x1b[?1000h\x1b[?1006h';
+const MOUSE_OFF = '\x1b[?1000l\x1b[?1006l';
+
+function fullscreen(fn, { cursor = true, mouse = false } = {}) {
   const wasRaw = process.stdin.isRaw;
   try {
     process.stdin.setRawMode(true);
-    process.stdout.write(`\x1b[?1049h${cursor ? '\x1b[?25h' : '\x1b[?25l'}`);
+    process.stdout.write(`\x1b[?1049h${cursor ? '\x1b[?25h' : '\x1b[?25l'}${mouse ? MOUSE_ON : ''}`);
     return fn();
   } finally {
-    process.stdout.write('\x1b[?25h\x1b[?1049l');
+    process.stdout.write(`${mouse ? MOUSE_OFF : ''}\x1b[?25h\x1b[?1049l`);
     try { process.stdin.setRawMode(!!wasRaw); } catch { /* not a tty any more */ }
   }
 }
@@ -82,4 +86,4 @@ function meter(fraction, width) {
   return `[${color}${'|'.repeat(filled)}${ansi.reset()}${' '.repeat(inner - filled)}]`;
 }
 
-module.exports = { requireTty, fullscreen, fit, bar, humanBytes, meter, charWidth, textWidth };
+module.exports = { MOUSE_ON, MOUSE_OFF, requireTty, fullscreen, fit, bar, humanBytes, meter, charWidth, textWidth };

@@ -91,7 +91,30 @@ class KeyReader {
 
       const s = this.buf.toString('utf8');
 
-      let m = /^\x1b\[([0-9;]*)([A-Za-z~])/.exec(s);
+      // SGR mouse report: ESC [ < button ; column ; row (M press, m release).
+      let m = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(s);
+      if (m) {
+        this.consume(Buffer.byteLength(m[0]));
+        const code = Number(m[1]);
+        return {
+          name: 'mouse',
+          button: code & 0b11000011,
+          x: Number(m[2]),
+          y: Number(m[3]),
+          release: m[4] === 'm',
+          drag: !!(code & 32),
+          shift: !!(code & 4),
+          meta: !!(code & 8),
+          ctrl: !!(code & 16),
+        };
+      }
+      if (/^\x1b\[<[\d;]*$/.test(s)) {
+        // A mouse report split across reads: wait for the rest.
+        this.fill(Date.now() + 30);
+        return this.parse();
+      }
+
+      m = /^\x1b\[([0-9;]*)([A-Za-z~])/.exec(s);
       if (m) {
         this.consume(m[0].length);
         const params = m[1].split(';');

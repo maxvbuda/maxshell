@@ -9,7 +9,7 @@ const ansi = require('../src/ansi');
 const syntax = require('../src/syntax');
 const { EditorBuffer, PyEditor } = require('../src/pyedit');
 const { Pager, PagerScreen } = require('../src/view');
-const { FileBrowser, FilesScreen, previewOf, describe, isTextual, finderDate, finderLabel, middleTruncate, iconArt, ART_W } = require('../src/files');
+const { FileBrowser, FilesScreen, previewOf, describe, isTextual, finderDate, finderLabel, middleTruncate, iconArt, ART_W, CELL_H } = require('../src/files');
 const ops = require('../src/fileops');
 const { ProcessTable, parsePs, coreUsage } = require('../src/top');
 const { fit, humanBytes, meter } = require('../src/tui');
@@ -943,6 +943,169 @@ test('the selected icon keeps the grid in view when it scrolls', () => {
   const row = Math.floor(scr.browser.cursor / L.perRow);
   assert.ok(row >= scr.gridTop && row < scr.gridTop + L.rowsVisible, 'last item is on screen');
   assert.match(ansi.strip(out.data), /item59\.txt/);
+});
+
+
+// --- files: the mouse ------------------------------------------------------------
+
+// Screen position of icon `i` in the grid (1-based, like the terminal reports).
+function iconAt(scr, i) {
+  const L = scr.layout();
+  const left = (L.sideW ? L.sideW + 1 : 0) + 1;
+  const row = Math.floor(i / L.perRow) - scr.gridTop;
+  return { x: left + (i % L.perRow) * L.cellW + 3, y: 2 + row * CELL_H + 1 };
+}
+const click = (scr, x, y, button = 0) => scr.handleKey({ name: 'mouse', button, x, y, release: false });
+
+function mouseScreen(work) {
+  const scr = finderScreen(work);
+  scr.render();
+  scr.opened = [];
+  scr.openWithApp = (e) => scr.opened.push(['app', e.name]);
+  scr.openInside = (e, how) => scr.opened.push([how, e.name]);
+  return scr;
+}
+
+test('a click selects an icon without opening it', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const i = scr.browser.visible().findIndex((e) => e.name === 'notes.txt');
+  const { x, y } = iconAt(scr, i);
+  click(scr, x, y);
+  assert.strictEqual(scr.browser.current.name, 'notes.txt');
+  assert.deepStrictEqual(scr.opened, []);
+});
+
+test('double-clicking a folder opens it', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const { x, y } = iconAt(scr, scr.browser.visible().findIndex((e) => e.name === 'docs'));
+  click(scr, x, y);
+  click(scr, x, y);
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+});
+
+test('double-clicking a file opens it — code in the editor, other files in their app', () => {
+  const { work } = finderTree();
+  fs.writeFileSync(path.join(work, 'photo.png'), Buffer.from([0x89, 0x50, 0, 0]));
+  const scr = mouseScreen(work);
+  scr.browser.reload();
+  for (const name of ['big.py', 'photo.png']) {
+    scr.render();
+    const { x, y } = iconAt(scr, scr.browser.visible().findIndex((e) => e.name === name));
+    click(scr, x, y);
+    click(scr, x, y);
+  }
+  assert.deepStrictEqual(scr.opened, [['edit', 'big.py'], ['app', 'photo.png']]);
+});
+
+test('two slow clicks are two single clicks', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const { x, y } = iconAt(scr, scr.browser.visible().findIndex((e) => e.name === 'docs'));
+  click(scr, x, y);
+  scr.lastClick.t -= 2000;
+  click(scr, x, y);
+  assert.strictEqual(scr.browser.cwd, work, 'did not open');
+});
+
+test('clicks on different icons are not a double click', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const a = iconAt(scr, 0);
+  const b = iconAt(scr, 1);
+  click(scr, a.x, a.y);
+  click(scr, b.x, b.y);
+  assert.strictEqual(scr.browser.cwd, work);
+  assert.strictEqual(scr.browser.cursor, 1);
+});
+
+test('clicking empty space or a label row still hits the right icon', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const { x, y } = iconAt(scr, 2);
+  click(scr, x, y + 5);
+  assert.strictEqual(scr.browser.cursor, 2, 'the name under an icon belongs to it');
+  const before = scr.browser.cursor;
+  click(scr, x, scr.layout().bodyH);
+  assert.strictEqual(scr.browser.cursor, before, 'blank area changes nothing');
+});
+
+test('the scroll wheel moves through the grid', () => {
+  const { work } = finderTree();
+  for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(work, `w${i}.txt`), '');
+  const scr = mouseScreen(work);
+  scr.browser.reload();
+  const per = scr.layout().perRow;
+  click(scr, 30, 5, 65);
+  assert.strictEqual(scr.browser.cursor, per);
+  click(scr, 30, 5, 64);
+  assert.strictEqual(scr.browser.cursor, 0);
+});
+
+test('clicking the sidebar and the path bar navigates', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  const i = scr.sidebar.findIndex((it) => it.path);
+  click(scr, 5, 2 + i);
+  assert.strictEqual(scr.browser.cwd, scr.sidebar[i].path);
+
+  const docs = path.join(work, 'docs');
+  scr.browser.goTo(docs);
+  scr.render();
+  const seg = scr.pathSegs.find((p) => p.path === work);
+  assert.ok(seg, 'the path bar has a segment for the parent folder');
+  click(scr, seg.from, scr.layout().bodyH + 2);
+  assert.strictEqual(scr.browser.cwd, work);
+  assert.strictEqual(scr.browser.current.name, 'docs', 'lands on the folder you came from');
+});
+
+test('in column view clicks select, double clicks open, and the parent column navigates', () => {
+  const { work } = finderTree();
+  const out = { rows: 24, columns: 140, data: '', write(x) { this.data += x; } };
+  const scr = new FilesScreen(new FileBrowser(path.join(work, 'docs')), { shell: {}, io: {}, output: out });
+  scr.view = 'columns';
+  scr.render();
+  const L = scr.layout();
+  assert.ok(L.parentW > 0, 'wide enough for a parent column');
+  const parentX = L.sideW + 2 + 2;
+  const parentList = scr.parentEntries();
+  const photos = parentList.findIndex((e) => e.name === 'photos');
+  click(scr, parentX, 2 + photos - scr.parentTop);
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'photos'), 'a folder in the parent column opens');
+
+  scr.browser.goTo(work);
+  scr.render();
+  const currentX = L.sideW + 1 + L.parentW + 1 + 3;
+  const idx = scr.browser.visible().findIndex((e) => e.name === 'docs');
+  click(scr, currentX, 2 + idx - scr.browser.top);
+  assert.strictEqual(scr.browser.current.name, 'docs');
+  assert.strictEqual(scr.browser.cwd, work, 'one click only selects');
+  click(scr, currentX, 2 + idx - scr.browser.top);
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+});
+
+test('the mouse is ignored while a prompt or help is open', () => {
+  const { work } = finderTree();
+  const scr = mouseScreen(work);
+  press(scr, 'n');
+  const { x, y } = iconAt(scr, 1);
+  click(scr, x, y);
+  assert.ok(scr.prompt, 'the prompt is still open');
+  assert.strictEqual(scr.browser.cursor, 0);
+});
+
+test('mouse reports decode, and releases are ignored', () => {
+  const { KeyReader } = require('../src/keys');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mxmouse-')), 'm');
+  fs.writeFileSync(file, '\x1b[<0;12;7M\x1b[<0;12;7m\x1b[<65;1;1M\x1b[<32;4;4Mx');
+  const r = new KeyReader(fs.openSync(file, 'r'));
+  const keys = [r.next(), r.next(), r.next(), r.next(), r.next()];
+  assert.deepStrictEqual(keys.slice(0, 4).map((k) => [k.name, k.button, k.x, k.y, k.release, k.drag]), [
+    ['mouse', 0, 12, 7, false, false], ['mouse', 0, 12, 7, true, false],
+    ['mouse', 65, 1, 1, false, false], ['mouse', 0, 4, 4, false, true],
+  ]);
+  assert.strictEqual(keys[4].str, 'x', 'ordinary keys still follow');
 });
 
 if (failures) {

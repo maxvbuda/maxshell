@@ -9,10 +9,11 @@ const ansi = require('./ansi');
 const ops = require('./fileops');
 const { KeyReader } = require('./keys');
 const { detectLanguage, computeStates, renderSlice } = require('./syntax');
-const { fullscreen, requireTty, fit, humanBytes, textWidth } = require('./tui');
+const { fullscreen, requireTty, fit, humanBytes, textWidth, MOUSE_ON, MOUSE_OFF } = require('./tui');
 
 const PREVIEW_BYTES = 64 * 1024;
 const POLL_MS = 1000;
+const DOUBLE_CLICK_MS = 500;
 const ICONS = process.env.MAXSHELL_ICONS !== '0' && process.env.TERM !== 'linux';
 
 // --- kinds and icons, the way Finder names things ------------------------------
@@ -340,8 +341,8 @@ function previewOf(entry, maxLines) {
 
 // --- icon view: big icons with names underneath ---------------------------------
 
-const ART_W = 10;
-const ART_H = 4;
+const ART_W = 12;
+const ART_H = 5;
 const LABEL_LINES = 2;
 const CELL_H = ART_H + LABEL_LINES + 1;
 const MIN_CELL_W = 20;
@@ -354,44 +355,105 @@ const FOLDER_BADGES = {
 
 const bg = (n) => ansi.sgr(`48;5;${n}`);
 
-// Four rows of block-character art, each exactly ART_W columns wide. `base`
-// is re-applied after every reset so a selection highlight shows through.
-function iconArt(e, base = '') {
-  const R = ansi.reset() + base;
-  if (!ICONS) {
-    if (e.isDir) return [' ____     ', '|    \\___ ', '|        |', '|________|'].map((l) => base + l + ansi.reset());
-    return ['  ______  ', ' |      | ', ' |  ~~  | ', ' |______| '].map((l) => base + l + ansi.reset());
-  }
-  const wrap = (rows) => rows.map((r) => base + r + ansi.reset());
+// Icons are drawn as 12×10 pixel bitmaps. Each terminal row shows two pixel
+// rows using half blocks (fg = upper pixel, bg = lower), so a 12×5 cell area
+// gets enough detail for a tab, layered panels and rounded corners.
+// '.' is transparent; other letters map to 256-colour palette entries.
+const FOLDER = [
+  '.tttt.......',
+  'tttttttttttt',
+  'hhhhhhhhhhhh',
+  'ffffffffffff',
+  'ffffffffffff',
+  'ffffffffffff',
+  'ffffffffffff',
+  'ffffffffffff',
+  'bbbbbbbbbbbb',
+  '.ssssssssss.',
+];
+// Back panel and tab, a highlight along the front's top edge, the front,
+// then a darker band and a rounded shadow — lighter at the top, like macOS.
+const FOLDER_COLORS = { t: 68, h: 153, f: 117, b: 75, s: 68 };
 
+const PAGE = [
+  '.ppppppppd..',
+  '.ppppppppdd.',
+  '.pppppppppp.',
+  '.pplllllllp.',
+  '.pppppppppp.',
+  '.pplllllppp.',
+  '.pppppppppp.',
+  '.pppppppppp.',
+  '.pppppppppp.',
+  '.ssssssssss.',
+];
+
+const APP = [
+  '............',
+  '..aaaaaaaa..',
+  '.aaaaaaaaaa.',
+  '.aaaaaaaaaa.',
+  '.aaaaaaaaaa.',
+  '.aaaaaaaaaa.',
+  '.aaaaaaaaaa.',
+  '.aaaaaaaaaa.',
+  '..aaaaaaaa..',
+  '...ssssss...',
+];
+
+// Renders a bitmap to ART_H rows. `badge` is an emoji placed on the fourth
+// row (pixel rows 6–7), which the caller keeps a solid colour behind.
+function drawBitmap(bitmap, colors, { base = null, badge = null } = {}) {
+  const baseBg = base === null ? '' : bg(base);
+  const R = ansi.reset() + baseBg;
+  const rows = [];
+  for (let r = 0; r < ART_H; r++) {
+    let line = baseBg;
+    for (let x = 0; x < ART_W; x++) {
+      if (badge && r === 3 && (x === 5 || x === 6)) {
+        if (x === 5) line += `${bg(colors[bitmap[6][5]])}${badge}${R}`;
+        continue;
+      }
+      const top = bitmap[2 * r][x];
+      const bottom = bitmap[2 * r + 1][x];
+      const ct = top === '.' ? null : colors[top];
+      const cb = bottom === '.' ? null : colors[bottom];
+      if (ct === null && cb === null) line += ' ';
+      else if (ct === cb) line += `${bg(ct)} ${R}`;
+      else if (ct === null) line += `${ansi.fg(cb)}▄${R}`;
+      else if (cb === null) line += `${ansi.fg(ct)}▀${R}`;
+      else line += `${ansi.fg(ct)}${bg(cb)}▀${R}`;
+    }
+    rows.push(line + ansi.reset());
+  }
+  return rows;
+}
+
+// Tints for pages, by kind; most documents are plain white like Finder's.
+function pageColors(kind) {
+  const paper = /image/i.test(kind) ? 195 : /archive|package|Disk/i.test(kind) ? 223 : 255;
+  return { p: paper, d: 250, l: 250, s: 245 };
+}
+
+// Four-and-a-bit rows of block-character art, each exactly ART_W wide.
+// `base` is a background colour number re-applied after every reset so the
+// selection tile shows through transparent pixels.
+function iconArt(e, base = null) {
+  if (!ICONS || !ansi.isEnabled()) {
+    const plain = e.isDir
+      ? [' ____       ', '|    \\_____ ', '|          |', '|          |', '|__________|']
+      : ['  _______   ', ' |       \\  ', ' |  ~~~~  | ', ' |  ~~~   | ', ' |________| '];
+    const b = base === null ? '' : bg(base);
+    return plain.map((l) => b + l + ansi.reset());
+  }
   if (e.isDir && e.name.endsWith('.app')) {
-    return wrap([
-      `  ${ansi.fg(24)}▄▄▄▄▄▄${R}  `,
-      ` ${bg(24)}        ${R} `,
-      ` ${bg(24)}   🚀   ${R} `,
-      `  ${ansi.fg(24)}▀▀▀▀▀▀${R}  `,
-    ]);
+    return drawBitmap(APP, { a: 25, s: 238 }, { base, badge: '🚀' });
   }
   if (e.isDir) {
-    const badge = FOLDER_BADGES[e.name];
-    return wrap([
-      `${ansi.fg(74)} ▄▄▄▄${R}     `,
-      `${bg(117)}          ${R}`,
-      badge ? `${bg(75)}    ${badge}    ${R}` : `${bg(75)}          ${R}`,
-      `${ansi.fg(75)}▀▀▀▀▀▀▀▀▀▀${R}`,
-    ]);
+    return drawBitmap(FOLDER, FOLDER_COLORS, { base, badge: FOLDER_BADGES[e.name] || null });
   }
-
-  // A page with a folded corner and the kind's glyph in the middle.
   const { icon, kind } = describe(e);
-  const media = /image/i.test(kind) ? 110 : /movie|video/i.test(kind) ? 60
-    : /audio/i.test(kind) ? 139 : /archive|package|Disk/i.test(kind) ? 180 : 255;
-  return wrap([
-    ` ${ansi.fg(media)}▄▄▄▄▄▄▄${ansi.fg(248)}▖${R} `,
-    ` ${bg(media)}${ansi.fg(media === 255 ? 248 : 255)} ━━━━━━ ${R} `,
-    ` ${bg(media)}   ${icon}   ${R} `,
-    ` ${ansi.fg(media)}▀▀▀▀▀▀▀▀${R} `,
-  ]);
+  return drawBitmap(PAGE, pageColors(kind), { base, badge: icon });
 }
 
 // Splits text to fit `width` columns, keeping the end (usually the
@@ -497,6 +559,11 @@ const HELP_LINES = `
    /                 filter this folder         f        search subfolders
    b                 show or hide the sidebar   ?        this help
 
+ Mouse
+   click             select            double-click    open, like Finder
+   wheel             scroll            sidebar / path bar     click to go there
+   (start with  files --no-mouse  to leave the mouse to the terminal)
+
  Leaving
    q                 quit, leaving the shell in this folder
    Q  ^C             quit without moving
@@ -526,6 +593,10 @@ class FilesScreen {
     this.done = false;
     this.cdOnExit = false;
     this.parentCache = new Map();
+    this.mouse = false;
+    this.lastClick = null;
+    this.pathSegs = [];
+    this.parentTop = 0;
   }
 
   get rows() { return this.output.rows || 24; }
@@ -577,7 +648,7 @@ class FilesScreen {
         const marked = b.marked.has(e.path);
         const pad = Math.floor((cellW - ART_W) / 2);
 
-        const art = iconArt(e, selected ? bg(238) : '');
+        const art = iconArt(e, selected ? 238 : null);
         for (let k = 0; k < ART_H; k++) {
           const edge = selected ? `${bg(238)} ${ansi.reset()}` : ' ';
           rowLines[k] += `${' '.repeat(pad - 1)}${edge}${art[k]}${edge}${' '.repeat(cellW - pad - ART_W - 1)}`;
@@ -730,13 +801,29 @@ class FilesScreen {
   pathBar() {
     const home = os.homedir();
     const cwd = this.search ? path.dirname(this.searchCurrent() || this.browser.cwd) : this.browser.cwd;
-    let parts;
+    const segs = [];
+    let rest;
     if (cwd === home || cwd.startsWith(`${home}/`)) {
-      parts = [`${ICONS ? '🏠 ' : ''}${path.basename(home)}`, ...cwd.slice(home.length).split('/').filter(Boolean)];
+      segs.push({ label: `${ICONS ? '🏠 ' : ''}${path.basename(home)}`, path: home });
+      rest = cwd.slice(home.length);
     } else {
-      parts = [`${ICONS ? '💿 ' : ''}Macintosh HD`, ...cwd.split('/').filter(Boolean)];
+      segs.push({ label: `${ICONS ? '💿 ' : ''}Macintosh HD`, path: '/' });
+      rest = cwd;
     }
-    return `${ansi.fg('gray')}${fit(` ${parts.join(' › ')}`, this.cols)}${ansi.reset()}`;
+    let acc = segs[0].path;
+    for (const part of rest.split('/').filter(Boolean)) {
+      acc = path.join(acc, part);
+      segs.push({ label: part, path: acc });
+    }
+    // Screen columns (1-based) of each segment, for clicks.
+    let x = 2;
+    this.pathSegs = segs.map((seg, i) => {
+      const w = textWidth(seg.label);
+      const hit = { from: x, to: x + w - 1, path: seg.path };
+      x += w + (i < segs.length - 1 ? 3 : 0);
+      return hit;
+    });
+    return `${ansi.fg('gray')}${fit(` ${segs.map((seg) => seg.label).join(' › ')}`, this.cols)}${ansi.reset()}`;
   }
 
   statusBar() {
@@ -841,6 +928,7 @@ class FilesScreen {
       const here = list.findIndex((e) => e.path === b.cwd);
       let top = 0;
       if (here >= L.bodyH) top = here - Math.floor(L.bodyH / 2);
+      this.parentTop = top;
       parent = this.column(list, here, top, L.parentW, L.bodyH, { active: false });
     }
     const side = L.sideW ? this.sidebarColumn(L.sideW, L.bodyH) : null;
@@ -1053,6 +1141,7 @@ class FilesScreen {
   }
 
   openInside(entry, how) {
+    if (this.mouse) this.output.write(MOUSE_OFF);
     if (how === 'view') {
       const { Pager, PagerScreen } = require('./view');
       let text;
@@ -1064,7 +1153,7 @@ class FilesScreen {
       if (res.error) this.message = `cannot open ${entry.name}: ${res.error}`;
     }
     this.browser.reload(entry.name);
-    this.output.write('\x1b[2J');
+    this.output.write(`\x1b[2J${this.mouse ? MOUSE_ON : ''}`);
   }
 
   openEntry(e) {
@@ -1072,6 +1161,127 @@ class FilesScreen {
     if (e.isDir) { this.browser.goTo(e.path); return; }
     if (isTextual(e)) this.openInside(e, 'edit');
     else this.openWithApp(e);
+  }
+
+  // --- the mouse ----------------------------------------------------------------
+
+  // What is under screen position (x, y), both 1-based.
+  hitTest(x, y) {
+    const L = this.layout();
+    const bodyTop = 2;
+    const bodyBottom = L.bodyH + 1;
+
+    if (y === L.bodyH + 2) {
+      const seg = this.pathSegs.find((p) => x >= p.from && x <= p.to);
+      return seg ? { area: 'path', path: seg.path } : null;
+    }
+    if (y < bodyTop || y > bodyBottom) return null;
+    const row = y - bodyTop;
+
+    let left = 1;
+    if (L.sideW) {
+      if (x < left + L.sideW) {
+        const item = this.sidebar[row];
+        return item && item.path ? { area: 'sidebar', index: row } : null;
+      }
+      left += L.sideW + 1;
+    }
+
+    if (this.search) {
+      if (x < left || x >= left + L.currentW) return null;
+      const index = this.search.top + row;
+      return index < this.search.results.length ? { area: 'result', index } : null;
+    }
+
+    if (this.view === 'icons') {
+      if (x < left || x >= left + L.currentW) return null;
+      const col = Math.floor((x - left) / L.cellW);
+      if (col >= L.perRow) return null;
+      const index = (this.gridTop + Math.floor(row / CELL_H)) * L.perRow + col;
+      return index < this.browser.visible().length ? { area: 'item', index } : null;
+    }
+
+    if (L.parentW) {
+      if (x < left + L.parentW) {
+        const list = this.parentEntries() || [];
+        const index = this.parentTop + row;
+        return index < list.length ? { area: 'parent', entry: list[index] } : null;
+      }
+      left += L.parentW + 1;
+    }
+    if (x < left || x >= left + L.currentW) return null;
+    const index = this.browser.top + row;
+    return index < this.browser.visible().length ? { area: 'item', index } : null;
+  }
+
+  // A second click on the same thing within DOUBLE_CLICK_MS is a double click.
+  isDoubleClick(id) {
+    const now = Date.now();
+    const double = !!this.lastClick && this.lastClick.id === id && now - this.lastClick.t < DOUBLE_CLICK_MS;
+    this.lastClick = double ? null : { id, t: now };
+    return double;
+  }
+
+  handleMouse(ev) {
+    if (ev.release || ev.drag) return;
+    if (this.info) { this.info = null; return; }
+    if (this.mode === 'help' || this.prompt || this.filtering) return;
+    const b = this.browser;
+    this.message = '';
+
+    if (ev.button === 64 || ev.button === 65) {
+      const dir = ev.button === 64 ? -1 : 1;
+      if (this.search) {
+        const s = this.search;
+        s.cursor = Math.max(0, Math.min(s.results.length - 1, s.cursor + dir));
+      } else if (this.view === 'icons') {
+        const per = this.layout().perRow;
+        const count = b.visible().length;
+        const to = b.cursor + dir * per;
+        if (to >= 0 && to < count) b.cursor = to;
+      } else {
+        b.move(dir * 3);
+      }
+      return;
+    }
+    if (ev.button !== 0) return;
+
+    const hit = this.hitTest(ev.x, ev.y);
+    if (!hit) return;
+
+    switch (hit.area) {
+      case 'sidebar': {
+        this.sideIndex = hit.index;
+        this.focus = 'files';
+        b.goTo(this.sidebar[hit.index].path);
+        return;
+      }
+      case 'path': {
+        if (hit.path === b.cwd) return;
+        const child = path.relative(hit.path, b.cwd).split(path.sep)[0];
+        b.goTo(hit.path, child || null);
+        return;
+      }
+      case 'parent': {
+        const e = hit.entry;
+        if (e.isDir) b.goTo(e.path);
+        else b.goTo(path.dirname(e.path), e.name);
+        return;
+      }
+      case 'result': {
+        this.search.cursor = hit.index;
+        if (this.isDoubleClick(`result:${this.search.results[hit.index]}`)) this.handleSearchKey({ name: 'return' });
+        return;
+      }
+      case 'item': {
+        this.focus = 'files';
+        b.cursor = hit.index;
+        const e = b.current;
+        if (e && this.isDoubleClick(`item:${e.path}`)) this.openEntry(e);
+        return;
+      }
+      default:
+    }
   }
 
   // --- keys --------------------------------------------------------------------
@@ -1129,6 +1339,7 @@ class FilesScreen {
   handleKey(key) {
     const b = this.browser;
     if (key.name === 'eof') { this.done = true; return; }
+    if (key.name === 'mouse') { this.handleMouse(key); return; }
     if (this.info) { this.info = null; return; }
     if (this.mode === 'help') {
       if (key.name === 'down') this.helpTop++;
@@ -1272,7 +1483,8 @@ function runFiles(args, io, shell) {
 
   const browser = new FileBrowser(fs.realpathSync(dir), { showHidden: args.includes('-a') });
   const screen = new FilesScreen(browser, { shell, io });
-  fullscreen(() => screen.loop(), { cursor: false });
+  screen.mouse = !args.includes('--no-mouse');
+  fullscreen(() => screen.loop(), { cursor: false, mouse: screen.mouse });
 
   if (screen.cdOnExit && browser.cwd !== shell.cwd) {
     try { shell.setCwd(browser.cwd); } catch { /* directory vanished */ }

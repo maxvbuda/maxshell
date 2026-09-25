@@ -420,13 +420,21 @@ files            # browse from here
 files ~/code     # or from somewhere else
 ```
 
-It opens in **icon view**, like Finder: a grid of large icons drawn in colour —
-light-blue folders (with Finder's glyphs on Downloads, Movies, Public and the
-rest) and pages marked with their kind — each with its name centred
-underneath. Long names wrap onto two lines at a space and are shortened in the
+It opens in **icon view**, like Finder: a grid of large icons, each with its
+name centred underneath. The icons are small pixel drawings made from
+half-block characters, so each terminal row holds two rows of pixels — enough
+for a macOS-style folder with its tab, back panel, highlighted front and
+rounded corners, carrying Finder's glyph on Downloads, Movies, Public and the
+other special folders. Files are pages with a folded corner and their kind's
+glyph. Long names wrap onto two lines at a space and are shortened in the
 middle so the extension stays visible (`Screenshot` / `2025-05-0…5.43.png`),
 and the selected item's full name appears in a tooltip. Arrows move around the
 grid, `Enter` opens, `Backspace` goes to the enclosing folder.
+
+**The mouse works as in Finder:** click to select, **double-click to open** a
+folder or file, scroll with the wheel, and click the sidebar or any folder in
+the path bar to go there. (`files --no-mouse` leaves the mouse to your
+terminal, e.g. for selecting text.)
 
 Press **`V`** for **column view** (or start there with
 `MAXSHELL_FILES_VIEW=columns`), laid out like Finder's: a **Favorites sidebar** (Home, Desktop,
