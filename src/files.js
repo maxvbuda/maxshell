@@ -338,6 +338,103 @@ function previewOf(entry, maxLines) {
   return { lines, lang: detectLanguage(entry.name, lines[0] || '') };
 }
 
+// --- icon view: big icons with names underneath ---------------------------------
+
+const ART_W = 10;
+const ART_H = 4;
+const LABEL_LINES = 2;
+const CELL_H = ART_H + LABEL_LINES + 1;
+const MIN_CELL_W = 20;
+
+// Glyphs Finder draws on special folders.
+const FOLDER_BADGES = {
+  Desktop: '💻', Documents: '📚', Downloads: '📥', Movies: '🎬', Music: '🎵',
+  Pictures: '🎨', Public: '👥', Applications: '🧰', Library: '📖', Sites: '🌐',
+};
+
+const bg = (n) => ansi.sgr(`48;5;${n}`);
+
+// Four rows of block-character art, each exactly ART_W columns wide. `base`
+// is re-applied after every reset so a selection highlight shows through.
+function iconArt(e, base = '') {
+  const R = ansi.reset() + base;
+  if (!ICONS) {
+    if (e.isDir) return [' ____     ', '|    \\___ ', '|        |', '|________|'].map((l) => base + l + ansi.reset());
+    return ['  ______  ', ' |      | ', ' |  ~~  | ', ' |______| '].map((l) => base + l + ansi.reset());
+  }
+  const wrap = (rows) => rows.map((r) => base + r + ansi.reset());
+
+  if (e.isDir && e.name.endsWith('.app')) {
+    return wrap([
+      `  ${ansi.fg(24)}▄▄▄▄▄▄${R}  `,
+      ` ${bg(24)}        ${R} `,
+      ` ${bg(24)}   🚀   ${R} `,
+      `  ${ansi.fg(24)}▀▀▀▀▀▀${R}  `,
+    ]);
+  }
+  if (e.isDir) {
+    const badge = FOLDER_BADGES[e.name];
+    return wrap([
+      `${ansi.fg(74)} ▄▄▄▄${R}     `,
+      `${bg(117)}          ${R}`,
+      badge ? `${bg(75)}    ${badge}    ${R}` : `${bg(75)}          ${R}`,
+      `${ansi.fg(75)}▀▀▀▀▀▀▀▀▀▀${R}`,
+    ]);
+  }
+
+  // A page with a folded corner and the kind's glyph in the middle.
+  const { icon, kind } = describe(e);
+  const media = /image/i.test(kind) ? 110 : /movie|video/i.test(kind) ? 60
+    : /audio/i.test(kind) ? 139 : /archive|package|Disk/i.test(kind) ? 180 : 255;
+  return wrap([
+    ` ${ansi.fg(media)}▄▄▄▄▄▄▄${ansi.fg(248)}▖${R} `,
+    ` ${bg(media)}${ansi.fg(media === 255 ? 248 : 255)} ━━━━━━ ${R} `,
+    ` ${bg(media)}   ${icon}   ${R} `,
+    ` ${ansi.fg(media)}▀▀▀▀▀▀▀▀${R} `,
+  ]);
+}
+
+// Splits text to fit `width` columns, keeping the end (usually the
+// extension) and cutting the middle: "2025-05-05 at 12.35.43.png" becomes
+// "2025-0…5.43.png".
+function middleTruncate(text, width) {
+  if (textWidth(text) <= width) return text;
+  const chars = [...text];
+  const keepEnd = Math.floor((width - 1) / 2);
+  const keepStart = width - 1 - keepEnd;
+  return `${chars.slice(0, keepStart).join('')}…${chars.slice(chars.length - keepEnd).join('')}`;
+}
+
+// Finder's two-line icon label: break at the last space that fits (or a
+// dash or underscore if there is no space), otherwise break hard, then
+// shorten the second line in the middle so its end — the extension — shows.
+function finderLabel(name, width) {
+  if (textWidth(name) <= width) return { lines: [name], truncated: false };
+  const chars = [...name];
+  let spaceCut = -1;
+  let otherCut = -1;
+  let fits = 0;
+  let w = 0;
+  for (let i = 0; i < chars.length; i++) {
+    w += textWidth(chars[i]);
+    if (w > width) break;
+    fits = i + 1;
+    if (chars[i] === ' ') spaceCut = i + 1;
+    else if (chars[i] === '-' || chars[i] === '_') otherCut = i + 1;
+  }
+  const cut = spaceCut > 0 ? spaceCut : otherCut > 0 ? otherCut : fits;
+  const first = chars.slice(0, cut).join('').trimEnd();
+  const rest = chars.slice(cut).join('').trimStart();
+  const second = middleTruncate(rest, width);
+  return { lines: [first, second], truncated: second !== rest };
+}
+
+function center(text, width) {
+  const w = textWidth(text);
+  const left = Math.max(0, Math.floor((width - w) / 2));
+  return { left, right: Math.max(0, width - w - left) };
+}
+
 // --- the sidebar ----------------------------------------------------------------
 
 function sidebarItems() {
@@ -370,9 +467,14 @@ function sidebarItems() {
 const HELP_LINES = `
  files — a Finder-style browser for the terminal
 
+ Views
+   V                 switch between icon view (the default) and column view
+
  Getting around
-   ↑ ↓               select                 → or Enter    open folder
-   ←  Backspace      enclosing folder       [  ]          back / forward
+   arrows            select (in icon view they move around the grid; in
+                     column view → opens a folder and ← goes up)
+   Enter             open                   Backspace     enclosing folder
+   [  ]              back / forward
    Tab               focus the sidebar      1–9           jump to a favorite
    g  G              first / last item      ~             home folder
 
@@ -407,6 +509,8 @@ class FilesScreen {
     this.io = io;
     this.output = output;
     this.mode = 'browse';
+    this.view = process.env.MAXSHELL_FILES_VIEW === 'columns' ? 'columns' : 'icons';
+    this.gridTop = 0;
     this.focus = 'files';
     this.showSidebar = true;
     this.sidebar = sidebarItems();
@@ -437,7 +541,87 @@ class FilesScreen {
     const previewW = rest >= 60 ? Math.floor(rest * 0.36) : 0;
     const parentW = rest >= 100 ? Math.floor(rest * 0.22) : 0;
     const currentW = rest - previewW - parentW - (previewW ? 1 : 0) - (parentW ? 1 : 0);
-    return { sideW, parentW, currentW, previewW, bodyH: Math.max(3, this.rows - 3) };
+    const bodyH = Math.max(3, this.rows - 3);
+    if (this.view === 'icons') {
+      const perRow = Math.max(1, Math.floor(rest / MIN_CELL_W));
+      const cellW = Math.floor(rest / perRow);
+      return {
+        sideW, parentW: 0, currentW: rest, previewW: 0, bodyH,
+        perRow, cellW, rowsVisible: Math.max(1, Math.floor(bodyH / CELL_H)),
+      };
+    }
+    return { sideW, parentW, currentW, previewW, bodyH };
+  }
+
+  // The grid, CELL_H lines per row of icons, exactly `L.currentW` wide.
+  iconGrid(L) {
+    const b = this.browser;
+    const list = b.visible();
+    const { perRow, cellW, rowsVisible } = L;
+    const cursorRow = Math.floor(b.cursor / perRow);
+    if (cursorRow < this.gridTop) this.gridTop = cursorRow;
+    if (cursorRow >= this.gridTop + rowsVisible) this.gridTop = cursorRow - rowsVisible + 1;
+    const totalRows = Math.ceil(list.length / perRow);
+    this.gridTop = Math.max(0, Math.min(this.gridTop, Math.max(0, totalRows - rowsVisible)));
+
+    const lines = [];
+    const spare = ' '.repeat(L.currentW - perRow * cellW);
+    this.tooltip = null;
+    for (let r = 0; r < rowsVisible; r++) {
+      const rowLines = Array.from({ length: CELL_H }, () => '');
+      for (let c = 0; c < perRow; c++) {
+        const i = (this.gridTop + r) * perRow + c;
+        const e = list[i];
+        if (!e) { for (let k = 0; k < CELL_H; k++) rowLines[k] += ' '.repeat(cellW); continue; }
+        const selected = i === b.cursor && this.focus === 'files';
+        const marked = b.marked.has(e.path);
+        const pad = Math.floor((cellW - ART_W) / 2);
+
+        const art = iconArt(e, selected ? bg(238) : '');
+        for (let k = 0; k < ART_H; k++) {
+          const edge = selected ? `${bg(238)} ${ansi.reset()}` : ' ';
+          rowLines[k] += `${' '.repeat(pad - 1)}${edge}${art[k]}${edge}${' '.repeat(cellW - pad - ART_W - 1)}`;
+        }
+
+        const label = finderLabel(e.name, cellW - 2);
+        for (let k = 0; k < LABEL_LINES; k++) {
+          const text = label.lines[k] || '';
+          const { left, right } = center(text, cellW);
+          let painted = text;
+          if (text && (selected || marked)) painted = `${bg(selected ? 25 : 24)}${ansi.fg(255)}${text}${ansi.reset()}`;
+          else if (text && e.hidden) painted = `${ansi.fg('gray')}${text}${ansi.reset()}`;
+          rowLines[ART_H + k] += `${' '.repeat(left)}${painted}${' '.repeat(right)}`;
+        }
+        rowLines[CELL_H - 1] += ' '.repeat(cellW);
+
+        if (selected && label.truncated) {
+          this.tooltip = { text: e.name, row: r, col: c * cellW + pad - 1 };
+        }
+      }
+      for (const l of rowLines) lines.push(l + spare);
+    }
+    while (lines.length < L.bodyH) {
+      lines.push(!list.length && lines.length === 1
+        ? `${ansi.fg('gray')}${fit(b.filter ? '  no matches' : '  folder is empty', L.currentW)}${ansi.reset()}`
+        : ' '.repeat(L.currentW));
+    }
+    return lines.slice(0, L.bodyH);
+  }
+
+  // Finder shows a truncated name in full in a tooltip; draw it over the
+  // blank line above the icon (or below the label on the first row).
+  renderTooltip(L) {
+    const t = this.tooltip;
+    if (!t) return;
+    const text = ` ${t.text} `;
+    const maxW = L.currentW - 2;
+    const shown = textWidth(text) > maxW ? fit(text, maxW) : text;
+    const originX = (L.sideW ? L.sideW + 1 : 0) + 1;
+    let x = originX + t.col;
+    x = Math.min(x, originX + L.currentW - textWidth(shown));
+    const top = 2 + t.row * CELL_H;
+    const y = t.row === 0 ? top + CELL_H - 1 : top - 1;
+    this.output.write(`\x1b[${y};${Math.max(originX, x)}H${bg(236)}${ansi.fg(252)}${shown}${ansi.reset()}`);
   }
 
   parentEntries() {
@@ -639,6 +823,8 @@ class FilesScreen {
     if (this.search) {
       current = this.searchColumn(L.currentW, L.bodyH);
       preview = L.previewW ? this.previewColumn(this.searchEntry(), L.previewW, L.bodyH) : null;
+    } else if (this.view === 'icons') {
+      current = this.iconGrid(L);
     } else {
       b.scroll(L.bodyH);
       current = this.column(b.visible(), b.cursor, b.top, L.currentW, L.bodyH, {
@@ -670,6 +856,7 @@ class FilesScreen {
     }
     s += `\r\n${this.pathBar()}\r\n${this.statusBar()}`;
     this.output.write(s);
+    if (this.view === 'icons' && !this.search && !this.info) this.renderTooltip(L);
     if (this.info) this.renderInfo();
   }
 
@@ -966,7 +1153,28 @@ class FilesScreen {
     if (this.search) { this.handleSearchKey(key); return; }
     if (this.focus === 'sidebar') { this.handleSidebarKey(key); return; }
 
-    const height = this.layout().bodyH;
+    const L = this.layout();
+    const height = L.bodyH;
+    if (this.view === 'icons') {
+      const per = L.perRow;
+      const count = b.visible().length;
+      const moveGrid = (n) => {
+        const to = b.cursor + n;
+        if (to < 0 || !count) return;
+        b.cursor = Math.min(count - 1, to);
+      };
+      switch (key.name) {
+        case 'left': case 'h': moveGrid(-1); return;
+        case 'right': case 'l': moveGrid(1); return;
+        case 'up': case 'k': moveGrid(-per); return;
+        case 'down': case 'j':
+          if (Math.floor(b.cursor / per) < Math.floor((count - 1) / per)) moveGrid(per);
+          return;
+        case 'pageup': moveGrid(-per * L.rowsVisible); return;
+        case 'pagedown': moveGrid(per * L.rowsVisible); return;
+        default:
+      }
+    }
     if (key.printable && /^[1-9]$/.test(key.str)) {
       const favs = this.sidebar.filter((s) => s.path);
       const s = favs[Number(key.str) - 1];
@@ -995,6 +1203,11 @@ class FilesScreen {
       case ']': if (!b.forward()) this.message = 'no later folder'; break;
       case 'tab': if (this.layout().sideW) this.focus = 'sidebar'; break;
       case 'b': this.showSidebar = !this.showSidebar; break;
+      case 'V':
+        this.view = this.view === 'icons' ? 'columns' : 'icons';
+        this.message = this.view === 'icons' ? 'icon view' : 'column view';
+        this.output.write('\x1b[2J');
+        break;
       case '~': b.goTo(os.homedir()); break;
       case 'o': if (b.current) this.openWithApp(b.current); break;
       case 'e': if (b.current && !b.current.isDir) this.openInside(b.current, 'edit'); break;
@@ -1070,4 +1283,5 @@ function runFiles(args, io, shell) {
 module.exports = {
   FileBrowser, FilesScreen, previewOf, runFiles,
   describe, isTextual, finderDate, sortEntries, readEntries, sidebarItems,
+  finderLabel, middleTruncate, iconArt, ART_W, CELL_H,
 };

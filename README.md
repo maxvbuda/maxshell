@@ -420,7 +420,16 @@ files            # browse from here
 files ~/code     # or from somewhere else
 ```
 
-Laid out like Finder's column view: a **Favorites sidebar** (Home, Desktop,
+It opens in **icon view**, like Finder: a grid of large icons drawn in colour —
+light-blue folders (with Finder's glyphs on Downloads, Movies, Public and the
+rest) and pages marked with their kind — each with its name centred
+underneath. Long names wrap onto two lines at a space and are shortened in the
+middle so the extension stays visible (`Screenshot` / `2025-05-0…5.43.png`),
+and the selected item's full name appears in a tooltip. Arrows move around the
+grid, `Enter` opens, `Backspace` goes to the enclosing folder.
+
+Press **`V`** for **column view** (or start there with
+`MAXSHELL_FILES_VIEW=columns`), laid out like Finder's: a **Favorites sidebar** (Home, Desktop,
 Documents, Downloads, Applications, iCloud Drive, your disks), the enclosing
 folder, the current folder, and a **preview** of the selected item — its kind,
 size and date, then the highlighted start of a file or a folder's contents. A
@@ -430,7 +439,8 @@ archive…); set `MAXSHELL_ICONS=0` for plain text.
 
 | Key | Action | Key | Action |
 |---|---|---|---|
-| `→` `Enter` | open folder | `←` `Backspace` | enclosing folder |
+| `V` | icon view ⇄ column view | arrows | move (around the grid in icon view) |
+| `Enter` | open | `Backspace` | enclosing folder |
 | `[` `]` | back / forward | `Tab`, `1`–`9` | sidebar, jump to a favorite |
 | `Enter` on a file | text and code open in `edit`; anything else in its Mac app | `Space` | **Quick Look** (text in a pager, the rest in macOS Quick Look) |
 | `o` | open with the default app | `e` / `v` | edit / view |

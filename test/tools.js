@@ -9,7 +9,7 @@ const ansi = require('../src/ansi');
 const syntax = require('../src/syntax');
 const { EditorBuffer, PyEditor } = require('../src/pyedit');
 const { Pager, PagerScreen } = require('../src/view');
-const { FileBrowser, FilesScreen, previewOf, describe, isTextual, finderDate } = require('../src/files');
+const { FileBrowser, FilesScreen, previewOf, describe, isTextual, finderDate, finderLabel, middleTruncate, iconArt, ART_W } = require('../src/files');
 const ops = require('../src/fileops');
 const { ProcessTable, parsePs, coreUsage } = require('../src/top');
 const { fit, humanBytes, meter } = require('../src/tui');
@@ -623,7 +623,7 @@ test('back and forward remember where you have been', () => {
   const { work } = finderTree();
   const scr = finderScreen(work);
   select(scr, 'docs');
-  press(scr, 'right');
+  press(scr, 'return');
   assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
   press(scr, '[');
   assert.strictEqual(scr.browser.cwd, work);
@@ -694,16 +694,16 @@ test('c then p copies into another folder; x then p moves', () => {
   select(scr, 'notes.txt');
   press(scr, 'c');
   select(scr, 'docs');
-  press(scr, 'right');
+  press(scr, 'return');
   press(scr, 'p');
   assert.ok(fs.existsSync(path.join(work, 'docs', 'notes.txt')));
   assert.ok(fs.existsSync(path.join(work, 'notes.txt')), 'copy leaves the original');
 
-  press(scr, 'left');
+  press(scr, 'backspace');
   select(scr, 'big.py');
   press(scr, 'x');
   select(scr, 'photos');
-  press(scr, 'right');
+  press(scr, 'return');
   press(scr, 'p');
   assert.ok(fs.existsSync(path.join(work, 'photos', 'big.py')));
   assert.ok(!fs.existsSync(path.join(work, 'big.py')), 'cut moves it');
@@ -834,6 +834,115 @@ test('fileops never deletes: undoing a copy sends it to the Trash', () => {
   ops.undo(rec);
   assert.ok(!fs.existsSync(path.join(work, 'docs', 'notes.txt')));
   assert.ok(fs.readdirSync(path.join(dir, 'Trash')).includes('notes.txt'));
+});
+
+
+// --- files: icon view -------------------------------------------------------------
+
+test('icon labels wrap like Finder', () => {
+  assert.deepStrictEqual(finderLabel('Downloads', 18), { lines: ['Downloads'], truncated: false });
+  assert.deepStrictEqual(finderLabel('My Presentation_files', 18).lines, ['My', 'Presentation_files']);
+  assert.deepStrictEqual(finderLabel('The Cluckington Family_files', 18).lines, ['The Cluckington', 'Family_files']);
+  const shot = finderLabel('Screenshot 2025-05-05 at 12.35.43.png', 18);
+  assert.strictEqual(shot.lines[0], 'Screenshot');
+  assert.ok(shot.lines[1].endsWith('.png') && shot.lines[1].includes('…'), shot.lines[1]);
+  assert.strictEqual(shot.truncated, true);
+  assert.deepStrictEqual(finderLabel('snake_case_names_only_here', 12).lines[0], 'snake_case_', 'falls back to _ when there is no space');
+  assert.strictEqual(middleTruncate('abcdefghij', 5), 'ab…ij');
+});
+
+test('icon art is always exactly ART_W wide, with and without colour', () => {
+  const { textWidth } = require('../src/tui');
+  const kinds = [
+    { name: 'Downloads', isDir: true }, { name: 'plain', isDir: true }, { name: 'Safari.app', isDir: true },
+    { name: 'a.py' }, { name: 'p.png' }, { name: 'm.mov' }, { name: 's.mp3' }, { name: 'z.zip' }, { name: 'x' },
+  ];
+  for (const on of [true, false]) {
+    ansi.setEnabled(on);
+    for (const e of kinds) {
+      for (const row of iconArt(e)) assert.strictEqual(textWidth(ansi.strip(row)), ART_W, `${e.name} (colour ${on})`);
+    }
+  }
+  ansi.setEnabled(false);
+});
+
+test('icon view is the default and arrows move around the grid', () => {
+  const { work } = finderTree();
+  for (let i = 0; i < 6; i++) fs.writeFileSync(path.join(work, `f${i}.txt`), 'x');
+  const scr = finderScreen(work);
+  assert.strictEqual(scr.view, 'icons');
+  const per = scr.layout().perRow;
+  assert.ok(per >= 3, `expected several per row, got ${per}`);
+  press(scr, 'right');
+  assert.strictEqual(scr.browser.cursor, 1, 'right moves to the next icon, not into the folder');
+  assert.strictEqual(scr.browser.cwd, work);
+  press(scr, 'down');
+  assert.strictEqual(scr.browser.cursor, 1 + per);
+  press(scr, 'up');
+  press(scr, 'left');
+  assert.strictEqual(scr.browser.cursor, 0);
+  press(scr, 'left');
+  assert.strictEqual(scr.browser.cursor, 0, 'stops at the first icon');
+  scr.browser.moveTo(99);
+  press(scr, 'down');
+  assert.strictEqual(scr.browser.cursor, scr.browser.visible().length - 1, 'down on the last row stays put');
+});
+
+test('Enter opens a folder and Backspace goes back up in icon view', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  select(scr, 'docs');
+  press(scr, 'return');
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'));
+  press(scr, 'backspace');
+  assert.strictEqual(scr.browser.cwd, work);
+  assert.strictEqual(scr.browser.current.name, 'docs');
+});
+
+test('V switches between icon and column view', () => {
+  const { work } = finderTree();
+  const scr = finderScreen(work);
+  press(scr, 'V');
+  assert.strictEqual(scr.view, 'columns');
+  select(scr, 'docs');
+  press(scr, 'right');
+  assert.strictEqual(scr.browser.cwd, path.join(work, 'docs'), 'in columns, right opens the folder');
+  press(scr, 'V');
+  assert.strictEqual(scr.view, 'icons');
+});
+
+test('the icon grid fills the terminal exactly and shows a tooltip for long names', () => {
+  ansi.setEnabled(true);
+  const { textWidth } = require('../src/tui');
+  const { work } = finderTree();
+  fs.writeFileSync(path.join(work, 'Screenshot 2025-05-05 at 12.35.43 with a much longer name.png'), '');
+  for (const [cols, rows] of [[64, 20], [100, 30], [150, 40]]) {
+    const out = { rows, columns: cols, data: '', write(x) { this.data += x; } };
+    const scr = new FilesScreen(new FileBrowser(work), { shell: {}, io: {}, output: out });
+    scr.browser.moveTo(scr.browser.visible().findIndex((e) => e.name.startsWith('Screenshot')));
+    scr.render();
+    const frame = out.data.split(/\x1b\[\d+;\d+H/)[0];
+    const lines = frame.replace(/^\x1b\[H/, '').split('\r\n').map((l) => ansi.strip(l.replace(/\x1b\[K/g, '')));
+    assert.strictEqual(lines.length, rows);
+    lines.forEach((l, i) => assert.strictEqual(textWidth(l), cols, `${cols}x${rows} line ${i}`));
+    assert.ok(scr.tooltip && scr.tooltip.text.startsWith('Screenshot'), 'the full name is shown as a tooltip');
+    assert.match(ansi.strip(out.data), /Screenshot 2025-05-05 at 12\.35\.43 with a/);
+  }
+  ansi.setEnabled(false);
+});
+
+test('the selected icon keeps the grid in view when it scrolls', () => {
+  const { work } = finderTree();
+  for (let i = 0; i < 60; i++) fs.writeFileSync(path.join(work, `item${String(i).padStart(2, '0')}.txt`), '');
+  const out = { rows: 20, columns: 90, data: '', write(x) { this.data += x; } };
+  const scr = new FilesScreen(new FileBrowser(work), { shell: {}, io: {}, output: out });
+  scr.browser.reload();
+  scr.browser.moveTo(scr.browser.visible().length - 1);
+  scr.render();
+  const L = scr.layout();
+  const row = Math.floor(scr.browser.cursor / L.perRow);
+  assert.ok(row >= scr.gridTop && row < scr.gridTop + L.rowsVisible, 'last item is on screen');
+  assert.match(ansi.strip(out.data), /item59\.txt/);
 });
 
 if (failures) {
