@@ -36,6 +36,7 @@ class LineEditor {
     this.attach();
     this.fix = fix;
     this.search = null;
+    this.menu = null;
     this.prompt = prompt || '';
     this.rprompt = rprompt || '';
     this.buf = '';
@@ -137,6 +138,7 @@ class LineEditor {
 
   updateSuggestion() {
     this.suggestion = '';
+    if (this.menu) return;
     if (!this.buf || this.cursor !== this.buf.length) return;
     for (let i = this.history.length - 1; i >= 0; i--) {
       const entry = this.history[i];
@@ -168,40 +170,112 @@ class LineEditor {
 
   complete() {
     if (!this.completeFn) return;
-    const { items, partial } = this.completeFn(this.buf, this.cursor, this.shell);
+    const res = this.completeFn(this.buf, this.cursor, this.shell);
+    const { items, partial } = res;
     if (!items.length) return;
 
-    let insertion;
     if (items.length === 1) {
-      insertion = items[0].endsWith('/') ? items[0] : `${items[0]} `;
-    } else {
-      const shared = commonPrefix(items);
-      if (shared.length > partial.length) insertion = shared;
-      else { this.showList(items); return; }
+      this.insertCompletion(items[0], partial);
+      return;
     }
-
-    const start = this.cursor - partial.length;
-    this.buf = this.buf.slice(0, start) + insertion + this.buf.slice(this.cursor);
-    this.cursor = start + insertion.length;
+    const shared = commonPrefix(items);
+    if (shared.length > partial.length) {
+      const start = this.cursor - partial.length;
+      this.buf = this.buf.slice(0, start) + shared + this.buf.slice(this.cursor);
+      this.cursor = start + shared.length;
+    }
+    this.openMenu(this.completeFn(this.buf, this.cursor, this.shell));
   }
 
-  showList(items) {
-    this.moveToEnd();
-    const shown = items.slice(0, 120);
-    const colWidth = Math.max(...shown.map((s) => s.length)) + 2;
-    const perRow = Math.max(1, Math.floor(this.columns / colWidth));
+  insertCompletion(item, partial) {
+    const text = item.endsWith('/') ? item : `${item} `;
+    const start = this.cursor - partial.length;
+    this.buf = this.buf.slice(0, start) + text + this.buf.slice(this.cursor);
+    this.cursor = start + text.length;
+  }
 
-    let s = '\n';
-    shown.forEach((item, i) => {
-      s += item.padEnd(colWidth);
-      if ((i + 1) % perRow === 0) s += '\n';
+  // --- the completion menu ------------------------------------------------------
+
+  openMenu(res) {
+    if (!res || !res.items.length) { this.menu = null; return; }
+    this.menu = { items: res.items, info: res.info || new Map(), partial: res.partial, index: 0, top: 0 };
+    this.suggestion = '';
+  }
+
+  // Re-runs completion after typing, keeping the menu open while anything matches.
+  refreshMenu() {
+    const res = this.completeFn(this.buf, this.cursor, this.shell);
+    if (!res.items.length) { this.menu = null; return; }
+    const keep = this.menu && this.menu.items[this.menu.index];
+    this.openMenu(res);
+    const at = keep ? res.items.indexOf(keep) : -1;
+    if (at !== -1) this.menu.index = at;
+  }
+
+  handleMenuKey(str, key) {
+    const m = this.menu;
+    const name = key.name;
+    const move = (d) => { m.index = (m.index + d + m.items.length) % m.items.length; };
+    if ((name === 'tab' && !key.shift) || name === 'down' || (key.ctrl && name === 'n')) { move(1); return this.render(); }
+    if ((name === 'tab' && key.shift) || name === 'up' || (key.ctrl && name === 'p')) { move(-1); return this.render(); }
+    if (name === 'return' || name === 'enter' || name === 'right') {
+      const item = m.items[m.index];
+      this.menu = null;
+      this.insertCompletion(item, m.partial);
+      this.updateSuggestion();
+      return this.render();
+    }
+    if (name === 'escape' || (key.ctrl && (name === 'c' || name === 'g'))) {
+      this.menu = null;
+      return this.render();
+    }
+    if (name === 'backspace') {
+      this.deleteBack();
+      this.refreshMenu();
+      return this.render();
+    }
+    if (str && !key.ctrl && !key.meta && str.charCodeAt(0) > 32) {
+      this.insert(str);
+      this.refreshMenu();
+      return this.render();
+    }
+    // Anything else closes the menu and is handled normally.
+    this.menu = null;
+    return undefined;
+  }
+
+  // Rows drawn under the input line: icon, name, and a muted description.
+  menuLines(cols) {
+    const m = this.menu;
+    const { fit, textWidth } = require('./tui');
+    const theme = require('./theme');
+    const { ui } = theme.current();
+    const width = cols - 1;
+    const maxRows = Math.max(3, Math.min(8, (this.output.rows || 24) - 4));
+    if (m.index < m.top) m.top = m.index;
+    if (m.index >= m.top + maxRows) m.top = m.index - maxRows + 1;
+    const shown = m.items.slice(m.top, m.top + maxRows);
+    const nameW = Math.min(Math.max(...shown.map((i) => textWidth(i))), Math.floor(width * 0.45));
+    const R = ansi.reset();
+
+    const lines = shown.map((item, i) => {
+      const meta = m.info.get(item) || {};
+      let icon = meta.icon || ' ';
+      if (textWidth(icon) < 2) icon += ' ';
+      const selected = m.top + i === m.index;
+      const head = ` ${icon} ${fit(item, nameW)}  `;
+      const descW = Math.max(0, width - textWidth(head));
+      const desc = meta.desc ? fit(meta.desc, descW) : ' '.repeat(descW);
+      if (selected) {
+        return `${ansi.sgr(`48;5;${ui.select.bg}`)}${ansi.fg(ui.select.fg)}${head}${desc}${R}`;
+      }
+      return `${head}${ansi.fg(ui.muted)}${desc}${R}`;
     });
-    if (shown.length % perRow !== 0) s += '\n';
-    if (items.length > shown.length) s += `${ansi.dim()}… ${items.length - shown.length} more${ansi.reset()}\n`;
-
-    this.output.write(s);
-    this.cursorRowPos = 0;
-    this.lastEndRow = 0;
+    if (m.items.length > maxRows) {
+      const more = `${m.index + 1} of ${m.items.length} · tab / ↑↓ to move · enter to pick`;
+      lines.push(`${ansi.fg(ui.muted)}${fit(`  ${more}`, width)}${R}`);
+    }
+    return lines;
   }
 
   // --- Ctrl-R: fuzzy history search -------------------------------------------
@@ -269,6 +343,10 @@ class LineEditor {
   handleKey(str, key) {
     const name = key.name;
     if (this.search) return this.handleSearchKey(str, key);
+    if (this.menu) {
+      const handled = this.handleMenuKey(str, key);
+      if (handled !== undefined || this.menu) return handled;
+    }
 
     // An offered fix is run by Enter on an empty line, taken into the line
     // by → or ^E, and forgotten as soon as anything else is typed.
@@ -391,18 +469,21 @@ class LineEditor {
     s += this.prompt + painted + ghost;
     // Force the wrap deterministically when we land exactly on a boundary.
     if (totalW > 0 && totalW % cols === 0) s += '\n';
+    const menu = this.menu ? this.menuLines(cols) : [];
+    if (menu.length) s += `\r\n${menu.join('\r\n')}`;
+    const bottom = endRow + menu.length;
 
     const cursorCell = promptW + [...this.buf.slice(0, this.cursor)].length;
     const cursorRow = Math.floor(cursorCell / cols);
     const cursorCol = cursorCell % cols;
 
-    if (endRow > 0) s += `\x1b[${endRow}A`;
+    if (bottom > 0) s += `\x1b[${bottom}A`;
     s += '\r';
     if (cursorRow > 0) s += `\x1b[${cursorRow}B`;
     if (cursorCol > 0) s += `\x1b[${cursorCol}C`;
 
     this.cursorRowPos = cursorRow;
-    this.lastEndRow = endRow;
+    this.lastEndRow = bottom;
     this.output.write(s);
   }
   // The line shows the selected command; the matches are listed underneath,

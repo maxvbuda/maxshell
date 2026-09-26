@@ -1,6 +1,6 @@
 {
   "name": "maxshell",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "A zsh-flavoured shell language — lexer, parser, and interpreter — implemented in Node.js",
   "main": "src/interpreter.js",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node bin/maxshell.js",
-    "test": "node test/run.js && node test/interactive.js && node test/pyedit.js && node test/gitui.js && node test/tools.js && node test/features.js && node test/look.js"
+    "test": "node test/run.js && node test/interactive.js && node test/pyedit.js && node test/gitui.js && node test/tools.js && node test/features.js && node test/look.js && node test/modern.js"
   },
   "keywords": [
     "shell",

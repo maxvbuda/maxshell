@@ -46,15 +46,22 @@ plus a tip about something it can do:
 
 ### The prompt
 
-The default prompt is two lines: a framed information line with the folder,
-git branch and status, and the node version and time pushed to the right edge,
-then a short input line. The `❯` turns the theme's error colour when the last
-command failed.
+The default prompt is two lines: a framed information line, then a short
+input line whose `❯` turns the theme's error colour when the last command
+failed.
 
 ```
-╭─ ~/maxshell · main !?                                     node v25.1.0 · 12:04
+╭─ ~/maxshell · main !?                          📦 v0.9.0 · ⬢ 25.1.0 · 12:04
 ╰─❯ git status
 ```
+
+The right side is **context-aware**, like Starship: it shows a tool's version
+only inside projects that use it — ⬢ Node (and the 📦 package version) where
+there's a `package.json`, 🐍 Python with the active virtualenv, 🦀 Rust, 🐹 Go,
+💎 Ruby, 🐳 Docker — plus `took 4.2s` after a slow command, and the time.
+Outside any project it's just the time. Long paths shorten fish-style
+(`~/p/w/src`) so the right side keeps its room, and if the window is narrow the
+modules give way before the time does.
 
 Once you press Enter the prompt **collapses to a single line**, so scrollback
 reads as a clean list of what you ran rather than a wall of frames:
@@ -541,6 +548,47 @@ It refreshes every second and a half.
 `view` and `top` share names with system commands. The builtins win inside
 maxshell; `command top` or `command view` reaches the system ones.
 
+## Modern conveniences
+
+### A completion menu
+
+Press `Tab` and a menu opens under the prompt, each choice with an icon and a
+short description — and it knows what you're typing:
+
+```
+maxshell ❯ git st
+ ›  stash    shelve changes
+ ›  status   what has changed
+```
+
+- commands and builtins say what they do; aliases say what they stand for
+- `git` subcommands are explained; after `git checkout` / `switch` / `merge` /
+  `rebase` you get your **branches**
+- `npm run` lists **this project's scripts** with what each one runs
+- `cd`, `j` and `files` offer only folders; `theme` offers the themes
+- files show their icon, kind and size
+
+`Tab` / `↓` and `Shift-Tab` / `↑` move, `Enter` or `→` picks (without running
+anything), typing narrows the list, and `Esc` closes it. A single match still
+completes at once.
+
+### ls, modernised
+
+At the prompt, `ls` lists folders first with icons and colours by kind, in a
+grid sized to the window:
+
+```sh
+ls              # the grid
+ls -l           # permissions, size, when, git status, name
+ls --tree       # a tree (--level=N sets the depth)
+ls -la src      # -a, -A, -l, -1, -t, -S, -r combine as usual
+```
+
+`ls -l` shows each file's git status — `M` modified, `N` new, `+` staged, `D`
+deleted — and folders carry the status of what's inside them. In scripts, in
+pipes (`ls | wc -l`), and with any flag it doesn't know, `ls` is the real
+`ls`, byte for byte; `command ls` always is.
+
 ## Things terminals should have had years ago
 
 ### Fuzzy history search — Ctrl-R
@@ -621,6 +669,7 @@ real path still works (`j ../other` acts like `cd`).
 | `view`, `files`, `top` | pager, file browser, process monitor (see above) |
 | `j`, `back`, `forward` | jump to frequent folders; walk folder history (see above) |
 | `theme` | list or switch colour themes (see above) |
+| `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
@@ -657,6 +706,8 @@ src/jump.js         Frecency folder database for j
 src/alerts.js       Command status lines and desktop notifications
 src/theme.js        The eight colour themes; every colour is looked up here
 src/banner.js       The logo and startup tips
+src/context.js      Project detection and the prompt's version modules
+src/ls.js           The modern ls: grid, long view, tree, git status
 src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
@@ -668,6 +719,7 @@ test/gitui.js       git layer and browser test suite
 test/tools.js       Languages, view, files and top test suite
 test/features.js    History search, did-you-mean, j/back/forward, alerts
 test/look.js        Themes, logo, banner and the two-line prompt
+test/modern.js      Completion menu, context-aware prompt, ls
 ```
 
 ## Differences from zsh

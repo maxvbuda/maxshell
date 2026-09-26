@@ -95,7 +95,10 @@ function promptParts(shell, cols = 80) {
   const R = ansi.reset();
   const frame = ansi.fg(p.frame);
   const home = shell.getVar('HOME') || os.homedir();
-  const where = shortCwd(shell.cwd, home);
+  const full = shortCwd(shell.cwd, home);
+  // Long paths shorten fish-style so the right side keeps its room:
+  // ~/projects/website/src → ~/p/w/src
+  const where = shortenPath(full, Math.max(12, Math.floor((cols - 1) * 0.5)));
 
   let left = `${frame}╭─${R} ${ansi.bold()}${ansi.fg(p.path)}${where}${R}`;
   const info = gitInfo(shell.cwd);
@@ -110,14 +113,31 @@ function promptParts(shell, cols = 80) {
     if (marks) left += ` ${ansi.fg(p.marks)}${marks}${R}`;
   }
 
-  const rightTemplate = shell.getVar('RPROMPT') ?? shell.getVar('RPS1') ?? '%V · %T';
-  const rightText = rightTemplate ? expandPrompt(rightTemplate, shell) : '';
-  const right = rightText ? `${ansi.fg(p.right)}${ansi.strip(rightText)}${R}` : '';
+  // The right side: RPROMPT if you set one; otherwise the tools this project
+  // uses, how long the last command took (if it was slow), and the time.
+  const custom = shell.getVar('RPROMPT') ?? shell.getVar('RPS1');
+  let parts;
+  if (custom !== undefined) {
+    parts = custom ? [`${ansi.fg(p.right)}${ansi.strip(expandPrompt(custom, shell))}${R}`] : [];
+  } else {
+    const { promptModules } = require('./context');
+    parts = promptModules(shell).map((m) => `${ansi.fg(p.right)}${m.text}${R}`);
+    if (shell.lastDuration >= 2000) {
+      const { formatDuration } = require('./alerts');
+      parts.push(`${ansi.fg(theme.current().ui.warn)}took ${formatDuration(shell.lastDuration)}${R}`);
+    }
+    parts.push(`${ansi.fg(p.right)}${new Date().toTimeString().slice(0, 5)}${R}`);
+  }
 
-  // Leave the last column free so the line never wraps.
+  // Leave the last column free so the line never wraps; if everything won't
+  // fit, drop modules from the front, keeping the time.
   const room = cols - 1;
   const lw = textWidth(ansi.strip(left));
-  const rw = textWidth(ansi.strip(right));
+  const sep = `${ansi.fg(p.frame)} · ${R}`;
+  const widthOf = (list) => textWidth(ansi.strip(list.join(sep)));
+  while (parts.length > 1 && lw + widthOf(parts) + 2 > room) parts.shift();
+  const right = parts.join(sep);
+  const rw = widthOf(parts);
   let header = left;
   if (right && lw + rw + 2 <= room) header += ' '.repeat(room - lw - rw) + right;
   else if (lw > room) header = ansi.strip(left).slice(0, room);
@@ -125,6 +145,20 @@ function promptParts(shell, cols = 80) {
   const failed = shell.status !== 0 && shell.status !== 130;
   const input = `${frame}╰─${R}${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
   return { header, input };
+}
+
+// Abbreviates every folder but the last to its first letter (keeping a
+// leading dot), then, if still too long, keeps only the tail.
+function shortenPath(p, maxW) {
+  if (textWidth(p) <= maxW) return p;
+  const parts = p.split('/');
+  const abbreviated = parts.map((seg, i) => {
+    if (i === parts.length - 1 || seg === '' || seg === '~') return seg;
+    return seg.startsWith('.') ? seg.slice(0, 2) : seg.slice(0, 1);
+  }).join('/');
+  if (textWidth(abbreviated) <= maxW) return abbreviated;
+  const last = parts[parts.length - 1];
+  return `…/${last}`.length <= maxW ? `…/${last}` : `…${last.slice(-(maxW - 1))}`;
 }
 
 // What a finished prompt collapses to, so scrollback shows one tidy line per
@@ -138,5 +172,5 @@ function compactPrompt(shell, line, paint = (x) => x) {
 
 module.exports = {
   expandPrompt, leftPrompt, rightPrompt, gitSegment, shortCwd, DEFAULT_PROMPT, DEFAULT_RPROMPT,
-  usesDefaultPrompt, promptParts, compactPrompt,
+  usesDefaultPrompt, promptParts, compactPrompt, shortenPath,
 };

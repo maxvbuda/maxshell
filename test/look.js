@@ -126,7 +126,8 @@ test('the two-line prompt never wraps', () => {
     assert.ok(textWidth(ansi.strip(header)) <= cols - 1, `${cols} cols: ${ansi.strip(header)}`);
     assert.strictEqual(ansi.strip(input), '╰─❯ ');
   }
-  assert.match(ansi.strip(promptParts(sh, 100).header), /^╭─ .*node v\d+/);
+  // In this repository (a Node project) the prompt shows the Node module.
+  assert.match(ansi.strip(promptParts(sh, 100).header), /^╭─ .*⬢ \d+\.\d+\.\d+/);
 });
 
 test('the ❯ turns the error colour after a failed command', () => {

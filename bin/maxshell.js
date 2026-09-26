@@ -178,7 +178,8 @@ async function runEditorRepl(shell) {
       reportError(e);
     }
 
-    afterCommand(shell, source, Date.now() - started);
+    shell.lastDuration = Date.now() - started;
+    afterCommand(shell, source, shell.lastDuration);
     fix = fixFor(shell, source);
     if (shell.cwd !== cwdBefore) {
       dirs.visit(shell.cwd);

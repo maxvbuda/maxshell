@@ -307,6 +307,7 @@ Getting around
 
 Looks
   theme [name]              list the colour themes, or switch to one (remembered)
+  ls [-la] [--tree]         icons, colours and git status (the real ls in scripts)
 
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
@@ -487,6 +488,20 @@ BUILTINS.theme = (args, io, shell) => {
   const logo = logoLines();
   out(shell, io, `\n  ${logo[0]}\n  ${logo[1]}\n\n  ${theme.fg('ok')}✓${ansiMod.reset()} theme ${theme.style({ c: theme.current().ui.accent, bold: true })}${name}${ansiMod.reset()} — ${theme.current().description}\n\n`);
   return 0;
+};
+
+// A modern ls at the terminal; the real one everywhere else. `command ls`
+// always reaches the system ls.
+BUILTINS.ls = (args, io, shell) => {
+  const atTerminal = shell.interactive && io.stdout.kind === 'term' && process.stdout.isTTY && !shell.output;
+  if (atTerminal) {
+    const rendered = require('./ls').render(args, shell.cwd, process.stdout.columns || 80);
+    if (rendered) {
+      if (rendered.lines.length) out(shell, io, `${rendered.lines.join('\n')}\n`);
+      return rendered.status;
+    }
+  }
+  return shell.runExternal(['ls', ...args], io, shell.env);
 };
 
 BUILTINS.pwd = (args, io, shell) => { out(shell, io, `${shell.cwd}\n`); return 0; };

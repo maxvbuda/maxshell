@@ -168,8 +168,10 @@ async function main() {
     const { items } = completions('ec', 2, shell);
     assert.ok(items.includes('echo'), 'expected echo among completions');
 
-    const paths = completions('packa', 5, shell).items;
+    const paths = completions('cat packa', 9, shell).items;
     assert.ok(paths.includes('package.json'), `expected package.json, got ${paths}`);
+    const first = completions('packa', 5, shell).items;
+    assert.ok(!first.includes('package.json'), 'a command position offers commands, not files');
   });
 
   await test('commonPrefix finds the shared start', () => {
