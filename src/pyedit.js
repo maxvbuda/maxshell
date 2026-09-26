@@ -511,8 +511,7 @@ class PyEditor {
   // --- rendering ------------------------------------------------------------
 
   bar(text) {
-    const padded = text.length > this.cols ? text.slice(0, this.cols) : text.padEnd(this.cols);
-    return `\x1b[7m${padded}\x1b[0m`;
+    return require('./tui').bar(text, this.cols);
   }
 
   titleBar() {

@@ -305,6 +305,9 @@ Getting around
   back / forward            walk your folder history, like a browser
   Ctrl-R                    fuzzy-search every command you've run
 
+Looks
+  theme [name]              list the colour themes, or switch to one (remembered)
+
 Anything that is not a builtin or a function runs as a real program.
 Type 'help' for this list, or 'type NAME' to see what a name refers to.
 `;
@@ -441,6 +444,48 @@ BUILTINS.forward = (args, io, shell) => {
     shell.dirBack.push(from);
   }
   out(shell, io, `${shell.cwd}\n`);
+  return 0;
+};
+
+// `theme` lists the colour schemes with a preview of each; `theme name`
+// switches to one everywhere and remembers it.
+BUILTINS.theme = (args, io, shell) => {
+  const theme = require('./theme');
+  const ansiMod = require('./ansi');
+  const name = args.find((a) => !a.startsWith('-'));
+
+  if (!name) {
+    const { highlight } = require('./highlight');
+    const sample = 'git push origin main  # ship it';
+    for (const n of theme.names()) {
+      const t = theme.THEMES[n];
+      const mark = n === theme.currentThemeName() ? '●' : ' ';
+      if (!ansiMod.isEnabled()) {
+        out(shell, io, `${mark} ${n.padEnd(12)} ${t.description}\n`);
+        continue;
+      }
+      const line = theme.withTheme(n, () => {
+        const swatch = t.gradient.slice(0, 6).map((c) => `${ansiMod.fg(c)}██`).join('') + ansiMod.reset();
+        const name12 = `${theme.style({ c: t.ui.accent, bold: true })}${n.padEnd(12)}${ansiMod.reset()}`;
+        return `${mark} ${name12} ${swatch}  ${highlight(sample, shell)}   ${ansiMod.fg(t.ui.muted)}${t.description}${ansiMod.reset()}`;
+      });
+      out(shell, io, `${line}\n`);
+    }
+    out(shell, io, `\n${ansiMod.fg(theme.current().ui.muted)}theme <name> switches and remembers it${ansiMod.reset()}\n`);
+    return 0;
+  }
+
+  if (!theme.THEMES[name]) {
+    const { closest } = require('./suggest');
+    const guess = closest(name, theme.names());
+    err(shell, io, `theme: no theme called ${name}${guess ? ` — did you mean ${guess}?` : ''} (theme lists them)\n`);
+    return 1;
+  }
+  theme.setTheme(name);
+  try { theme.saveTheme(name); } catch { /* can't persist; still switched */ }
+  const { logoLines } = require('./banner');
+  const logo = logoLines();
+  out(shell, io, `\n  ${logo[0]}\n  ${logo[1]}\n\n  ${theme.fg('ok')}✓${ansiMod.reset()} theme ${theme.style({ c: theme.current().ui.accent, bold: true })}${name}${ansiMod.reset()} — ${theme.current().description}\n\n`);
   return 0;
 };
 

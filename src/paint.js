@@ -2,28 +2,10 @@
 
 const ansi = require('./ansi');
 
-// One palette for every language, keyed by token class.
+// Token colours come from the current theme.
 function colorFor(cls) {
-  switch (cls) {
-    case 'kw': return ansi.bold() + ansi.fg('magenta');
-    case 'const': return ansi.fg(213);
-    case 'builtin': return ansi.fg('cyan');
-    case 'str': return ansi.fg('yellow');
-    case 'num': return ansi.fg('green');
-    case 'comment': return ansi.fg('gray');
-    case 'decorator': return ansi.fg(214);
-    case 'defname': return ansi.bold() + ansi.fg('blue');
-    case 'op': return ansi.fg(252);
-    case 'key': return ansi.fg(75);
-    case 'var': return ansi.fg(81);
-    case 'heading': return ansi.bold() + ansi.fg(75);
-    case 'emph': return ansi.bold() + ansi.fg(223);
-    case 'code': return ansi.fg(180);
-    case 'link': return ansi.underline() + ansi.fg(111);
-    case 'quote': return ansi.fg(245);
-    case 'bullet': return ansi.fg(214);
-    default: return '';
-  }
+  const theme = require('./theme');
+  return theme.style(theme.current().syntax[cls]);
 }
 
 // Paints columns [from, to) of a tokenised line. `ranges` are [start, end)

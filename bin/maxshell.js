@@ -10,7 +10,11 @@ const { Shell, ShellError, IncompleteError, ExitSignal } = require('../src/inter
 const { LineEditor } = require('../src/lineeditor');
 const { highlight } = require('../src/highlight');
 const { completions } = require('../src/complete');
-const { leftPrompt, rightPrompt, expandPrompt } = require('../src/prompt');
+const {
+  leftPrompt, rightPrompt, expandPrompt, usesDefaultPrompt, promptParts, compactPrompt,
+} = require('../src/prompt');
+const theme = require('../src/theme');
+const { banner: logoBanner } = require('../src/banner');
 const ansi = require('../src/ansi');
 const { History, historyFile } = require('../src/history');
 const { DirDB } = require('../src/jump');
@@ -89,13 +93,12 @@ function continuationPrompt(shell) {
   return expandPrompt(shell.getVar('PS2') || '%F{gray}   ...>%f ', shell);
 }
 
-function banner() {
-  const dim = ansi.dim();
-  const r = ansi.reset();
-  process.stdout.write(
-    `${ansi.bold()}maxshell ${VERSION}${r} ${dim}— zsh-flavoured, on Node.js${r}\n`
-    + `${dim}help · tab completes · → accepts suggestions · ctrl-r searches history · j jumps to folders${r}\n`,
-  );
+// The logo and a tip. BANNER=off in ~/.maxshellrc (or MAXSHELL_BANNER=0)
+// turns it off.
+function banner(shell) {
+  const off = (v) => /^(0|off|no|false)$/i.test(String(v || ''));
+  if (off(process.env.MAXSHELL_BANNER) || (shell && off(shell.getVar('BANNER')))) return;
+  process.stdout.write(logoBanner({ version: VERSION, cols: process.stdout.columns || 80 }));
 }
 
 // Interactive loop backed by the custom line editor.
@@ -118,13 +121,25 @@ async function runEditorRepl(shell) {
   dirs.visit(shell.cwd);
   dirs.save();
 
-  banner();
+  banner(shell);
   let buffer = '';
   let fix = null;
 
   for (;;) {
-    const prompt = buffer ? continuationPrompt(shell) : leftPrompt(shell);
-    const rprompt = buffer ? '' : rightPrompt(shell);
+    // The signature prompt draws its information line first, then reads on
+    // the short line below it. A custom PROMPT keeps the one-line behaviour.
+    const twoLine = !buffer && usesDefaultPrompt(shell);
+    let prompt;
+    let rprompt;
+    if (twoLine) {
+      const parts = promptParts(shell, process.stdout.columns || 80);
+      process.stdout.write(`${parts.header}\n`);
+      prompt = parts.input;
+      rprompt = '';
+    } else {
+      prompt = buffer ? continuationPrompt(shell) : leftPrompt(shell);
+      rprompt = buffer ? '' : rightPrompt(shell);
+    }
 
     let result;
     try {
@@ -137,6 +152,13 @@ async function runEditorRepl(shell) {
 
     if (result.eof) break;
     if (result.aborted) { buffer = ''; continue; }
+
+    // Collapse the finished two-line prompt into one tidy line, so
+    // scrollback reads as a list of commands rather than a wall of frames.
+    if (twoLine) {
+      const up = editor.lastEndRow + 2;
+      process.stdout.write(`\x1b[${up}A\r\x1b[J${compactPrompt(shell, result.line, (l) => highlight(l, shell))}\n`);
+    }
 
     buffer = buffer ? `${buffer}\n${result.line}` : result.line;
     if (!buffer.trim()) { buffer = ''; continue; }
@@ -182,7 +204,7 @@ function runPlainRepl(shell) {
       rl.prompt();
     };
 
-    banner();
+    banner(shell);
     prompt();
 
     rl.on('line', (line) => {
@@ -214,6 +236,7 @@ async function runRepl() {
   const interactive = !!(process.stdin.isTTY && process.stdout.isTTY);
   ansi.setEnabled(!!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb');
 
+  theme.loadSavedTheme();
   const shell = new Shell({ interactive: true });
   sourceRcFile(shell);
   loadHistory(shell);

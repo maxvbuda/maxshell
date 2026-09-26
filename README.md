@@ -34,6 +34,64 @@ maxshell --version
 The interactive shell reads `~/.maxshellrc` at startup and saves input to
 `~/.maxshell_history`. Tab completion works for commands and file paths.
 
+## The look
+
+maxshell greets you with its logo painted in the current theme's gradient,
+plus a tip about something it can do:
+
+```
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.9.0 · theme maxshell
+  █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
+```
+
+### The prompt
+
+The default prompt is two lines: a framed information line with the folder,
+git branch and status, and the node version and time pushed to the right edge,
+then a short input line. The `❯` turns the theme's error colour when the last
+command failed.
+
+```
+╭─ ~/maxshell · main !?                                     node v25.1.0 · 12:04
+╰─❯ git status
+```
+
+Once you press Enter the prompt **collapses to a single line**, so scrollback
+reads as a clean list of what you ran rather than a wall of frames:
+
+```
+~/maxshell ❯ git status
+~/maxshell ❯ npm test
+```
+
+Set your own `PROMPT` (or `PS1`) and maxshell uses that instead; theme colour
+names work in it, e.g. `PROMPT='%F{accent}%~%f %# '`.
+
+### Themes
+
+```sh
+theme            # list them all, each with a live preview
+theme nord       # switch everywhere, and remember it
+```
+
+| Theme | |
+|---|---|
+| `maxshell` | electric cyan to magenta — the house style |
+| `dracula` | purple, pink and neon green on dark |
+| `nord` | cool arctic blues and frost |
+| `gruvbox` | warm retro yellows, oranges and olive |
+| `solarized` | the precise, balanced classic |
+| `tokyo-night` | city-light blues and violets |
+| `sunset` | golden hour: amber, coral and rose |
+| `mono` | no colour, just weight and shade |
+
+A theme restyles everything at once: the logo, the prompt, command-line
+highlighting, `Ctrl-R`, code in `edit` and `view`, and the bars, selection and
+**folder icons** in `files`, `top` and `gitui`. The choice is saved to
+`~/.maxshell_theme`; `MAXSHELL_THEME=nord maxshell` tries one for a single
+session. `BANNER=off` in `~/.maxshellrc` (or `MAXSHELL_BANNER=0`) skips the
+logo.
+
 ## The language
 
 ### Commands, pipelines, and lists
@@ -562,6 +620,7 @@ real path still works (`j ../other` acts like `cd`).
 | `edit`, `pyedit` | the built-in editor (see above) |
 | `view`, `files`, `top` | pager, file browser, process monitor (see above) |
 | `j`, `back`, `forward` | jump to frequent folders; walk folder history (see above) |
+| `theme` | list or switch colour themes (see above) |
 | `gitui` | the built-in git browser (see above) |
 
 Anything that is not a builtin, function, or alias is run as a real program.
@@ -596,6 +655,8 @@ src/history.js      History with folder and time; fuzzy search and ranking
 src/suggest.js      Did-you-mean: edit distance, command and subcommand fixes
 src/jump.js         Frecency folder database for j
 src/alerts.js       Command status lines and desktop notifications
+src/theme.js        The eight colour themes; every colour is looked up here
+src/banner.js       The logo and startup tips
 src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
@@ -606,6 +667,7 @@ test/pyedit.js      Python editor, tokenizer and key reader test suite
 test/gitui.js       git layer and browser test suite
 test/tools.js       Languages, view, files and top test suite
 test/features.js    History search, did-you-mean, j/back/forward, alerts
+test/look.js        Themes, logo, banner and the two-line prompt
 ```
 
 ## Differences from zsh

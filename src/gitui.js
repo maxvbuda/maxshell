@@ -161,9 +161,7 @@ class GitUI {
   // --- rendering ------------------------------------------------------------
 
   bar(text) {
-    const cols = this.termCols;
-    const padded = text.length > cols ? text.slice(0, cols) : text.padEnd(cols);
-    return `${ansi.reverse()}${padded}${ansi.reset()}`;
+    return require('./tui').bar(text, this.termCols);
   }
 
   titleBar() {
@@ -188,7 +186,11 @@ class GitUI {
       return `${ansi.bold()}${ansi.fg(250)} ${row.text}${ansi.reset()}\x1b[K`;
     }
     const text = `  ${selected ? '▸' : ' '} ${row.entry.code} ${row.entry.path}`;
-    if (selected) return `${ansi.reverse()}${text.slice(0, this.termCols).padEnd(this.termCols)}${ansi.reset()}`;
+    if (selected) {
+      const { ui } = require('./theme').current();
+      const sel = `${ansi.sgr(`48;5;${ui.select.bg}`)}${ansi.fg(ui.select.fg)}`;
+      return `${sel}${text.slice(0, this.termCols).padEnd(this.termCols)}${ansi.reset()}`;
+    }
     return `${ansi.fg(SECTION_COLOR[row.section] || 'white')}${text.slice(0, this.termCols)}${ansi.reset()}\x1b[K`;
   }
 

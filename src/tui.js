@@ -63,9 +63,11 @@ function fit(text, width) {
   return `${out}…${' '.repeat(Math.max(0, width - w - 1))}`;
 }
 
-// A full-width reverse-video bar.
+// A full-width title or status bar in the theme's bar colours.
 function bar(text, cols) {
-  return `${ansi.reverse()}${fit(text, cols)}${ansi.reset()}`;
+  if (!ansi.isEnabled()) return fit(text, cols);
+  const { ui } = require('./theme').current();
+  return `${ansi.sgr(`48;5;${ui.bar.bg}`)}${ansi.fg(ui.bar.fg)}${fit(text, cols)}${ansi.reset()}`;
 }
 
 function humanBytes(n) {
@@ -82,7 +84,8 @@ function meter(fraction, width) {
   const f = Math.max(0, Math.min(1, fraction || 0));
   const inner = Math.max(1, width - 2);
   const filled = Math.round(f * inner);
-  const color = f > 0.85 ? ansi.fg('red') : f > 0.6 ? ansi.fg('yellow') : ansi.fg('green');
+  const { ui } = require('./theme').current();
+  const color = ansi.fg(f > 0.85 ? ui.err : f > 0.6 ? ui.warn : ui.ok);
   return `[${color}${'|'.repeat(filled)}${ansi.reset()}${' '.repeat(inner - filled)}]`;
 }
 

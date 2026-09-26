@@ -40,19 +40,22 @@ function classifyCommand(word, shell) {
 }
 
 function palette() {
+  const theme = require('./theme');
+  const c = theme.current().shell;
+  const st = theme.style;
   return {
-    reserved: ansi.bold() + ansi.fg('blue'),
-    builtin: ansi.fg('green'),
-    command: ansi.fg('green'),
-    function: ansi.fg('green'),
-    alias: ansi.fg('cyan'),
-    unknown: ansi.fg('red'),
+    reserved: st(c.reserved),
+    builtin: st(c.builtin),
+    command: st(c.command),
+    function: st(c.command),
+    alias: st(c.alias),
+    unknown: st(c.unknown),
     arg: '',
-    string: ansi.fg('yellow'),
-    variable: ansi.fg('cyan'),
-    operator: ansi.fg('magenta'),
-    comment: ansi.fg('gray'),
-    assign: ansi.fg('cyan'),
+    string: st(c.string),
+    variable: st(c.variable),
+    operator: st(c.operator),
+    comment: st(c.comment),
+    assign: st(c.assign),
   };
 }
 

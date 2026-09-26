@@ -429,7 +429,8 @@ class LineEditor {
     const count = total ? `${s.index + 1} of ${total}` : 'no matches';
     const label = `history › ${s.query}`;
     const pad = Math.max(1, width - ansi.width(label) - count.length);
-    out += `\r\n${ansi.fg(214)}history ›${ansi.reset()} ${s.query}${' '.repeat(pad)}${ansi.fg('gray')}${count}${ansi.reset()}`;
+    const accent = require('./theme').fg('accent');
+    out += `\r\n${accent}history ›${ansi.reset()} ${s.query}${' '.repeat(pad)}${ansi.fg('gray')}${count}${ansi.reset()}`;
 
     // Keep the selection inside the visible window.
     const top = Math.max(0, Math.min(s.index - Math.floor(maxRows / 2), total - maxRows));
@@ -442,7 +443,7 @@ class LineEditor {
       let text = '';
       for (let c = 0; c < Math.min(chars.length, cmdRoom); c++) {
         const hit = row.positions && row.positions.has(c);
-        text += hit ? `${ansi.bold()}${ansi.fg(214)}${chars[c]}${ansi.reset()}${selected ? ansi.reverse() : ''}` : chars[c];
+        text += hit ? `${ansi.bold()}${require('./theme').fg('accent2')}${chars[c]}${ansi.reset()}${selected ? ansi.reverse() : ''}` : chars[c];
       }
       const used = Math.min(chars.length, cmdRoom);
       const gap = ' '.repeat(Math.max(1, width - 2 - used - meta.length));

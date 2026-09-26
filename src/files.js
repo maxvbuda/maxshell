@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const ansi = require('./ansi');
+const theme = require('./theme');
 const ops = require('./fileops');
 const { KeyReader } = require('./keys');
 const { detectLanguage, computeStates, renderSlice } = require('./syntax');
@@ -354,6 +355,8 @@ const FOLDER_BADGES = {
 };
 
 const bg = (n) => ansi.sgr(`48;5;${n}`);
+const barStyle = () => { const { ui } = theme.current(); return `${bg(ui.bar.bg)}${ansi.fg(ui.bar.fg)}`; };
+const selStyle = () => { const { ui } = theme.current(); return `${bg(ui.select.bg)}${ansi.fg(ui.select.fg)}`; };
 
 // Icons are drawn as 12×10 pixel bitmaps. Each terminal row shows two pixel
 // rows using half blocks (fg = upper pixel, bg = lower), so a 12×5 cell area
@@ -373,7 +376,6 @@ const FOLDER = [
 ];
 // Back panel and tab, a highlight along the front's top edge, the front,
 // then a darker band and a rounded shadow — lighter at the top, like macOS.
-const FOLDER_COLORS = { t: 68, h: 153, f: 117, b: 75, s: 68 };
 
 const PAGE = [
   '.ppppppppd..',
@@ -450,7 +452,7 @@ function iconArt(e, base = null) {
     return drawBitmap(APP, { a: 25, s: 238 }, { base, badge: '🚀' });
   }
   if (e.isDir) {
-    return drawBitmap(FOLDER, FOLDER_COLORS, { base, badge: FOLDER_BADGES[e.name] || null });
+    return drawBitmap(FOLDER, theme.current().ui.folder, { base, badge: FOLDER_BADGES[e.name] || null });
   }
   const { icon, kind } = describe(e);
   return drawBitmap(PAGE, pageColors(kind), { base, badge: icon });
@@ -648,9 +650,9 @@ class FilesScreen {
         const marked = b.marked.has(e.path);
         const pad = Math.floor((cellW - ART_W) / 2);
 
-        const art = iconArt(e, selected ? 238 : null);
+        const art = iconArt(e, selected ? theme.current().ui.selectDim : null);
         for (let k = 0; k < ART_H; k++) {
-          const edge = selected ? `${bg(238)} ${ansi.reset()}` : ' ';
+          const edge = selected ? `${bg(theme.current().ui.selectDim)} ${ansi.reset()}` : ' ';
           rowLines[k] += `${' '.repeat(pad - 1)}${edge}${art[k]}${edge}${' '.repeat(cellW - pad - ART_W - 1)}`;
         }
 
@@ -659,7 +661,10 @@ class FilesScreen {
           const text = label.lines[k] || '';
           const { left, right } = center(text, cellW);
           let painted = text;
-          if (text && (selected || marked)) painted = `${bg(selected ? 25 : 24)}${ansi.fg(255)}${text}${ansi.reset()}`;
+          if (text && (selected || marked)) {
+            const { ui } = theme.current();
+            painted = `${bg(selected ? ui.select.bg : ui.marked)}${ansi.fg(ui.select.fg)}${text}${ansi.reset()}`;
+          }
           else if (text && e.hidden) painted = `${ansi.fg('gray')}${text}${ansi.reset()}`;
           rowLines[ART_H + k] += `${' '.repeat(left)}${painted}${' '.repeat(right)}`;
         }
@@ -714,11 +719,12 @@ class FilesScreen {
     const chevron = e.isDir ? '›' : ' ';
     const label = fit(`${iconOf(e)} ${e.name}`, Math.max(1, w - 3));
     const text = `${label} ${chevron}`;
-    if (selected && active) return `${mark}${ansi.reverse()}${text}${ansi.reset()}`;
-    if (selected) return `${mark}${ansi.sgr('48;5;238')}${text}${ansi.reset()}`;
+    const { ui } = theme.current();
+    if (selected && active) return `${mark}${bg(ui.select.bg)}${ansi.fg(ui.select.fg)}${text}${ansi.reset()}`;
+    if (selected) return `${mark}${bg(ui.selectDim)}${text}${ansi.reset()}`;
     let color = '';
     if (e.broken) color = ansi.fg('red');
-    else if (e.isDir) color = ansi.fg(75);
+    else if (e.isDir) color = ansi.fg(theme.current().ui.dir);
     else if (e.hidden) color = ansi.fg('gray');
     return `${mark}${color}${text}${ansi.reset()}`;
   }
@@ -749,8 +755,8 @@ class FilesScreen {
       if (!s) { lines.push(' '.repeat(w)); continue; }
       if (s.header) { lines.push(`${ansi.fg('gray')}${fit(` ${s.header}`, w)}${ansi.reset()}`); continue; }
       const text = fit(`  ${ICONS ? s.icon : '•'} ${s.label}`, w);
-      if (this.focus === 'sidebar' && i === this.sideIndex) lines.push(`${ansi.reverse()}${text}${ansi.reset()}`);
-      else if (s.path === cwd) lines.push(`${ansi.bold()}${ansi.fg(75)}${text}${ansi.reset()}`);
+      if (this.focus === 'sidebar' && i === this.sideIndex) lines.push(`${selStyle()}${text}${ansi.reset()}`);
+      else if (s.path === cwd) lines.push(`${ansi.bold()}${ansi.fg(theme.current().ui.dir)}${text}${ansi.reset()}`);
       else lines.push(text);
     }
     return lines;
@@ -789,7 +795,7 @@ class FilesScreen {
           const isDir = l.endsWith('/');
           const name = isDir ? l.slice(0, -1) : l;
           const icon = ICONS ? `${describe({ name, isDir, path: '' }).icon} ` : '';
-          lines.push(` ${isDir ? ansi.fg(75) : ansi.fg(252)}${fit(`${icon}${name}`, inner)}${ansi.reset()} `);
+          lines.push(` ${isDir ? ansi.fg(theme.current().ui.dir) : ansi.fg(252)}${fit(`${icon}${name}`, inner)}${ansi.reset()} `);
         } else {
           lines.push(` ${ansi.fg('gray')}${fit(l, inner)}${ansi.reset()} `);
         }
@@ -852,13 +858,14 @@ class FilesScreen {
 
   titleBar() {
     const b = this.browser;
-    const nav = `${b.backStack.length ? '‹' : ansi.fg(240) + '‹' + ansi.reset() + ansi.reverse()} ${b.forwardStack.length ? '›' : ansi.fg(240) + '›' + ansi.reset() + ansi.reverse()}`;
+    const dim = (ch) => `${ansi.fg(theme.current().ui.muted)}${ch}${ansi.reset()}${barStyle()}`;
+    const nav = `${b.backStack.length ? '‹' : dim('‹')} ${b.forwardStack.length ? '›' : dim('›')}`;
     const name = this.search ? `Searching “${this.search.query}”` : (path.basename(b.cwd) || 'Macintosh HD');
     const right = `sorted by ${b.sortKey} `;
     const mid = Math.max(0, Math.floor((this.cols - textWidth(name)) / 2) - 6);
     const line = `  ${nav}${' '.repeat(mid)}${name}`;
     const used = textWidth(ansi.strip(line));
-    return `${ansi.reverse()}${line}${' '.repeat(Math.max(1, this.cols - used - right.length))}${right}${ansi.reset()}`;
+    return `${barStyle()}${line}${' '.repeat(Math.max(1, this.cols - used - right.length))}${right}${ansi.reset()}`;
   }
 
   // --- search results --------------------------------------------------------
@@ -882,7 +889,7 @@ class FilesScreen {
       try { isDir = fs.statSync(p).isDirectory(); } catch { /* gone */ }
       const rel = path.relative(this.browser.cwd, p);
       const text = fit(` ${ICONS ? `${describe({ name: path.basename(p), isDir, path: p }).icon} ` : ''}${rel}`, w);
-      lines.push(s.top + i === s.cursor ? `${ansi.reverse()}${text}${ansi.reset()}` : `${isDir ? ansi.fg(75) : ''}${text}${ansi.reset()}`);
+      lines.push(s.top + i === s.cursor ? `${selStyle()}${text}${ansi.reset()}` : `${isDir ? ansi.fg(theme.current().ui.dir) : ''}${text}${ansi.reset()}`);
     }
     return lines;
   }
@@ -950,7 +957,7 @@ class FilesScreen {
 
   renderHelp() {
     const h = this.rows - 2;
-    let s = `\x1b[H${ansi.reverse()}${fit('  files — keys', this.cols)}${ansi.reset()}`;
+    let s = `\x1b[H${barStyle()}${fit('  files — keys', this.cols)}${ansi.reset()}`;
     for (let i = 0; i < h; i++) s += `\r\n${fit(HELP_LINES[this.helpTop + i] ?? '', this.cols)}`;
     s += `\r\n${ansi.fg('gray')}${fit(' any key returns', this.cols)}${ansi.reset()}`;
     this.output.write(s);
