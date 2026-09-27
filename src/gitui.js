@@ -5,12 +5,16 @@ const fs = require('fs');
 const ansi = require('./ansi');
 const { KeyReader } = require('./keys');
 const git = require('./git');
+const gh = require('./github');
+const { GitHubView, explain } = require('./githubview');
+const { spawnSync } = require('child_process');
 
 const POLL_MS = 2000;
+const GITHUB_POLL_MS = 60000;
 
 const HELP_ROWS = [
-  [['space', 'Stage'], ['a', 'Stage all'], ['U', 'Unstage all'], ['c', 'Commit'], ['^T', 'Push']],
-  [['d', 'Discard'], ['r', 'Refresh'], ['^D/^U', 'Diff'], ['^G', 'Help'], ['q', 'Quit']],
+  [['space', 'Stage'], ['a', 'Stage all'], ['U', 'Unstage all'], ['c', 'Commit'], ['^T', 'Push'], ['G', 'GitHub']],
+  [['d', 'Discard'], ['r', 'Refresh'], ['^D/^U', 'Diff'], ['P', 'New PR'], ['O', 'Open'], ['q', 'Quit']],
 ];
 
 const HELP_TEXT_LINES = `
@@ -33,6 +37,14 @@ const HELP_TEXT_LINES = `
  Careful
    d                  discard a file's changes, or delete it if untracked.
                       This cannot be undone, so it asks you to type 'yes'.
+
+ GitHub  (through the gh CLI — sign in once with: gh auth login)
+   G                  pull requests, issues and Actions runs for this repo:
+                      ←→ switch tabs, enter shows details, o opens in the
+                      browser, n creates, c checks out a PR, m merges one
+   P                  open a pull request for this branch (pushes it first)
+   O                  open this branch's pull request, or the repo, on GitHub
+   The title bar shows this branch's pull request and whether its checks pass.
 
  Other
    r                  re-read the repository
@@ -72,6 +84,76 @@ class GitUI {
     this.done = false;
     this.exitStatus = 0;
     this.lastPoll = 0;
+    this.returnMode = 'list';
+    this.github = null;
+    this.lastGitHub = 0;
+    this.ghView = new GitHubView(this);
+  }
+
+  // The repository on GitHub and this branch's pull request, fetched through
+  // gh at start-up, on refresh, and once a minute.
+  refreshGitHub(force = false) {
+    const now = Date.now();
+    if (!force && now - this.lastGitHub < GITHUB_POLL_MS) return false;
+    this.lastGitHub = now;
+    const repo = gh.repo(this.cwd);
+    if (repo.error) {
+      this.github = { error: explain(repo.error, repo.missing) };
+      return true;
+    }
+    const pr = gh.branchPR(this.cwd);
+    this.github = { repo: repo.data, pr: pr.data || null };
+    return true;
+  }
+
+  // Opens a pull request for the current branch: pushes it if GitHub hasn't
+  // seen it yet, then asks for a title (defaulting to the last commit).
+  createPullRequest(after = () => {}) {
+    if (!this.github || this.github.error) { this.message = (this.github && this.github.error) || 'GitHub is not available'; return; }
+    const branch = this.status.branch;
+    const base = this.github.repo.defaultBranch;
+    if (!branch) { this.message = 'not on a branch'; return; }
+    if (branch === base) { this.message = `you're on ${base} — create a branch first (git switch -c my-change)`; return; }
+    if (this.github.pr) { this.message = `#${this.github.pr.number} is already open for ${branch} — O opens it`; return; }
+
+    const ask = () => {
+      const last = spawnSync('git', ['log', '-1', '--format=%s'], { cwd: this.cwd, encoding: 'utf8' });
+      this.askPrompt(`Pull request title (into ${base}): `, (last.stdout || '').trim(), (title) => {
+        if (!title.trim()) { this.message = 'cancelled'; return; }
+        this.message = 'opening the pull request…';
+        this.render();
+        const res = gh.createPR(this.cwd, { title: title.trim(), base });
+        this.refreshGitHub(true);
+        after();
+        this.message = res.error ? explain(res.error) : `opened ${res.data.url}`;
+      });
+    };
+
+    const upstream = git.describeRemote(this.cwd);
+    if (upstream && !this.status.ahead) { ask(); return; }
+    const what = upstream ? `push ${this.status.ahead} new commit${this.status.ahead === 1 ? '' : 's'}` : `publish ${branch} to origin`;
+    this.askPrompt(`GitHub needs this branch first: ${what}? (y/n) `, '', (v) => {
+      if (!/^y(es)?$/i.test(v.trim())) { this.message = 'not pushed, so no pull request'; return; }
+      const res = upstream ? git.push(this.cwd) : git.push(this.cwd, ['-u', 'origin', branch]);
+      if (!res.ok) { this.showOutput('push failed', `${res.stdout}\n${res.stderr}`); return; }
+      this.refresh();
+      ask();
+    });
+  }
+
+  openOnGitHub() {
+    if (!this.github || this.github.error) { this.message = (this.github && this.github.error) || 'GitHub is not available'; return; }
+    const url = this.github.pr ? this.github.pr.url : this.github.repo.url;
+    this.message = gh.openInBrowser(url) ? `opened ${url}` : 'could not open a browser';
+  }
+
+  openGitHubView() {
+    if (!this.github || this.github.error) {
+      this.refreshGitHub(true);
+      if (this.github.error) { this.message = this.github.error; return; }
+    }
+    this.mode = 'github';
+    this.ghView.load();
   }
 
   get cwd() { return this.shell.cwd; }
@@ -169,7 +251,17 @@ class GitUI {
     const branch = s.branch || '(no branch)';
     const track = `${s.ahead ? ` ↑${s.ahead}` : ''}${s.behind ? ` ↓${s.behind}` : ''}`;
     const counts = `${s.staged.length} staged, ${s.unstaged.length} changed, ${s.untracked.length} untracked`;
-    const left = `  gitui  on ${branch}${track}`;
+    let left = `  gitui  on ${branch}${track}`;
+    const g = this.github;
+    if (g && g.repo) {
+      let pr = '';
+      if (g.pr) {
+        const badge = gh.checksBadge(gh.checks(g.pr.statusCheckRollup));
+        pr = ` · PR #${g.pr.number}${g.pr.isDraft ? ' draft' : ''}${badge ? ` ${badge}` : ''}`;
+      }
+      const withRepo = `${left}  ·  ${g.repo.name}${pr}`;
+      if (withRepo.length + counts.length + 4 <= this.termCols) left = withRepo;
+    }
     const room = this.termCols - left.length - counts.length - 2;
     return this.bar(left + (room > 0 ? ' '.repeat(room) : '  ') + counts);
   }
@@ -212,6 +304,7 @@ class GitUI {
   }
 
   render() {
+    if (this.mode === 'github' || (this.mode === 'prompt' && this.returnMode === 'github')) return this.ghView.render();
     if (this.mode === 'help') return this.renderPager('gitui help', HELP_TEXT_LINES);
     if (this.mode === 'output') return this.renderPager(this.viewTitle, this.view || []);
 
@@ -275,11 +368,13 @@ class GitUI {
   // --- actions --------------------------------------------------------------
 
   askPrompt(label, initial, onDone) {
+    if (this.mode !== 'prompt') this.returnMode = this.mode === 'output' ? 'list' : this.mode;
     this.mode = 'prompt';
     this.prompt = { label, value: initial || '', onDone };
   }
 
   showOutput(title, text) {
+    if (this.mode !== 'output' && this.mode !== 'prompt') this.returnMode = this.mode;
     this.viewTitle = title;
     this.view = String(text).trim().split('\n');
     this.viewTop = 0;
@@ -351,11 +446,14 @@ class GitUI {
 
   askPush() {
     const upstream = git.describeRemote(this.cwd);
-    const target = upstream || 'the default remote';
+    const target = upstream || `origin (publishing ${this.status.branch})`;
     this.askPrompt(`Push to ${target}? (y/n) `, '', (value) => {
       if (!/^y(es)?$/i.test(value.trim())) { this.message = 'push cancelled'; return; }
-      const res = git.push(this.cwd);
+      const res = upstream || !this.status.branch
+        ? git.push(this.cwd)
+        : git.push(this.cwd, ['-u', 'origin', this.status.branch]);
       this.showOutput(res.ok ? 'pushed' : 'push failed', `${res.stdout}\n${res.stderr}` || 'no output');
+      this.refreshGitHub(true);
       this.refresh();
     });
   }
@@ -365,13 +463,13 @@ class GitUI {
   handlePrompt(key) {
     const p = this.prompt;
     if (key.name === 'return') {
-      this.mode = 'list';
+      this.mode = this.returnMode;
       this.prompt = null;
       p.onDone(p.value);
       return;
     }
     if ((key.ctrl && key.name === 'c') || key.name === 'escape') {
-      this.mode = 'list';
+      this.mode = this.returnMode;
       this.prompt = null;
       this.message = 'cancelled';
       return;
@@ -385,7 +483,7 @@ class GitUI {
     if (key.name === 'down') { this.viewTop++; return; }
     if (key.name === 'pageup') { this.viewTop = Math.max(0, this.viewTop - (this.termRows - 3)); return; }
     if (key.name === 'pagedown') { this.viewTop += this.termRows - 3; return; }
-    this.mode = 'list';
+    this.mode = this.returnMode === 'github' ? 'github' : 'list';
     this.view = null;
   }
 
@@ -397,6 +495,11 @@ class GitUI {
   handleKey(key) {
     if (key.name === 'eof') { this.done = true; return; }
     if (this.mode === 'prompt') return this.handlePrompt(key);
+    if (this.mode === 'github') {
+      this.message = '';
+      if (this.ghView.handleKey(key)) { this.mode = 'list'; this.output.write('\x1b[2J'); }
+      return;
+    }
     if (this.mode === 'help' || this.mode === 'output') return this.handlePager(key);
 
     this.message = '';
@@ -434,7 +537,10 @@ class GitUI {
       case 'U': this.unstageAll(); break;
       case 'd': this.askDiscard(); break;
       case 'c': this.askCommit(); break;
-      case 'r': this.refresh(); this.message = 'refreshed'; break;
+      case 'r': this.refresh(); this.refreshGitHub(true); this.message = 'refreshed'; break;
+      case 'G': this.openGitHubView(); break;
+      case 'P': this.createPullRequest(); break;
+      case 'O': this.openOnGitHub(); break;
       case '?': this.mode = 'help'; this.viewTop = 0; break;
       case 'q': this.done = true; break;
       default: break;
@@ -459,10 +565,13 @@ class GitUI {
     const reader = new KeyReader(0);
     this.refresh();
     this.render();
+    if (this.refreshGitHub(true)) this.render();
     while (!this.done) {
       const key = reader.next(POLL_MS);
       if (key.name === 'timeout') {
-        if (this.poll()) this.render();
+        const changed = this.poll();
+        const ghChanged = this.mode === 'list' && this.refreshGitHub();
+        if (changed || ghChanged) this.render();
         continue;
       }
       this.handleKey(key);

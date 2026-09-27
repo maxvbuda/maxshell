@@ -458,6 +458,32 @@ until you unstage it.
 Status is re-read every couple of seconds, so a commit or checkout you make in
 another terminal shows up on its own.
 
+### GitHub
+
+gitui talks to GitHub through the [GitHub CLI](https://cli.github.com) (`gh`),
+so there's nothing to configure beyond signing in once with `gh auth login`.
+
+The title bar shows the repository and **this branch's pull request with its
+checks** — `maxvbuda/maxshell · PR #12 ✓ 3`, or `✗ 1/3` when something fails.
+
+| Key | Action |
+|---|---|
+| `G` | the GitHub screen: **Pull requests**, **Issues** and **Actions** runs in tabs |
+| `P` | open a pull request for this branch — publishes the branch first if GitHub hasn't seen it, and suggests the last commit as the title |
+| `O` | open this branch's pull request (or the repository) in your browser |
+
+On the GitHub screen, `←` `→` switch tabs and `↑` `↓` select. `Enter` shows the
+details — a pull request's description, size, review state, every check and
+the comments; a run's jobs — and `o` opens it in the browser. `n` creates a
+pull request or an issue, `c` checks a pull request out locally, and `m`
+squash-merges one and deletes its branch. Merging changes the shared
+repository, so it asks you to **type `merge`**, and warns when checks are
+failing or still running.
+
+`^T` now also publishes a branch that has never been pushed (`git push -u
+origin <branch>`) instead of failing. Without `gh`, or without signing in,
+gitui works exactly as before and tells you what's missing.
+
 ## view, files and top
 
 Three more full-screen tools, sharing the editor's highlighting and terminal
@@ -711,6 +737,8 @@ src/ls.js           The modern ls: grid, long view, tree, git status
 src/top.js          top: ps parsing, process table, screen
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
+src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks
+src/githubview.js   gitui's GitHub screen
 examples/demo.mxsh  A tour of the language
 test/run.js         Language test suite
 test/interactive.js Line editor, highlighter and prompt test suite
@@ -720,6 +748,7 @@ test/tools.js       Languages, view, files and top test suite
 test/features.js    History search, did-you-mean, j/back/forward, alerts
 test/look.js        Themes, logo, banner and the two-line prompt
 test/modern.js      Completion menu, context-aware prompt, ls
+test/github.js      gitui's GitHub support, against a fake gh
 ```
 
 ## Differences from zsh
