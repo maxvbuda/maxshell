@@ -11,7 +11,7 @@ const { LineEditor } = require('../src/lineeditor');
 const { highlight } = require('../src/highlight');
 const { completions } = require('../src/complete');
 const {
-  leftPrompt, rightPrompt, expandPrompt, usesDefaultPrompt, promptParts, compactPrompt,
+  leftPrompt, rightPrompt, expandPrompt, usesDefaultPrompt, promptParts, compactPrompt, terminalTitle,
 } = require('../src/prompt');
 const theme = require('../src/theme');
 const { banner: logoBanner } = require('../src/banner');
@@ -129,6 +129,7 @@ async function runEditorRepl(shell) {
     // The signature prompt draws its information line first, then reads on
     // the short line below it. A custom PROMPT keeps the one-line behaviour.
     const twoLine = !buffer && usesDefaultPrompt(shell);
+    if (!buffer) process.stdout.write(terminalTitle(shell));
     let prompt;
     let rprompt;
     if (twoLine) {

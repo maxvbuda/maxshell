@@ -40,20 +40,24 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.9.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.12.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
 ### The prompt
 
-The default prompt is two lines: a framed information line, then a short
-input line whose `❯` turns the theme's error colour when the last command
-failed.
+The default prompt is two lines: a framed information line, then an input
+line that names the folder you're in, with a `❯` that turns the theme's error
+colour when the last command failed.
 
 ```
-╭─ ~/maxshell · main !?                          📦 v0.9.0 · ⬢ 25.1.0 · 12:04
-╰─❯ git status
+╭─ ~/maxshell · main !?                         📦 v0.12.0 · ⬢ 25.1.0 · 12:04
+╰─ maxshell ❯ git status
 ```
+
+maxshell also tells the terminal where you are, so the window or tab title
+shows the folder, and a new tab (⌘T) opens in the same folder, as it does
+with zsh.
 
 The right side is **context-aware**, like Starship: it shows a tool's version
 only inside projects that use it — ⬢ Node (and the 📦 package version) where
@@ -63,8 +67,9 @@ Outside any project it's just the time. Long paths shorten fish-style
 (`~/p/w/src`) so the right side keeps its room, and if the window is narrow the
 modules give way before the time does.
 
-Once you press Enter the prompt **collapses to a single line**, so scrollback
-reads as a clean list of what you ran rather than a wall of frames:
+Once you press Enter the prompt **collapses to a single line** (long paths
+shortened), so scrollback reads as a clean list of what you ran rather than a
+wall of frames:
 
 ```
 ~/maxshell ❯ git status

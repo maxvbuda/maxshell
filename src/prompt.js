@@ -142,9 +142,23 @@ function promptParts(shell, cols = 80) {
   if (right && lw + rw + 2 <= room) header += ' '.repeat(room - lw - rw) + right;
   else if (lw > room) header = ansi.strip(left).slice(0, room);
 
+  // The input line names the folder you're in, right where you type, so a
+  // cd is visible at a glance even without reading the frame above.
   const failed = shell.status !== 0 && shell.status !== 130;
-  const input = `${frame}╰─${R}${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
+  const here = folderName(shell.cwd, home, Math.max(8, Math.floor(cols / 3)));
+  const input = `${frame}╰─${R} ${ansi.bold()}${ansi.fg(p.path)}${here}${R} ${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
   return { header, input };
+}
+
+// The last part of the folder: "~" at home, "/" at the root, otherwise its
+// name, shortened in the middle when it is very long.
+function folderName(cwd, home, maxW = 30) {
+  if (home && cwd === home) return '~';
+  const name = path.basename(cwd) || '/';
+  if (textWidth(name) <= maxW) return name;
+  const keep = Math.max(1, maxW - 1);
+  const head = Math.ceil(keep / 2);
+  return `${name.slice(0, head)}…${name.slice(name.length - (keep - head))}`;
 }
 
 // Abbreviates every folder but the last to its first letter (keeping a
@@ -167,10 +181,21 @@ function compactPrompt(shell, line, paint = (x) => x) {
   const p = theme.current().prompt;
   const R = ansi.reset();
   const home = shell.getVar('HOME') || os.homedir();
-  return `${ansi.fg(p.right)}${shortCwd(shell.cwd, home)}${R} ${ansi.fg(p.char)}❯${R} ${paint(line)}`;
+  const where = shortenPath(shortCwd(shell.cwd, home), 40);
+  return `${ansi.fg(p.right)}${where}${R} ${ansi.fg(p.char)}❯${R} ${paint(line)}`;
+}
+
+// Tells the terminal where we are: OSC 7 (so a new tab or window opens in
+// the same folder, as with zsh on macOS) and the window title.
+function terminalTitle(shell) {
+  const home = shell.getVar('HOME') || os.homedir();
+  const host = os.hostname();
+  const url = `file://${host}${encodeURI(shell.cwd).replace(/#/g, '%23').replace(/\?/g, '%3F')}`;
+  const title = shortCwd(shell.cwd, home).replace(/[\x00-\x1f\x7f]/g, '');
+  return `\x1b]7;${url}\x07\x1b]0;${title}\x07`;
 }
 
 module.exports = {
   expandPrompt, leftPrompt, rightPrompt, gitSegment, shortCwd, DEFAULT_PROMPT, DEFAULT_RPROMPT,
-  usesDefaultPrompt, promptParts, compactPrompt, shortenPath,
+  usesDefaultPrompt, promptParts, compactPrompt, shortenPath, folderName, terminalTitle,
 };
