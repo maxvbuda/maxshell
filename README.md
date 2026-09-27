@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.16.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.17.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.16.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.17.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -743,7 +743,10 @@ maxshell ❯ git st
   `rebase` you get your **branches**
 - `npm run` lists **this project's scripts** with what each one runs
 - `cd`, `j` and `files` offer only folders; `theme` offers the themes
-- files show their icon, kind and size
+- files show their icon, kind and size, and names with spaces or quotes go
+  in escaped (or inside the quote you opened)
+- `$` completes variable names, showing their values; `%` after `fg` / `kill`
+  completes jobs; the word after `sudo`, `time`, `env` or `xargs` is a command
 
 `Tab` / `↓` and `Shift-Tab` / `↑` move — the line previews the highlighted
 choice as you go — `Enter` or `→` picks (without running anything), typing
@@ -784,8 +787,9 @@ it last ran in (`•` marks this one) and when.
 | `Tab` / `→` | put it on the line to edit first |
 | `Esc` / `Ctrl-G` | cancel, restoring what you had typed |
 
-History now records the folder and time of each command. Existing history
-files keep working.
+History records the folder and time of each command, and keeps multi-line
+commands (loops, here-documents, pastes) whole. Existing history files keep
+working.
 
 ### Did you mean …?
 

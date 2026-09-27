@@ -8,6 +8,9 @@ const path = require('path');
 // per line; old plain-text lines still load.
 //
 //   <ms since epoch> TAB <cwd> TAB <command>
+//
+// A command spanning several lines (a loop, a here-document, a paste) is
+// kept whole: written as \x1e followed by its JSON string.
 
 class History {
   constructor() {
@@ -16,7 +19,11 @@ class History {
 
   static parse(line) {
     const m = /^(\d{12,})\t([^\t]*)\t(.*)$/.exec(line);
-    if (m) return { ts: Number(m[1]), cwd: m[2] || null, cmd: m[3] };
+    if (m) {
+      let cmd = m[3];
+      if (cmd.startsWith('\x1e')) { try { cmd = JSON.parse(cmd.slice(1)); } catch { /* keep as is */ } }
+      return { ts: Number(m[1]), cwd: m[2] || null, cmd };
+    }
     return { ts: 0, cwd: null, cmd: line };
   }
 
@@ -33,12 +40,15 @@ class History {
   save(file, limit = 5000) {
     // Entries with no time or folder (from old plain files) stay plain.
     const body = this.entries.slice(-limit)
-      .map((e) => (e.ts || e.cwd ? `${e.ts || 0}\t${e.cwd || ''}\t${e.cmd}` : e.cmd)).join('\n');
+      .map((e) => {
+        const cmd = e.cmd.includes('\n') ? `\x1e${JSON.stringify(e.cmd)}` : e.cmd;
+        return e.ts || e.cwd || cmd !== e.cmd ? `${e.ts || 1e12}\t${e.cwd || ''}\t${cmd}` : cmd;
+      }).join('\n');
     fs.writeFileSync(file, `${body}\n`);
   }
 
   add(cmd, cwd, ts = Date.now()) {
-    const text = cmd.replace(/\n/g, '; ').trim();
+    const text = cmd.trim();
     if (!text) return false;
     const last = this.entries[this.entries.length - 1];
     if (last && last.cmd === text && last.cwd === cwd) { last.ts = ts; return false; }

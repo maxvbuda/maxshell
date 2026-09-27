@@ -51,7 +51,8 @@ const at = (line, sh) => completions(line, line.length, sh);
 test('commands come with icons and descriptions', () => {
   const r = at('ec', shellIn(process.cwd()));
   assert.ok(r.items.includes('echo'));
-  assert.deepStrictEqual(r.info.get('echo'), { icon: '◆', desc: 'print text' });
+  const { icon, desc } = r.info.get('echo');
+  assert.deepStrictEqual({ icon, desc }, { icon: '◆', desc: 'print text' });
 });
 
 test('git subcommands are explained', () => {
@@ -110,6 +111,22 @@ function menuEditor(cwd) {
   const type = (text) => { for (const ch of text) input.emit('keypress', ch, { name: ch }); };
   return { ed, promise, key, type, output };
 }
+
+test('completion reads quotes and escapes, and inserts names safely', () => {
+  const dir = tmp();
+  fs.mkdirSync(path.join(dir, 'My Folder'));
+  fs.writeFileSync(path.join(dir, 'My Folder', 'a b.txt'), '');
+  fs.writeFileSync(path.join(dir, "it's.md"), '');
+  const sh = shellIn(dir);
+  assert.deepStrictEqual(completions('cat My', 6, sh).items, ['My\\ Folder/']);
+  assert.deepStrictEqual(completions('cat My\\ F', 10, sh).items, ['My\\ Folder/']);
+  assert.deepStrictEqual(completions('cat "My Folder/a', 16, sh).items, ['"My Folder/a b.txt"']);
+  assert.deepStrictEqual(completions('cat it', 6, sh).items, ["it\\'s.md"]);
+  assert.strictEqual(completions('cat My', 6, sh).info.get('My\\ Folder/').label, 'My Folder/');
+  sh.run('myvar=1');
+  assert.deepStrictEqual(completions('echo ${myv', 10, sh).items, ['${myvar}']);
+  assert.ok(completions('sudo gi', 7, sh).items.includes('git'), 'the word after sudo is a command');
+});
 
 test('Tab opens a menu when there are several choices', () => {
   const { ed, key, type } = menuEditor(process.cwd());

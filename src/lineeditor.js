@@ -434,7 +434,8 @@ class LineEditor {
     if (m.index < m.top) m.top = m.index;
     if (m.index >= m.top + maxRows) m.top = m.index - maxRows + 1;
     const shown = m.items.slice(m.top, m.top + maxRows);
-    const nameW = Math.min(Math.max(...shown.map((i) => textWidth(i))), Math.floor(width * 0.45));
+    const labelOf = (i) => (m.info.get(i) || {}).label ?? i;
+    const nameW = Math.min(Math.max(...shown.map((i) => textWidth(labelOf(i)))), Math.floor(width * 0.45));
     const R = ansi.reset();
 
     const lines = shown.map((item, i) => {
@@ -442,7 +443,7 @@ class LineEditor {
       let icon = meta.icon || ' ';
       if (textWidth(icon) < 2) icon += ' ';
       const selected = m.top + i === m.index;
-      const head = ` ${icon} ${fit(item, nameW)}  `;
+      const head = ` ${icon} ${fit(meta.label ?? item, nameW)}  `;
       const descW = Math.max(0, width - textWidth(head));
       const desc = meta.desc ? fit(meta.desc, descW) : ' '.repeat(descW);
       if (selected) {
@@ -750,7 +751,7 @@ class LineEditor {
     out += '\r\x1b[J';
 
     const current = s.rows[s.index];
-    const shown = current ? current.cmd : '';
+    const shown = current ? current.cmd.replace(/\n/g, '↵') : '';
     const promptW = ansi.width(this.prompt);
     const room = Math.max(0, width - promptW);
     const clipped = [...shown].slice(0, room).join('');
@@ -772,7 +773,7 @@ class LineEditor {
       const selected = top + i === s.index;
       const meta = `${row.lastCwd ? path.basename(row.lastCwd) : ''}${row.here ? ' •' : ''}  ${ago(row.lastTs)}`.trim();
       const cmdRoom = Math.max(4, width - 2 - meta.length - 2);
-      const chars = [...row.cmd];
+      const chars = [...row.cmd.replace(/\n/g, '↵')];
       let text = '';
       for (let c = 0; c < Math.min(chars.length, cmdRoom); c++) {
         const hit = row.positions && row.positions.has(c);

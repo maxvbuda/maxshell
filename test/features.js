@@ -98,6 +98,16 @@ test('history files round-trip, and old plain lines still load', () => {
   ]);
 });
 
+test('multi-line commands survive the history file whole', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mxhist-')), 'h');
+  const h = new History();
+  h.add('for x in a b\ndo\n  echo $x\ndone', '/tmp', 1790000000000);
+  h.add('echo one', '/tmp', 1790000000001);
+  h.save(file);
+  const back = new History().load(file);
+  assert.deepStrictEqual(back.commands(), ['for x in a b\ndo\n  echo $x\ndone', 'echo one']);
+});
+
 test('repeating the last command in the same folder is not stored twice', () => {
   const h = new History();
   assert.strictEqual(h.add('ls', '/a', 1), true);

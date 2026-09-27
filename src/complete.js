@@ -115,34 +115,109 @@ function currentWords(before) {
   return seg.trim() ? seg.trim().split(/\s+/) : [];
 }
 
+// Where the word under the cursor starts, reading quotes and backslashes
+// the way the shell does, and whether it's inside an open quote.
+function wordAtCursor(upto) {
+  let start = 0;
+  let q = null;
+  for (let i = 0; i < upto.length; i++) {
+    const c = upto[i];
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (q === '"') {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') q = null;
+      continue;
+    }
+    if (c === '\\') { i++; continue; }
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (/\s/.test(c) || '|;&()<>'.includes(c)) start = i + 1;
+  }
+  const raw = upto.slice(start);
+  // What the word means once its quotes and escapes are taken away.
+  let value = '';
+  let quote = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote === "'") { if (c === "'") quote = null; else value += c; continue; }
+    if (quote === '"') {
+      if (c === '\\' && i + 1 < raw.length && '"\\$`'.includes(raw[i + 1])) { value += raw[++i]; continue; }
+      if (c === '"') quote = null; else value += c;
+      continue;
+    }
+    if (c === '\\') { if (i + 1 < raw.length) value += raw[++i]; continue; }
+    if (c === "'" || c === '"') { quote = c; continue; }
+    value += c;
+  }
+  return { start, raw, value, quote: q };
+}
+
+const SPECIAL = /[\s'"\\$`&|;<>()*?[\]{}!#]/g;
+
+// How a completed word goes back on the line: escaped when bare, or kept in
+// the quotes you opened (closed again once a file name is complete).
+function quoteFor(text, quote, finished) {
+  if (quote === "'") return `'${text.replace(/'/g, "'\\''")}${finished ? "'" : ''}`;
+  if (quote === '"') return `"${text.replace(/["\\$`]/g, '\\$&')}${finished ? '"' : ''}`;
+  const tilde = /^~(?=\/|$)/.test(text) ? '~' : '';
+  return tilde + text.slice(tilde.length).replace(SPECIAL, '\\$&');
+}
+
+const AFTER_PREFIX = new Set(['sudo', 'time', 'command', 'builtin', 'exec', 'nohup', 'noglob', 'env', 'xargs', 'watch', 'nice', 'which', 'type', 'whence', 'man']);
+
 // Completions for the word ending at `cursor`: the candidates, the partial
 // word they replace, and for each an icon and a short description.
 function completions(line, cursor, shell) {
   const upto = line.slice(0, cursor);
-  const match = /(\S*)$/.exec(upto);
-  const partial = match ? match[1] : '';
-  const before = upto.slice(0, upto.length - partial.length);
-  const isCommandSlot = /(^|[|&;(]|\b(?:do|then|else|elif)\s)\s*$/.test(before);
+  const word = wordAtCursor(upto);
+  const partial = word.raw;
+  const want = word.value;
+  const before = upto.slice(0, word.start);
   const words = currentWords(before);
   const cmd = words[0];
   const argIndex = words.length;
+  const isCommandSlot = /(^|[|&;(]|\b(?:do|then|else|elif)\s)\s*$/.test(before)
+    || (argIndex === 1 && AFTER_PREFIX.has(cmd) && !want.startsWith('-'));
 
+  // Candidates are plain values; they're quoted for the line at the end.
   const info = new Map();
-  const add = (item, icon, desc) => { if (!info.has(item)) info.set(item, { icon, desc }); };
+  const add = (value, icon, desc, finished = true) => {
+    if (!info.has(value)) info.set(value, { icon, desc, finished });
+  };
   const finish = () => {
-    const items = [...info.keys()].filter((c) => c.startsWith(partial)).sort((a, b) => a.localeCompare(b));
-    return { items, partial, info };
+    const values = [...info.keys()].filter((c) => c.startsWith(want)).sort((a, b) => a.localeCompare(b));
+    const out = new Map();
+    for (const v of values) {
+      const meta = info.get(v);
+      const text = meta.raw ? v : quoteFor(v, word.quote, meta.finished);
+      out.set(text, { ...meta, label: v });
+    }
+    return { items: [...out.keys()], partial, info: out };
   };
 
-  if (isCommandSlot && !partial.includes('/')) {
+  // $name and ${name
+  const dollar = /^(\$\{?)([A-Za-z_][A-Za-z0-9_]*)?$/.exec(want);
+  if (dollar && partial.startsWith('$')) {
+    const names = new Set([...Object.keys(shell.env), ...shell.scopes.flatMap((sc) => [...sc.keys()])]);
+    const brace = dollar[1] === '${';
+    for (const n of names) {
+      const entry = shell.findEntry(n);
+      const v = entry ? entry.value : shell.env[n];
+      const shown = Array.isArray(v) ? `(${v.join(' ')})` : v instanceof Map ? `(${[...v.keys()].join(' ')})` : String(v ?? '');
+      info.set(`${dollar[1]}${n}${brace ? '}' : ''}`, { icon: '$', desc: shown.replace(/\s+/g, ' ').slice(0, 60), raw: true });
+    }
+    return finish();
+  }
+
+  if (isCommandSlot && !want.includes('/')) {
     for (const name of Object.keys(BUILTINS)) add(name, '◆', BUILTIN_DESC[name] || 'builtin');
     for (const name of shell.funcs.keys()) add(name, 'ƒ', 'function');
     for (const [name, value] of shell.aliases) add(name, '↪', `alias for ${value}`);
+    if (shell.abbrs) for (const [name, value] of shell.abbrs) add(name, '↪', `abbreviation for ${value}`);
     for (const name of RESERVED) if (/^[a-z]+$/.test(name)) add(name, '•', 'keyword');
     for (const dir of (shell.env.PATH || '').split(':').filter(Boolean)) {
       let names = [];
       try { names = fs.readdirSync(dir); } catch { continue; }
-      for (const name of names) if (name.startsWith(partial)) add(name, '▸', COMMAND_DESC[name] || 'command');
+      for (const name of names) if (name.startsWith(want)) add(name, '▸', COMMAND_DESC[name] || 'command');
     }
     return finish();
   }
@@ -150,6 +225,16 @@ function completions(line, cursor, shell) {
   if (cmd === 'theme' && argIndex === 1) {
     const { THEMES } = require('./theme');
     for (const [name, t] of Object.entries(THEMES)) add(name, '🎨', t.description);
+    return finish();
+  }
+
+  if (['fg', 'bg', 'kill', 'wait', 'disown'].includes(cmd) && want.startsWith('%')) {
+    for (const job of shell.jobs || []) add(`%${job.id}`, '⚙', job.cmd);
+    return finish();
+  }
+
+  if (['setopt', 'unsetopt'].includes(cmd)) {
+    for (const o of ['autocd', 'nullglob', 'globdots', 'shwordsplit', 'globsubst', 'errexit', 'nounset', 'xtrace', 'pipefail', 'noglob', 'nomatch', 'chaselinks', 'ignorebraces']) add(o, '⚑', 'option');
     return finish();
   }
 
@@ -163,7 +248,7 @@ function completions(line, cursor, shell) {
     return finish();
   }
 
-  if (BRANCH_ARGS[cmd] && BRANCH_ARGS[cmd].has(words[1]) && argIndex >= 2 && !partial.startsWith('-')) {
+  if (BRANCH_ARGS[cmd] && BRANCH_ARGS[cmd].has(words[1]) && argIndex >= 2 && !want.startsWith('-')) {
     for (const b of branches(shell.cwd)) add(b, '⎇', b.includes('/') ? 'remote branch' : 'branch');
     // Files still make sense for diff and log.
     if (!['diff', 'log'].includes(words[1])) return finish();
@@ -171,9 +256,9 @@ function completions(line, cursor, shell) {
 
   // Paths, described the way the file browser describes them.
   const dirsOnly = DIR_ONLY.has(cmd);
-  const slash = partial.lastIndexOf('/');
-  const dirPart = slash === -1 ? '' : partial.slice(0, slash + 1);
-  const basePart = slash === -1 ? partial : partial.slice(slash + 1);
+  const slash = want.lastIndexOf('/');
+  const dirPart = slash === -1 ? '' : want.slice(0, slash + 1);
+  const basePart = slash === -1 ? want : want.slice(slash + 1);
   try {
     const home = shell.getVar('HOME') || os.homedir();
     const base = dirPart ? shell.resolve(dirPart.replace(/^~(?=\/|$)/, home)) : shell.cwd;
@@ -187,11 +272,11 @@ function completions(line, cursor, shell) {
       if (dirsOnly && !isDir) continue;
       const d = describe({ name: entry.name, isDir, isLink: entry.isSymbolicLink(), exec: !!st && (st.mode & 0o111) && !isDir, broken: !st });
       const desc = isDir ? 'folder' : `${d.kind} · ${humanBytes(st ? st.size : 0)}`;
-      add(dirPart + entry.name + (isDir ? '/' : ''), d.icon, desc);
+      add(dirPart + entry.name + (isDir ? '/' : ''), d.icon, desc, !isDir);
     }
   } catch { /* not a directory */ }
 
   return finish();
 }
 
-module.exports = { completions, commonPrefix, SUBCOMMANDS, BUILTIN_DESC };
+module.exports = { completions, commonPrefix, wordAtCursor, quoteFor, SUBCOMMANDS, BUILTIN_DESC };
