@@ -6,15 +6,36 @@ const os = require('os');
 const { spawnSync, spawn } = require('child_process');
 
 const { Lexer, ShellError, IncompleteError, lexHeredocParts } = require('./lexer');
-const { Parser } = require('./parser');
+const { Parser, DECLARERS, splitAssignment } = require('./parser');
 const {
   expandWord, expandWords, expandToString, expandToPattern, matchPattern,
 } = require('./expand');
-const { evalArith } = require('./arith');
-const { BUILTINS, testUnary, testBinary } = require('./builtins');
+const { evalArith, evalValue, formatValue } = require('./arith');
+const {
+  BUILTINS, testUnary, testBinary, findInPath,
+} = require('./builtins');
 const {
   BreakSignal, ContinueSignal, ReturnSignal, ExitSignal,
 } = require('./signals');
+
+// A variable's value as one string: arrays join with spaces, and an
+// associative array gives its values.
+function scalarOf(value) {
+  if (Array.isArray(value)) return value.join(' ');
+  if (value instanceof Map) return [...value.values()].join(' ');
+  return value;
+}
+
+// Where we start: $PWD if it names the directory we're in (keeping the
+// path you used, symlinks and all), otherwise the physical path.
+function logicalStart() {
+  const real = process.cwd();
+  const pwd = process.env.PWD;
+  try {
+    if (pwd && path.isAbsolute(pwd) && fs.realpathSync(pwd) === fs.realpathSync(real)) return pwd;
+  } catch { /* fall through */ }
+  return real;
+}
 
 const TERM_IN = { kind: 'term', which: 'in' };
 const TERM_OUT = { kind: 'term', which: 'out' };
@@ -27,11 +48,13 @@ class Shell {
     this.interactive = !!opts.interactive;
 
     this.env = { ...process.env };
-    this.cwd = opts.cwd || process.cwd();
+    this.cwd = opts.cwd || logicalStart();
     this.vars = new Map();
     this.scopes = [this.vars];
     this.funcs = new Map();
     this.aliases = new Map();
+    this.galiases = new Map();
+    this.saliases = new Map();
     this.options = new Set();
     this.positional = opts.positional || [];
     this.scriptName = opts.name || 'maxshell';
@@ -47,6 +70,11 @@ class Shell {
     this.startTime = Date.now();
     this.condDepth = 0;
     this.curIo = null;
+    this.traps = new Map();
+    this.funcDepth = 0;
+    this.loopDepth = 0;
+    this.substStatus = null;
+    if (this.interactive) this.options.add('autocd');
 
     this._outBuf = '';
     this._errBuf = '';
@@ -72,37 +100,60 @@ class Shell {
       case '$': return String(process.pid);
       case '!': return this.lastBgPid === null ? '' : String(this.lastBgPid);
       case '0': return this.scriptName;
-      case '-': return [...this.options].join('');
+      case '-': return [...this.options].filter((o) => o.length === 1).join('');
       case '@': case '*': return this.positional.join(' ');
       case 'RANDOM': return String(Math.floor(Math.random() * 32768));
       case 'SECONDS': return String(Math.floor((Date.now() - this.startTime) / 1000));
+      case 'EPOCHSECONDS': return String(Math.floor(Date.now() / 1000));
+      case 'EPOCHREALTIME': return (Date.now() / 1000).toFixed(6);
+      case 'PPID': return String(process.ppid);
+      case 'UID': return String(process.getuid ? process.getuid() : 0);
+      case 'SHLVL': return this.env.SHLVL;
       default: break;
     }
     if (/^[1-9][0-9]*$/.test(name)) return this.positional[Number(name) - 1];
 
     const entry = this.findEntry(name);
-    if (entry) return Array.isArray(entry.value) ? entry.value.join(' ') : entry.value;
+    if (entry) return scalarOf(entry.value);
     return this.env[name];
   }
 
   getArray(name) {
     const entry = this.findEntry(name);
-    return entry && Array.isArray(entry.value) ? entry.value : null;
+    if (!entry) return null;
+    if (Array.isArray(entry.value)) return entry.value;
+    if (entry.value instanceof Map) return [...entry.value.values()];
+    return null;
   }
 
+  // Assigns, honouring attributes: readonly refuses, integer evaluates,
+  // lower/upper case convert. Arrays and Maps are stored as they are.
   setVar(name, value) {
     for (let i = this.scopes.length - 1; i >= 0; i--) {
       const scope = this.scopes[i];
       if (scope.has(name)) {
         const entry = scope.get(name);
-        entry.value = value;
-        if (entry.exported) this.env[name] = Array.isArray(value) ? value.join(' ') : value;
+        entry.value = this.coerce(name, entry, value);
+        if (entry.exported) this.env[name] = scalarOf(entry.value);
         return;
       }
     }
-    const exported = Object.prototype.hasOwnProperty.call(this.env, name);
+    const exported = Object.prototype.hasOwnProperty.call(this.env, name) || this.options.has('allexport');
     this.vars.set(name, { value, exported });
-    if (exported) this.env[name] = Array.isArray(value) ? value.join(' ') : value;
+    if (exported) this.env[name] = scalarOf(value);
+  }
+
+  coerce(name, entry, value) {
+    if (entry.readonly) throw new ShellError(`read-only variable: ${name}`);
+    if (typeof value !== 'string') return value;
+    if (entry.integer) {
+      const n = evalValue(value || '0', this);
+      return (typeof n === 'bigint' ? n : BigInt.asIntN(64, BigInt(Math.trunc(n)))).toString();
+    }
+    if (entry.float) return formatValue(Number(evalValue(value || '0', this)));
+    if (entry.lower) return value.toLowerCase();
+    if (entry.upper) return value.toUpperCase();
+    return value;
   }
 
   setArray(name, values) {
@@ -110,6 +161,8 @@ class Shell {
   }
 
   unsetVar(name) {
+    const entry = this.findEntry(name);
+    if (entry && entry.readonly) throw new ShellError(`read-only variable: ${name}`);
     for (const scope of this.scopes) scope.delete(name);
     delete this.env[name];
   }
@@ -118,7 +171,7 @@ class Shell {
     const entry = this.findEntry(name);
     if (entry) {
       entry.exported = true;
-      this.env[name] = Array.isArray(entry.value) ? entry.value.join(' ') : entry.value;
+      this.env[name] = scalarOf(entry.value);
       return;
     }
     const existing = this.env[name] ?? '';
@@ -132,26 +185,34 @@ class Shell {
 
   // Changes directory. Every move is remembered for `back` / `forward`;
   // those pass { record: false } so walking the history doesn't rewrite it.
-  setCwd(dir, { record = true } = {}) {
+  // Directories are tracked logically, as in zsh: `cd /tmp` shows /tmp
+  // even though it's a symlink, and `cd ..` goes back the way you came.
+  setCwd(dir, { record = true, physical = false } = {}) {
     const home = this.getVar('HOME') || os.homedir();
-    const target = this.resolve(dir.replace(/^~(?=$|\/)/, home));
+    const expanded = dir.replace(/^~(?=$|\/)/, home);
+    let target = path.isAbsolute(expanded) ? path.normalize(expanded) : path.normalize(path.join(this.cwd, expanded));
+    if (target.length > 1) target = target.replace(/\/+$/, '');
     const st = fs.statSync(target);
     if (!st.isDirectory()) {
       const e = new Error('not a directory');
       e.code = 'ENOTDIR';
       throw e;
     }
-    const real = fs.realpathSync(target);
-    if (record && real !== this.cwd) {
+    fs.accessSync(target, fs.constants.X_OK);
+    if (physical || this.options.has('chaselinks')) target = fs.realpathSync(target);
+    if (record && target !== this.cwd) {
       this.dirBack.push(this.cwd);
       if (this.dirBack.length > 100) this.dirBack.shift();
       this.dirForward = [];
     }
     this.env.OLDPWD = this.cwd;
     this.setVar('OLDPWD', this.cwd);
-    this.cwd = real;
-    this.env.PWD = real;
-    this.setVar('PWD', real);
+    this.cwd = target;
+    this.env.PWD = target;
+    this.setVar('PWD', target);
+    if (this.funcs.has('chpwd')) {
+      try { this.dispatch('chpwd', ['chpwd'], this.curIo || this.defaultIo()); } catch (e) { if (!(e instanceof ReturnSignal)) throw e; }
+    }
   }
 
   // --- io -------------------------------------------------------------------
@@ -250,14 +311,61 @@ class Shell {
       return this.runSource(src, this.defaultIo());
     } catch (e) {
       if (e instanceof ExitSignal) { this.exited = true; return this.setStatus(e.status); }
+      // return outside a function ends the script, like zsh.
+      if (e instanceof ReturnSignal) return this.setStatus(e.status);
+      if (e instanceof BreakSignal || e instanceof ContinueSignal) {
+        this.writeStderr(`maxshell: ${e instanceof BreakSignal ? 'break' : 'continue'}: not in a loop\n`);
+        return this.setStatus(1);
+      }
       throw e;
     } finally {
       this.flush();
     }
   }
 
+  // Runs the EXIT trap, once, when the shell or script is finishing.
+  runExitTrap() {
+    const code = this.traps.get('EXIT');
+    if (!code) return;
+    this.traps.delete('EXIT');
+    const status = this.status;
+    try { this.run(code); } catch { /* the trap's own errors don't matter now */ }
+    this.status = status;
+  }
+
+  // Runs the trap for a signal (INT, TERM, …) if one is set.
+  runTrap(sig) {
+    const code = this.traps.get(sig);
+    if (!code) return false;
+    const status = this.status;
+    try { this.run(code); } catch (e) { if (!(e instanceof ShellError)) throw e; }
+    this.status = status;
+    return true;
+  }
+
+  // Checks first that the input is complete (so the REPL knows to keep
+  // reading), then parses and runs one command at a time, as zsh does: an
+  // alias defined on one line applies to the next, and a syntax error is
+  // reported when it's reached.
   runSource(src, io) {
-    return this.exec(new Parser(src).parseProgram(), io || this.defaultIo());
+    const aliases = { aliases: this.aliases, galiases: this.galiases, saliases: this.saliases };
+    try {
+      new Parser(src, { aliases }).parseProgram();
+    } catch (e) {
+      if (e instanceof IncompleteError) throw e;
+    }
+    const parser = new Parser(src, { aliases });
+    let status = this.status;
+    for (;;) {
+      const item = parser.parseNextItem();
+      if (!item) break;
+      status = this.exec(item, io || this.defaultIo());
+    }
+    return status;
+  }
+
+  parse(src) {
+    return new Parser(src, { aliases: { aliases: this.aliases, galiases: this.galiases, saliases: this.saliases } }).parseProgram();
   }
 
   captureOutput(src) {
@@ -268,11 +376,45 @@ class Shell {
       stderr: this.curIo ? this.curIo.stderr : TERM_ERR,
     };
     try {
-      this.exec(new Parser(src).parseProgram(), io);
+      this.exec(this.parse(src), io);
     } catch (e) {
       if (!(e instanceof ExitSignal)) throw e;
+      this.status = e.status;
     }
+    this.substStatus = this.status;
     return sink.chunks.join('');
+  }
+
+  // <(cmd) and =(cmd) run cmd now and hand over a file holding its output;
+  // >(cmd) hands over a file and feeds what was written to cmd afterwards.
+  // (Pipelines here are buffered, so a file stands in for a pipe.)
+  processSubstitution(p) {
+    if (!this.procDir) this.procDir = fs.mkdtempSync(path.join(os.tmpdir(), 'maxshell-'));
+    this.procCount = (this.procCount || 0) + 1;
+    const file = path.join(this.procDir, `sub${this.procCount}`);
+    if (p.dir === '>') {
+      fs.writeFileSync(file, '');
+      (this.pendingOutSubs || (this.pendingOutSubs = [])).push({ file, src: p.src });
+    } else {
+      fs.writeFileSync(file, this.captureOutput(p.src));
+    }
+    (this.procFiles || (this.procFiles = [])).push(file);
+    return file;
+  }
+
+  // After a command: run any >(cmd) with what was written, then tidy up.
+  finishProcessSubstitutions(io) {
+    const pending = this.pendingOutSubs || [];
+    this.pendingOutSubs = [];
+    for (const { file, src } of pending) {
+      let data = '';
+      try { data = fs.readFileSync(file, 'utf8'); } catch { /* gone */ }
+      const status = this.status;
+      this.exec(this.parse(src), { stdin: { kind: 'string', data, pos: 0 }, stdout: io.stdout, stderr: io.stderr });
+      this.status = status;
+    }
+    for (const f of this.procFiles || []) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
+    this.procFiles = [];
   }
 
   setStatus(n) {
@@ -296,7 +438,13 @@ class Shell {
     let status = this.status;
     for (const item of node.items) {
       status = item.sep === '&' ? this.execBackground(item.node, io) : this.exec(item.node, io);
-      if (this.options.has('e') && status !== 0 && this.condDepth === 0) throw new ExitSignal(status);
+      if (status !== 0 && this.condDepth === 0) {
+        if (this.traps.has('ERR') && !this.inErrTrap) {
+          this.inErrTrap = true;
+          try { this.runTrap('ERR'); } finally { this.inErrTrap = false; }
+        }
+        if (this.options.has('e')) throw new ExitSignal(status);
+      }
     }
     return status;
   }
@@ -346,7 +494,7 @@ class Shell {
       : null;
 
     if (single && single.type === 'Simple' && !single.redirects.length) {
-      const argv = this.expandAliases(expandWords(this, single.words));
+      const argv = expandWords(this, single.words);
       if (argv.length && !this.funcs.has(argv[0]) && !BUILTINS[argv[0]]) {
         try {
           const child = spawn(argv[0], argv.slice(1), {
@@ -364,15 +512,24 @@ class Shell {
   }
 
   execRedirected(node, io) {
-    const { io: rio, opened } = this.applyRedirects(node.redirects, io);
+    // The outermost command owns any <(…) >(…) files made while running it.
+    const outer = !this.inCommand;
+    this.inCommand = true;
+    let opened = [];
     const saved = this.curIo;
-    this.curIo = rio;
     try {
-      return this.execNode(node, rio);
+      const applied = this.applyRedirects(node.redirects, io);
+      opened = applied.opened;
+      this.curIo = applied.io;
+      return this.execNode(node, applied.io);
     } finally {
       this.curIo = saved;
       for (const fd of opened) {
         try { fs.closeSync(fd); } catch { /* already closed */ }
+      }
+      if (outer) {
+        this.inCommand = false;
+        if ((this.procFiles && this.procFiles.length) || (this.pendingOutSubs && this.pendingOutSubs.length)) this.finishProcessSubstitutions(io);
       }
     }
   }
@@ -381,10 +538,22 @@ class Shell {
     switch (node.type) {
       case 'Simple': return this.execSimple(node, io);
       case 'Group': return this.exec(node.body, io);
+      case 'Always': {
+        let status;
+        try {
+          status = this.exec(node.body, io);
+        } finally {
+          const saved = this.status;
+          this.exec(node.always, io);
+          this.status = saved;
+        }
+        return this.setStatus(status);
+      }
       case 'Subshell': return this.execSubshell(node, io);
       case 'If': return this.execIf(node, io);
       case 'While': return this.execWhile(node, io);
       case 'For': return this.execFor(node, io);
+      case 'Select': return this.execSelect(node, io);
       case 'ForArith': return this.execForArith(node, io);
       case 'Repeat': return this.execRepeat(node, io);
       case 'Case': return this.execCase(node, io);
@@ -404,13 +573,18 @@ class Shell {
 
   snapshot() {
     return {
-      vars: new Map([...this.vars].map(([k, v]) => [k, { ...v }])),
+      vars: new Map([...this.vars].map(([k, v]) => [k, {
+        ...v, value: Array.isArray(v.value) ? v.value.slice() : v.value instanceof Map ? new Map(v.value) : v.value,
+      }])),
       env: { ...this.env },
       cwd: this.cwd,
       funcs: new Map(this.funcs),
       aliases: new Map(this.aliases),
+      galiases: new Map(this.galiases),
+      saliases: new Map(this.saliases),
       positional: this.positional.slice(),
       options: new Set(this.options),
+      traps: new Map(this.traps),
     };
   }
 
@@ -421,8 +595,11 @@ class Shell {
     this.cwd = s.cwd;
     this.funcs = s.funcs;
     this.aliases = s.aliases;
+    this.galiases = s.galiases;
+    this.saliases = s.saliases;
     this.positional = s.positional;
     this.options = s.options;
+    this.traps = s.traps;
   }
 
   execSubshell(node, io) {
@@ -456,6 +633,7 @@ class Shell {
 
   // Runs one loop iteration, returning 'ok', 'break', or 'continue'.
   runIteration(body, io, state) {
+    this.loopDepth++;
     try {
       state.status = this.exec(body, io);
       return 'ok';
@@ -469,6 +647,8 @@ class Shell {
         return 'continue';
       }
       throw e;
+    } finally {
+      this.loopDepth--;
     }
   }
 
@@ -484,9 +664,31 @@ class Shell {
 
   execFor(node, io) {
     const items = node.items === null ? this.positional.slice() : expandWords(this, node.items);
+    const names = node.names || [node.name];
     const state = { status: 0 };
-    for (const item of items) {
-      this.setVar(node.name, item);
+    for (let i = 0; i < items.length; i += names.length) {
+      names.forEach((n, k) => this.setVar(n, items[i + k] ?? ''));
+      if (this.runIteration(node.body, io, state) === 'break') break;
+    }
+    return this.setStatus(state.status);
+  }
+
+  // select name in words: a numbered menu on stderr, read from stdin until
+  // the body breaks or input ends.
+  execSelect(node, io) {
+    const items = node.items === null ? this.positional.slice() : expandWords(this, node.items);
+    const state = { status: 0 };
+    if (!items.length) return this.setStatus(0);
+    const w = String(items.length).length;
+    for (;;) {
+      this.writeTo(io.stderr, `${items.map((it, i) => `${String(i + 1).padStart(w)}) ${it}`).join('\n')}\n`);
+      this.writeTo(io.stderr, this.getVar('PROMPT3') ?? '?# ');
+      const line = this.readLine(io.stdin);
+      if (line === null) { this.writeTo(io.stderr, '\n'); break; }
+      this.setVar('REPLY', line);
+      const n = Number(line.trim());
+      this.setVar(node.name, Number.isInteger(n) && n >= 1 && n <= items.length ? items[n - 1] : '');
+      if (!line.trim()) continue;
       if (this.runIteration(node.body, io, state) === 'break') break;
     }
     return this.setStatus(state.status);
@@ -514,17 +716,17 @@ class Shell {
 
   execCase(node, io) {
     const subject = expandToString(this, node.word);
-    let matched = false;
     let status = 0;
+    let falling = false;
+    let any = false;
     for (const clause of node.cases) {
-      if (!matched) {
-        matched = clause.patterns.some((p) => matchPattern(expandToPattern(this, p), subject));
-        if (!matched) continue;
-      }
+      if (!falling && !clause.patterns.some((p) => matchPattern(expandToPattern(this, p), subject))) continue;
+      any = true;
       status = this.exec(clause.body, io);
-      if (!clause.fall) break;
+      falling = clause.fall;
+      if (!clause.fall && !clause.cont) break;
     }
-    return this.setStatus(matched ? status : 0);
+    return this.setStatus(any ? status : 0);
   }
 
   execTime(node, io) {
@@ -546,7 +748,22 @@ class Shell {
       case 'CondUnary': return testUnary(node.op, expandToString(this, node.word), this);
       case 'CondBinary': {
         const left = expandToString(this, node.left);
-        if (node.op === '=~') return new RegExp(expandToString(this, node.right)).test(left);
+        if (node.op === '=~') {
+          let re;
+          try { re = new RegExp(expandToString(this, node.right)); } catch (e) {
+            throw new ShellError(`bad regex: ${e.message.replace(/^Invalid regular expression: /, '')}`);
+          }
+          const m = re.exec(left);
+          // zsh sets $MATCH and $match; bash's $BASH_REMATCH is there too.
+          if (m) {
+            this.setVar('MATCH', m[0]);
+            this.setVar('MBEGIN', String(m.index + 1));
+            this.setVar('MEND', String(m.index + m[0].length));
+            this.setVar('match', m.slice(1).map((x) => x ?? ''));
+            this.setVar('BASH_REMATCH', m.map((x) => x ?? ''));
+          }
+          return !!m;
+        }
         if (node.op === '=' || node.op === '==' || node.op === '!=') {
           const hit = matchPattern(expandToPattern(this, node.right), left);
           return node.op === '!=' ? !hit : hit;
@@ -559,48 +776,95 @@ class Shell {
 
   // --- simple commands ------------------------------------------------------
 
-  expandAliases(argv) {
-    let result = argv;
-    const seen = new Set();
-    while (result.length && this.aliases.has(result[0]) && !seen.has(result[0])) {
-      const name = result[0];
-      seen.add(name);
-      const words = new Lexer(this.aliases.get(name)).tokenize().filter((t) => t.type === 'WORD');
-      const head = [];
-      for (const w of words) head.push(...expandWord(this, w));
-      if (!head.length) break;
-      result = head.concat(result.slice(1));
-    }
-    return result;
-  }
-
   doAssign(a) {
+    const entry = this.findEntry(a.name);
+    if (a.array && a.index !== null && a.index !== undefined && !(entry && entry.value instanceof Map)) {
+      // a[2,3]=(x y) replaces a slice; a[2]=() removes an element.
+      const values = expandWords(this, a.array);
+      const arr = (this.getArray(a.name) || (this.getVar(a.name) !== undefined ? [this.getVar(a.name)] : [])).slice();
+      const [from, to] = a.index.includes(',') ? a.index.split(',') : [a.index, a.index];
+      const pos = (n) => (n < 0 ? arr.length + n + 1 : n);
+      const i = Math.max(1, pos(Math.trunc(evalArith(from, this))));
+      const j = pos(Math.trunc(evalArith(to, this)));
+      while (arr.length < i - 1) arr.push('');
+      arr.splice(i - 1, Math.max(0, j - i + 1), ...values);
+      this.setArray(a.name, arr);
+      return;
+    }
     if (a.array) {
       const values = expandWords(this, a.array);
-      const current = a.append ? (this.getArray(a.name) || []) : [];
+      if (entry && entry.value instanceof Map) {
+        // h=(key value key value …)
+        const m = a.append ? new Map(entry.value) : new Map();
+        for (let i = 0; i < values.length; i += 2) m.set(values[i], values[i + 1] ?? '');
+        this.setVar(a.name, m);
+        return;
+      }
+      let current = [];
+      if (a.append && entry) current = Array.isArray(entry.value) ? entry.value : [entry.value];
+      else if (a.append && this.getVar(a.name) !== undefined) current = [this.getVar(a.name)];
       this.setArray(a.name, current.concat(values));
       return;
     }
     const value = expandToString(this, a.value);
     if (a.index !== null && a.index !== undefined) {
-      const arr = (this.getArray(a.name) || []).slice();
+      if (entry && entry.value instanceof Map) {
+        const key = expandToString(this, require('./lexer').lexWordParts(a.index));
+        const m = new Map(entry.value);
+        m.set(key, a.append ? (m.get(key) ?? '') + value : value);
+        this.setVar(a.name, m);
+        return;
+      }
+      const arr = (this.getArray(a.name) || (this.getVar(a.name) !== undefined ? [this.getVar(a.name)] : [])).slice();
       const n = Math.trunc(evalArith(a.index, this));
-      arr[n < 0 ? arr.length + n : n - 1] = value;
-      for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
+      const i = n < 0 ? arr.length + n : n - 1;
+      if (i < 0) throw new ShellError(`${a.name}: assignment to invalid subscript range`);
+      arr[i] = a.append ? (arr[i] ?? '') + value : value;
+      for (let k = 0; k < arr.length; k++) if (arr[k] === undefined) arr[k] = '';
       this.setArray(a.name, arr);
+      return;
+    }
+    if (a.append && entry && Array.isArray(entry.value)) { this.setArray(a.name, entry.value.concat([value])); return; }
+    if (a.append && entry && (entry.integer || entry.float)) {
+      this.setVar(a.name, String(evalArith(`(${entry.value || 0})+(${value || 0})`, this)));
       return;
     }
     this.setVar(a.name, a.append ? (this.getVar(a.name) ?? '') + value : value);
   }
 
+  // Expands a command's words. Declaration builtins (typeset, local…) treat
+  // name=value arguments as assignments: no splitting or globbing, and
+  // name=(a b) passes an array.
+  expandCommandWords(words) {
+    const argv = [];
+    const first = words.length ? expandWord(this, words[0]) : [];
+    argv.push(...first);
+    const declaring = DECLARERS.has(first[0]) && !words[0].quoted;
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (w.declArray) {
+        argv.push({ name: w.declArray.name, append: w.declArray.append, values: expandWords(this, w.declArray.elems) });
+        continue;
+      }
+      if (declaring && splitAssignment(w)) {
+        const a = splitAssignment(w);
+        const value = expandToString(this, a.value);
+        argv.push(`${a.name}${a.index !== null ? `[${a.index}]` : ''}${a.append ? '+' : ''}=${value}`);
+        continue;
+      }
+      argv.push(...expandWord(this, w));
+    }
+    return argv;
+  }
+
   execSimple(node, io) {
-    let argv = [];
-    for (const w of node.words) argv.push(...expandWord(this, w));
-    argv = this.expandAliases(argv);
+    this.substStatus = null;
+    const argv = this.expandCommandWords(node.words);
 
     if (argv.length === 0) {
       for (const a of node.assigns) this.doAssign(a);
-      return this.setStatus(0);
+      // `x=$(cmd)` reports cmd's status.
+      return this.setStatus(this.substStatus ?? 0);
     }
 
     const overrides = {};
@@ -610,10 +874,20 @@ class Shell {
         : expandToString(this, a.value);
     }
 
-    if (this.options.has('x')) this.writeStderr(`+ ${argv.join(' ')}\n`);
+    if (this.options.has('x')) this.writeStderr(`${this.getVar('PS4') ?? '+'} ${argv.map((x) => (typeof x === 'string' ? x : `${x.name}=(${x.values.join(' ')})`)).join(' ')}\n`);
 
     const name = argv[0];
     const isLocal = this.funcs.has(name) || !!BUILTINS[name];
+
+    // AUTO_CD: a folder typed on its own goes there.
+    if (!isLocal && argv.length === 1 && this.options.has('autocd') && !findInPath(name, this)) {
+      try {
+        if (fs.statSync(this.resolve(name.replace(/^~(?=$|\/)/, this.getVar('HOME') || os.homedir()))).isDirectory()) {
+          return this.setStatus(this.dispatch('cd', ['cd', name], io));
+        }
+      } catch { /* not a folder */ }
+    }
+
     const names = Object.keys(overrides);
 
     if (isLocal && names.length) {
@@ -647,7 +921,19 @@ class Shell {
   runFunction(name, argv, io) {
     const fn = this.funcs.get(name);
     const savedPositional = this.positional;
+    const savedName = this.scriptName;
+    const savedLoops = this.loopDepth;
     this.positional = argv.slice(1);
+    // Inside a function $0 is its name (zsh's FUNCTION_ARGZERO).
+    this.scriptName = name;
+    this.funcDepth++;
+    if (this.funcDepth > 1000) {
+      this.funcDepth--;
+      this.positional = savedPositional;
+      this.scriptName = savedName;
+      this.loopDepth = savedLoops;
+      throw new ShellError(`${name}: maximum nested function level reached`);
+    }
     this.scopes.push(new Map());
     try {
       return this.exec(fn.body, io);
@@ -656,7 +942,10 @@ class Shell {
       throw e;
     } finally {
       this.scopes.pop();
+      this.funcDepth--;
+      this.loopDepth = savedLoops;
       this.positional = savedPositional;
+      this.scriptName = savedName;
     }
   }
 

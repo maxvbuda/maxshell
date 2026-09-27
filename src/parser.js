@@ -1,10 +1,15 @@
 'use strict';
 
-const { Lexer, ShellError, IncompleteError, REDIR_OPS } = require('./lexer');
+const {
+  Lexer, ShellError, IncompleteError, REDIR_OPS, lexWordParts,
+} = require('./lexer');
 
 // Reserved words that terminate a command list. They are only recognised in
 // command position, so `echo done` still prints "done".
 const CLOSERS = new Set(['then', 'elif', 'else', 'fi', 'do', 'done', 'esac', '}', ']]', 'in', 'end']);
+
+// Builtins whose name=value arguments are assignments.
+const DECLARERS = new Set(['typeset', 'declare', 'local', 'export', 'readonly', 'integer', 'float']);
 
 const COND_UNARY = new Set([
   '-e', '-f', '-d', '-r', '-w', '-x', '-s', '-z', '-n', '-L', '-h',
@@ -22,7 +27,7 @@ function splitAssignment(word) {
   const p0 = word.parts[0];
   if (!p0 || p0.t !== 'lit' || p0.q) return null;
   const m = /^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=/.exec(p0.v);
-  if (!m) return null;
+  if (!m) return splitSubscriptAssignment(word);
   const rest = p0.v.slice(m[0].length);
   const valueParts = (rest ? [{ t: 'lit', v: rest, q: false }] : []).concat(word.parts.slice(1));
   return {
@@ -30,6 +35,34 @@ function splitAssignment(word) {
     index: m[2] ? m[2].slice(1, -1) : null,
     append: m[3] === '+',
     value: { parts: valueParts },
+    array: null,
+  };
+}
+
+// name[...]=value where the subscript holds expansions or quotes, like
+// h[$key]=v or h["a b"]=v: found in the word's source text.
+function splitSubscriptAssignment(word) {
+  const p0 = word.parts[0];
+  const raw = word.value;
+  const head = /^([A-Za-z_][A-Za-z0-9_]*)\[/.exec(p0.v);
+  if (!head || typeof raw !== 'string' || !raw.startsWith(head[0])) return null;
+  let depth = 0;
+  let j = head[1].length;
+  for (; j < raw.length; j++) {
+    const c = raw[j];
+    if (c === '\\') { j++; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') { depth--; if (depth === 0) break; }
+  }
+  if (depth !== 0) return null;
+  const tail = /^(\+?)=/.exec(raw.slice(j + 1));
+  if (!tail) return null;
+  const rest = raw.slice(j + 1 + tail[0].length);
+  return {
+    name: head[1],
+    index: raw.slice(head[1].length + 1, j),
+    append: tail[1] === '+',
+    value: { parts: lexWordParts(rest) },
     array: null,
   };
 }
@@ -51,10 +84,44 @@ function splitArithClauses(src) {
 }
 
 class Parser {
-  constructor(src) {
+  // `aliases` (optional) is { aliases, galiases, saliases } of Maps: plain
+  // aliases expand in command position, global ones (-g) anywhere, and
+  // suffix ones (-s) turn `notes.txt` into `vim notes.txt`.
+  constructor(src, { aliases = null } = {}) {
     this.tokens = new Lexer(src).tokenize();
     this.i = 0;
     this.braceDepth = 0;
+    this.alias = aliases;
+  }
+
+  // Replaces the word at the cursor with its alias, if it has one. Words that
+  // came from an alias don't expand that alias again.
+  expandAlias(commandPos) {
+    if (!this.alias) return false;
+    const t = this.peek();
+    if (t.type !== 'WORD' || t.quoted || t.parts.length !== 1 || t.parts[0].t !== 'lit') return false;
+    const name = t.parts[0].v;
+    const seen = t.fromAlias || new Set();
+    let text = null;
+    let keepWord = false;
+    const { aliases, galiases, saliases } = this.alias;
+    if (commandPos && aliases && aliases.has(name) && !seen.has(name)) text = aliases.get(name);
+    else if (galiases && galiases.has(name) && !seen.has(name)) text = galiases.get(name);
+    else if (commandPos && saliases && saliases.size) {
+      const ext = /\.([^./]+)$/.exec(name);
+      if (ext && saliases.has(ext[1]) && !seen.has(`.${ext[1]}`)) { text = saliases.get(ext[1]); keepWord = true; seen.add(`.${ext[1]}`); }
+    }
+    if (text === null) return false;
+    let toks;
+    try {
+      toks = new Lexer(text).tokenize().filter((x) => x.type !== 'EOF');
+    } catch { return false; }
+    const marks = new Set([...seen, name]);
+    for (const x of toks) x.fromAlias = marks;
+    // An alias ending in a space makes the next word eligible too.
+    if (/\s$/.test(text)) this.aliasNextAt = this.i + toks.length + (keepWord ? 1 : 0);
+    this.tokens.splice(this.i, 1, ...toks, ...(keepWord ? [Object.assign(t, { fromAlias: marks })] : []));
+    return true;
   }
 
   peek(k = 0) { return this.tokens[Math.min(this.i + k, this.tokens.length - 1)]; }
@@ -98,6 +165,19 @@ class Parser {
   skipNewlines() { while (this.at('NEWLINE')) this.next(); }
 
   skipSeparators() { while (this.at('NEWLINE') || this.at('OP', ';')) this.next(); }
+
+  // The next top-level command (with its ; or &), or null at the end — so a
+  // script can run one command at a time and aliases defined on one line
+  // apply to the next.
+  parseNextItem() {
+    this.skipSeparators();
+    if (this.at('EOF')) return null;
+    const node = this.parseAndOr();
+    let sep = ';';
+    if (this.at('OP', '&')) { this.next(); sep = '&'; } else if (this.at('OP', ';')) this.next();
+    else if (!this.at('NEWLINE') && !this.at('EOF')) this.unexpected('end of input');
+    return { type: 'List', items: [{ node, sep }] };
+  }
 
   parseProgram() {
     const list = this.parseList(new Set());
@@ -175,6 +255,8 @@ class Parser {
   }
 
   parseCommand() {
+    let guard = 0;
+    while (this.expandAlias(true) && guard++ < 100) { /* expand again */ }
     const t = this.peek();
 
     if (t.type === 'ARITH') {
@@ -194,12 +276,22 @@ class Parser {
       switch (t.reserved) {
         case 'if': return this.withRedirects(this.parseIf());
         case 'while': case 'until': return this.withRedirects(this.parseWhile());
-        case 'for': return this.withRedirects(this.parseFor());
+        case 'for': case 'select': return this.withRedirects(this.parseFor());
         case 'foreach': return this.withRedirects(this.parseForeach());
         case 'case': return this.withRedirects(this.parseCase());
         case 'repeat': return this.withRedirects(this.parseRepeat());
         case 'function': return this.parseFunctionKeyword();
-        case '{': return this.withRedirects(this.parseGroup());
+        case '{': {
+          const group = this.parseGroup();
+          // { try } always { finally }
+          if (this.at('WORD') && !this.peek().quoted && this.peek().value === 'always'
+            && this.peek(1).type === 'WORD' && this.peek(1).reserved === '{') {
+            this.next();
+            const always = this.parseGroup();
+            return this.withRedirects({ type: 'Always', body: group.body, always: always.body });
+          }
+          return this.withRedirects(group);
+        }
         case '[[': return this.withRedirects(this.parseCondCommand());
         case 'time': this.next(); return { type: 'Time', command: this.parseCommand() };
         default: break;
@@ -216,6 +308,14 @@ class Parser {
     const body = this.parseList(new Set(['done']));
     this.expectReserved('done');
     return body;
+  }
+
+  // zsh's short loops: `for x (a b) cmd` and `for ((…)) cmd` take a single
+  // command in place of do … done.
+  parseShortBody() {
+    if (this.atReserved('do') || this.atReserved('{') || this.at('NEWLINE')) return this.parseDoBlock();
+    const cmd = this.parsePipeline();
+    return { type: 'List', items: [{ node: cmd, sep: ';' }] };
   }
 
   parseGroup() {
@@ -265,16 +365,23 @@ class Parser {
   }
 
   parseFor() {
-    this.expectReserved('for');
+    const kind = this.next().reserved;
 
-    if (this.at('ARITH')) {
+    if (kind === 'for' && this.at('ARITH')) {
       const [init, cond, step] = splitArithClauses(this.next().value);
-      const body = this.parseDoBlock();
+      if (this.at('OP', ';')) this.next();
+      const body = this.parseShortBody();
       return { type: 'ForArith', init, cond, step, body };
     }
 
-    const name = wordText(this.expectWord('a loop variable'));
+    const names = [wordText(this.expectWord('a loop variable'))];
+    // zsh: for key value in ...; takes several at a time.
+    while (this.at('WORD') && !this.peek().reserved && /^[A-Za-z_][A-Za-z0-9_]*$/.test(this.peek().value)) {
+      names.push(wordText(this.next()));
+    }
+    const name = names[0];
     let items = null;
+    let shortOk = false;
 
     if (this.atReserved('in')) {
       this.next();
@@ -287,11 +394,12 @@ class Parser {
       while (this.at('WORD')) { items.push(this.next()); this.skipNewlines(); }
       if (!this.at('OP', ')')) this.unexpected("')'");
       this.next();
+      shortOk = true;
     }
 
     if (this.at('OP', ';')) this.next();
-    const body = this.parseDoBlock();
-    return { type: 'For', name, items, body };
+    const body = shortOk ? this.parseShortBody() : this.parseDoBlock();
+    return { type: kind === 'select' ? 'Select' : 'For', name, names, items, body };
   }
 
   parseForeach() {
@@ -313,6 +421,11 @@ class Parser {
     this.expectReserved('repeat');
     const count = this.expectWord('a repeat count');
     if (this.at('OP', ';')) this.next();
+    // zsh's short form: repeat 3 echo hi
+    if (!this.atReserved('do') && !this.atReserved('{') && !this.at('NEWLINE')) {
+      const cmd = this.parsePipeline();
+      return { type: 'Repeat', count, body: { type: 'List', items: [{ node: cmd, sep: ';' }] } };
+    }
     const body = this.parseDoBlock();
     return { type: 'Repeat', count, body };
   }
@@ -339,11 +452,13 @@ class Parser {
       if (!this.at('OP', ')')) this.unexpected("')'");
       this.next();
 
-      const body = this.parseList(new Set([';;', ';&', 'esac']));
+      const body = this.parseList(new Set([';;', ';&', ';|', 'esac']));
+      // ;& falls into the next body; ;| goes on testing the next patterns.
       let fall = false;
+      let cont = false;
       if (this.at('OP', ';;')) this.next();
-      else if (this.at('OP', ';&')) { this.next(); fall = true; }
-      cases.push({ patterns, body, fall });
+      else if (this.at('OP', ';&')) { this.next(); fall = true; } else if (this.at('OP', ';|')) { this.next(); cont = true; }
+      cases.push({ patterns, body, fall, cont });
     }
     this.expectReserved('esac');
     return { type: 'Case', word, cases };
@@ -428,13 +543,25 @@ class Parser {
       if (this.at('IONUM') || this.isRedirOp()) { redirects.push(this.parseRedirect()); continue; }
       if (!this.at('WORD')) break;
 
+      // Aliases: in command position (also after assignments), after an
+      // alias ending in a space, and global aliases anywhere.
+      if (this.alias) {
+        const cmdPos = words.length === 0 || this.i === this.aliasNextAt;
+        if (this.expandAlias(cmdPos)) {
+          if (words.length === 0 && this.peek().type === 'WORD' && this.peek().reserved && !assigns.length) {
+            return this.parseCommand();
+          }
+          continue;
+        }
+      }
+
       const t = this.peek();
       const atStart = words.length === 0 && assigns.length === 0;
       if (words.length === 0 && t.reserved && CLOSERS.has(t.reserved)) break;
       // zsh allows `{ cmd }` with no separator before the closing brace.
       if (t.reserved === '}' && this.braceDepth > 0) break;
 
-      if (atStart
+      if (atStart && !splitAssignment(t)
         && this.peek(1).type === 'OP' && this.peek(1).value === '('
         && this.peek(2).type === 'OP' && this.peek(2).value === ')') {
         const name = wordText(t);
@@ -461,6 +588,23 @@ class Parser {
         }
       }
 
+      // typeset/local/declare/export/readonly name=(a b c) — an array
+      // assignment as an argument.
+      if (words.length && DECLARERS.has(wordText(words[0])) && !words[0].quoted) {
+        const a = splitAssignment(t);
+        if (a && a.value.parts.length === 0 && this.peek(1).type === 'OP' && this.peek(1).value === '(') {
+          this.next();
+          this.next();
+          this.skipNewlines();
+          const elems = [];
+          while (this.at('WORD')) { elems.push(this.next()); this.skipNewlines(); }
+          if (!this.at('OP', ')')) this.unexpected("')'");
+          this.next();
+          words.push({ type: 'WORD', value: t.value, parts: t.parts, quoted: false, declArray: { name: a.name, append: a.append, elems } });
+          continue;
+        }
+      }
+
       words.push(this.next());
     }
 
@@ -473,4 +617,4 @@ function parse(src) {
   return new Parser(src).parseProgram();
 }
 
-module.exports = { Parser, parse, wordText, splitAssignment };
+module.exports = { Parser, parse, wordText, splitAssignment, DECLARERS };

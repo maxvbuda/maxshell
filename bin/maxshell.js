@@ -191,6 +191,7 @@ async function runEditorRepl(shell) {
   }
 
   saveHistory();
+  shell.runExitTrap();
   return shell.status;
 }
 
@@ -249,13 +250,16 @@ async function runRepl() {
 function runSource(src, name, args) {
   ansi.setEnabled(false);
   const shell = new Shell({ name, positional: args });
+  let status;
   try {
-    return shell.run(src);
+    status = shell.run(src);
   } catch (e) {
-    if (e instanceof ExitSignal) return e.status;
-    reportError(e);
-    return 1;
+    if (e instanceof ExitSignal) status = e.status;
+    else { reportError(e); status = 1; }
   }
+  shell.status = status;
+  shell.runExitTrap();
+  return status;
 }
 
 function main() {

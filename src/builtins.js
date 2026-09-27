@@ -10,6 +10,13 @@ const { BreakSignal, ContinueSignal, ReturnSignal, ExitSignal } = require('./sig
 function out(shell, io, text) { shell.writeTo(io.stdout, text); }
 function err(shell, io, text) { shell.writeTo(io.stderr, text); }
 
+// \c in echo/print ends the output there, newline included.
+const STOP = '\uE000';
+function stopAtC(body) {
+  const at = body.indexOf(STOP);
+  return at === -1 ? null : body.slice(0, at);
+}
+
 function unescapeString(s) {
   let r = '';
   for (let i = 0; i < s.length; i++) {
@@ -23,8 +30,9 @@ function unescapeString(s) {
       case 'b': r += '\b'; break;
       case 'f': r += '\f'; break;
       case 'v': r += '\v'; break;
-      case 'e': r += '\x1b'; break;
+      case 'e': case 'E': r += '\x1b'; break;
       case '\\': r += '\\'; break;
+      case 'c': return r + STOP;
       case '0': {
         const m = /^[0-7]{1,3}/.exec(s.slice(i + 1)) || [''];
         r += String.fromCharCode(parseInt(m[0] || '0', 8));
@@ -69,10 +77,12 @@ function formatPrintf(fmt, args) {
       if (c !== '%') { result += c; i++; continue; }
       if (fmt[i + 1] === '%') { result += '%'; i += 2; continue; }
 
-      const m = /^%([-+ 0#]*)(\d+)?(?:\.(\d+))?([sdiufeggxXocb])/.exec(fmt.slice(i));
+      const m = /^%([-+ 0#]*)(\d+|\*)?(?:\.(\d+|\*))?([sdiufeEgGxXocbq])/.exec(fmt.slice(i));
       if (!m) { result += c; i++; continue; }
-      const [all, flags, widthS, precS, conv] = m;
+      const [all, flags, widthS0, precS0, conv] = m;
       i += all.length;
+      const widthS = widthS0 === '*' ? String(Number(args[ai++]) || 0) : widthS0;
+      const precS = precS0 === '*' ? String(Number(args[ai++]) || 0) : precS0;
 
       const arg = args[ai++];
       usedThisPass = true;
@@ -93,26 +103,36 @@ function formatPrintf(fmt, args) {
           text = unescapeString(arg === undefined ? '' : String(arg));
           break;
         case 'c':
-          text = (arg === undefined ? '' : String(arg)).slice(0, 1);
+          text = [...(arg === undefined ? '' : String(arg))].slice(0, 1).join('');
           break;
+        case 'q': {
+          const v = arg === undefined ? '' : String(arg);
+          text = v === '' ? "''" : /^[A-Za-z0-9_@%+=:,./-]+$/.test(v) ? v : v.replace(/[^A-Za-z0-9_@%+=:,./-]/g, (ch) => (ch === '\n' ? "$'\\n'" : `\\${ch}`));
+          break;
+        }
         case 'd': case 'i': case 'u': {
-          const n = Math.trunc(Number(arg) || 0);
+          // A leading quote gives the character's code, as in printf(1).
+          const n = /^['"]./.test(arg || '') ? arg.codePointAt(1) : Math.trunc(Number(arg) || 0);
           text = String(Math.abs(n));
           if (prec !== undefined) text = text.padStart(prec, '0');
           text = (n < 0 ? '-' : plus ? '+' : '') + text;
           break;
         }
-        case 'f': case 'e': case 'g': {
+        case 'f': case 'e': case 'E': case 'g': case 'G': {
           const n = Number(arg) || 0;
           const p = prec === undefined ? 6 : prec;
-          text = conv === 'f' ? n.toFixed(p) : conv === 'e' ? n.toExponential(p) : String(n);
+          if (conv === 'f') text = n.toFixed(p);
+          else if (conv === 'e' || conv === 'E') text = n.toExponential(p).replace(/e([+-])(\d)$/, 'e$10$2');
+          else text = String(Number(n.toPrecision(p || 1)));
+          if (conv === 'E' || conv === 'G') text = text.toUpperCase();
           if (plus && n >= 0) text = `+${text}`;
           break;
         }
         case 'x': case 'X': case 'o': {
           const n = Math.trunc(Number(arg) || 0);
-          text = n.toString(conv === 'o' ? 8 : 16);
+          text = (n < 0 ? BigInt.asUintN(64, BigInt(n)) : BigInt(n)).toString(conv === 'o' ? 8 : 16);
           if (conv === 'X') text = text.toUpperCase();
+          if (flags.includes('#') && n !== 0) text = (conv === 'o' ? '0' : conv === 'x' ? '0x' : '0X') + text;
           break;
         }
         default:
@@ -123,7 +143,8 @@ function formatPrintf(fmt, args) {
     if (!usedThisPass) break;
   } while (ai < args.length && usedAny);
 
-  return result;
+  const cut = stopAtC(result);
+  return cut !== null ? cut : result;
 }
 
 // --- test / [[ ]] primitives ------------------------------------------------
@@ -272,6 +293,8 @@ Parameters
   name=value                assign          name=(a b c)   array (1-indexed)
   $name  \${name}  \${name:-d} expand with default
   \${#name}  \${name#pat}  \${name%pat}  \${name/a/b}  \${name:0:3}
+  $file:t  :h :r :e :u :l   \${(U)x}  \${(j:,:)arr}  \${(s:,:)x}  \${(k)hash}
+  {a,b}  {1..10}            brace expansion       <(cmd)  process substitution
   $(cmd)  \`cmd\`             command substitution
   $((expr))  ((expr))       arithmetic
   $?  $#  $@  $0 .. $9      status, arg count, all args, positional args
@@ -286,10 +309,11 @@ Control flow
   [[ -f file && $x == pat* ]]         conditional expression
 
 Builtins
-  :  .  alias  bg-style jobs  break  cd  command  continue  declare  dirs
-  echo  eval  exit  export  false  help  history  let  local  popd  print
-  printf  pushd  pwd  pyedit  read  return  set  shift  source  test  true
-  type  typeset  unalias  unfunction  unset  whence  which  [
+  :  .  alias  break  builtin  cd  command  continue  declare  dirs  echo
+  emulate  eval  exit  export  false  float  getopts  help  history  integer
+  jobs  let  local  popd  print  printf  pushd  pwd  read  readonly  return
+  set  setopt  shift  source  test  trap  true  type  typeset  unalias
+  unfunction  unset  unsetopt  whence  where  which  [
 
 Editing
   pyedit [file]             nano-style Python editor: highlighting, auto-indent,
@@ -332,7 +356,8 @@ BUILTINS.echo = (args, io, shell) => {
     i++;
   }
   const body = args.slice(i).map((a) => (escapes ? unescapeString(a) : a)).join(' ');
-  out(shell, io, body + (newline ? '\n' : ''));
+  const cut = stopAtC(body);
+  out(shell, io, cut !== null ? cut : body + (newline ? '\n' : ''));
   return 0;
 };
 
@@ -340,38 +365,94 @@ BUILTINS.print = (args, io, shell) => {
   let newline = true;
   let perLine = false;
   let raw = false;
+  let nul = false;
+  let promptExp = false;
+  let format = null;
+  let toVar = null;
   let i = 0;
-  while (i < args.length && /^-[nlr]+$/.test(args[i])) {
-    if (args[i].includes('n')) newline = false;
-    if (args[i].includes('l')) perLine = true;
-    if (args[i].includes('r')) raw = true;
+  while (i < args.length && /^-[nlrNPRcfv-]*$/.test(args[i]) && args[i] !== '-') {
+    const a = args[i];
+    if (a === '--') { i++; break; }
+    if (a === '-R') { raw = true; i++; break; }
+    if (a.includes('f')) { format = args[i + 1] ?? ''; i += 2; continue; }
+    if (a.includes('v')) { toVar = args[i + 1]; i += 2; continue; }
+    if (a.includes('n')) newline = false;
+    if (a.includes('l')) perLine = true;
+    if (a.includes('r')) raw = true;
+    if (a.includes('N')) nul = true;
+    if (a.includes('P')) promptExp = true;
     i++;
   }
-  const items = args.slice(i).map((a) => (raw ? a : unescapeString(a)));
-  const body = perLine ? items.map((s) => `${s}\n`).join('') : items.join(' ') + (newline ? '\n' : '');
+  let items = args.slice(i);
+  let body;
+  if (format !== null) body = formatPrintf(format, items);
+  else {
+    if (promptExp) {
+      const { expandPrompt } = require('./prompt');
+      items = items.map((a) => expandPrompt(a, shell));
+    }
+    items = items.map((a) => (raw ? a : unescapeString(a)));
+    if (nul) body = items.map((x) => `${x}\0`).join('');
+    else body = perLine ? items.map((x) => `${x}\n`).join('') : items.join(' ') + (newline ? '\n' : '');
+  }
+  const cut = stopAtC(body);
+  if (cut !== null) body = cut;
+  if (toVar) { shell.setVar(toVar, body.replace(/\n$/, '')); return 0; }
   out(shell, io, body);
   return 0;
 };
-
 BUILTINS.printf = (args, io, shell) => {
+  let toVar = null;
+  if (args[0] === '-v') { toVar = args[1]; args = args.slice(2); }
+  if (args[0] === '--') args = args.slice(1);
   if (!args.length) { err(shell, io, 'printf: not enough arguments\n'); return 1; }
-  out(shell, io, formatPrintf(args[0], args.slice(1)));
+  const text = formatPrintf(args[0], args.slice(1));
+  if (toVar) shell.setVar(toVar, text); else out(shell, io, text);
   return 0;
 };
 
 BUILTINS.cd = (args, io, shell) => {
+  let physical = false;
+  while (args.length && /^-[LP]+$/.test(args[0])) { physical = args[0].includes('P'); args = args.slice(1); }
+  if (args[0] === '--') args = args.slice(1);
   let target = args[0];
+  let announce = false;
+  if (args.length === 2) {
+    // zsh's two-argument cd: replace old with new in the current path.
+    if (!shell.cwd.includes(args[0])) { err(shell, io, `cd: string not in pwd: ${args[0]}\n`); return 1; }
+    target = shell.cwd.replace(args[0], args[1]);
+    announce = true;
+  } else if (args.length > 2) {
+    err(shell, io, 'cd: too many arguments\n');
+    return 1;
+  }
   if (!target) target = shell.getVar('HOME') || os.homedir();
   else if (target === '-') {
     target = shell.getVar('OLDPWD');
     if (!target) { err(shell, io, 'cd: OLDPWD not set\n'); return 1; }
-    out(shell, io, `${target}\n`);
+    announce = true;
+  } else if (!target.startsWith('/') && !target.startsWith('.') && !target.startsWith('~')) {
+    // CDPATH: folders to look in for a relative name.
+    const cdpath = shell.getArray('cdpath') || (shell.getVar('CDPATH') || '').split(':').filter(Boolean);
+    const here = shell.resolve(target);
+    let isHere = false;
+    try { isHere = fs.statSync(here).isDirectory(); } catch { /* not here */ }
+    if (!isHere) {
+      for (const base of cdpath) {
+        const cand = path.resolve(shell.resolve(base), target);
+        try { if (fs.statSync(cand).isDirectory()) { target = cand; announce = true; break; } } catch { /* keep looking */ }
+      }
+    }
   }
   try {
-    shell.setCwd(target);
+    shell.setCwd(target, { physical });
+    if (announce && shell.interactive) out(shell, io, `${shell.cwd}\n`);
     return 0;
   } catch (e) {
-    err(shell, io, `cd: ${e.code === 'ENOENT' ? 'no such file or directory' : e.message}: ${args[0]}\n`);
+    const why = e.code === 'ENOENT' ? 'no such file or directory'
+      : e.code === 'ENOTDIR' ? 'not a directory'
+        : e.code === 'EACCES' ? 'permission denied' : e.message;
+    err(shell, io, `cd: ${why}: ${args[args.length - 1] ?? target}\n`);
     return 1;
   }
 };
@@ -504,7 +585,12 @@ BUILTINS.ls = (args, io, shell) => {
   return shell.runExternal(['ls', ...args], io, shell.env);
 };
 
-BUILTINS.pwd = (args, io, shell) => { out(shell, io, `${shell.cwd}\n`); return 0; };
+BUILTINS.pwd = (args, io, shell) => {
+  let dir = shell.cwd;
+  if (args.includes('-P') || shell.options.has('chaselinks')) { try { dir = fs.realpathSync(dir); } catch { /* keep logical */ } }
+  out(shell, io, `${dir}\n`);
+  return 0;
+};
 
 BUILTINS.pushd = (args, io, shell) => {
   const prev = shell.cwd;
@@ -530,23 +616,43 @@ BUILTINS.dirs = (args, io, shell) => {
 };
 
 BUILTINS.export = (args, io, shell) => {
-  if (!args.length) {
-    for (const [name, entry] of shell.vars) {
+  if (!args.length || (args.length === 1 && args[0] === '-p')) {
+    for (const [name, entry] of [...shell.vars].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
       if (entry.exported) out(shell, io, `export ${name}=${JSON.stringify(String(entry.value))}\n`);
     }
     return 0;
   }
-  for (const a of args) {
-    const eq = a.indexOf('=');
-    if (eq === -1) shell.exportVar(a);
-    else { shell.setVar(a.slice(0, eq), a.slice(eq + 1)); shell.exportVar(a.slice(0, eq)); }
+  if (args[0] === '-n') {
+    for (const a of args.slice(1)) { const e = shell.findEntry(a); if (e) e.exported = false; delete shell.env[a]; }
+    return 0;
   }
-  return 0;
+  return declareLike(args, io, shell, { local: false, preset: 'x' });
 };
 
 BUILTINS.unset = (args, io, shell) => {
-  for (const a of args) { shell.unsetVar(a); shell.funcs.delete(a); }
-  return 0;
+  let funcs = false;
+  const names = [];
+  for (const a of args) {
+    if (a === '-f') funcs = true;
+    else if (a === '-v' || a === '--') { /* variables are the default */ } else names.push(a);
+  }
+  let status = 0;
+  for (const a of names) {
+    if (funcs) { shell.funcs.delete(a); continue; }
+    const el = /^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/.exec(a);
+    try {
+      if (el) {
+        const entry = shell.findEntry(el[1]);
+        if (entry && entry.value instanceof Map) { const m = new Map(entry.value); m.delete(el[2]); shell.setVar(el[1], m); } else if (entry && Array.isArray(entry.value)) {
+          const arr = entry.value.slice();
+          const n = Number(el[2]);
+          if (n >= 1 && n <= arr.length) arr[n - 1] = '';
+          shell.setVar(el[1], arr);
+        }
+      } else shell.unsetVar(a);
+    } catch (e) { err(shell, io, `unset: ${e.message}\n`); status = 1; }
+  }
+  return status;
 };
 
 BUILTINS.unfunction = (args, io, shell) => {
@@ -554,53 +660,180 @@ BUILTINS.unfunction = (args, io, shell) => {
   return 0;
 };
 
-function declareLike(args, io, shell, forceLocal) {
-  const scope = forceLocal && shell.scopes.length > 1
-    ? shell.scopes[shell.scopes.length - 1]
-    : shell.vars;
-  const names = args.filter((a) => !a.startsWith('-'));
-  if (!names.length) {
-    for (const [name, entry] of shell.vars) {
-      out(shell, io, `${name}=${Array.isArray(entry.value) ? `(${entry.value.join(' ')})` : entry.value}\n`);
+// typeset / declare / local / readonly / integer / float / export share
+// this. Flags: -a array, -A associative, -i integer, -F/-E float, -r
+// readonly, -x export, -l/-u lower/upper case, -g global, -f functions,
+// -p print. Inside a function they declare locals unless -g.
+function declareLike(args, io, shell, { local = true, preset = '' } = {}) {
+  const flags = new Set(preset);
+  const unflags = new Set();
+  const items = [];
+  let i = 0;
+  for (; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a !== 'string') { items.push(a); continue; }
+    if (a === '--') { i++; break; }
+    if (/^-[a-zA-Z]+$/.test(a) && !items.length) { for (const f of a.slice(1)) flags.add(f); continue; }
+    if (/^\+[a-zA-Z]+$/.test(a) && !items.length) { for (const f of a.slice(1)) unflags.add(f); continue; }
+    items.push(a);
+  }
+  items.push(...args.slice(i));
+
+  if (flags.has('f')) {
+    if (!items.length) { for (const n of [...shell.funcs.keys()].sort()) out(shell, io, `${n} () { … }\n`); return 0; }
+    return items.every((n) => shell.funcs.has(n)) ? 0 : 1;
+  }
+
+  const describe = (name, entry) => {
+    const v = entry.value;
+    let opts = '';
+    if (v instanceof Map) opts += ' -A';
+    else if (Array.isArray(v)) opts += ' -a';
+    if (entry.integer) opts += ' -i';
+    if (entry.readonly) opts += ' -r';
+    if (entry.exported) opts += ' -x';
+    const q = (x) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(x) ? x : `'${String(x).replace(/'/g, "'\\''")}'`);
+    const body = v instanceof Map ? `( ${[...v].map(([k, x]) => `[${q(k)}]=${q(x)}`).join(' ')} )`
+      : Array.isArray(v) ? `( ${v.map(q).join(' ')} )` : q(v);
+    return `typeset${opts} ${name}=${body}\n`;
+  };
+
+  if (!items.length) {
+    const seen = new Set();
+    for (let k = shell.scopes.length - 1; k >= 0; k--) {
+      for (const [name, entry] of [...shell.scopes[k]].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        if (flags.has('x') && !entry.exported) continue;
+        if (flags.has('r') && !entry.readonly) continue;
+        out(shell, io, describe(name, entry));
+      }
     }
     return 0;
   }
-  for (const a of names) {
-    const eq = a.indexOf('=');
-    const name = eq === -1 ? a : a.slice(0, eq);
-    const value = eq === -1 ? '' : a.slice(eq + 1);
-    scope.set(name, { value, exported: false });
+
+  const inFunction = shell.scopes.length > 1;
+  const scope = local && inFunction && !flags.has('g') ? shell.scopes[shell.scopes.length - 1] : null;
+  let status = 0;
+  for (const item of items) {
+    let name;
+    let value;
+    let hasValue = false;
+    let append = false;
+    if (typeof item === 'object') {
+      name = item.name;
+      value = item.values;
+      hasValue = true;
+      append = item.append;
+    } else {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)(?:=([\s\S]*))?$/.exec(item);
+      if (!m) { err(shell, io, `typeset: not an identifier: ${item}\n`); status = 1; continue; }
+      name = m[1];
+      append = m[2] === '+';
+      if (m[3] !== undefined) { value = m[3]; hasValue = true; }
+    }
+    if (flags.has('p') && !hasValue) {
+      const entry = shell.findEntry(name);
+      if (entry) out(shell, io, describe(name, entry)); else { err(shell, io, `typeset: no such variable: ${name}\n`); status = 1; }
+      continue;
+    }
+
+    let entry = scope ? scope.get(name) : shell.findEntry(name);
+    if (!entry) {
+      entry = { value: flags.has('A') ? new Map() : flags.has('a') ? [] : '', exported: Object.prototype.hasOwnProperty.call(shell.env, name) && !scope };
+      if (!hasValue && !flags.has('A') && !flags.has('a') && !scope) {
+        const existing = shell.env[name];
+        if (existing !== undefined) entry.value = existing;
+      }
+      if (scope) scope.set(name, entry); else shell.vars.set(name, entry);
+    } else if (entry.readonly && (hasValue || flags.size)) {
+      err(shell, io, `typeset: read-only variable: ${name}\n`);
+      status = 1;
+      continue;
+    }
+    if (flags.has('A') && !(entry.value instanceof Map)) entry.value = new Map();
+    if (flags.has('a') && !Array.isArray(entry.value)) entry.value = entry.value === '' ? [] : [entry.value];
+    for (const [f, key] of [['i', 'integer'], ['F', 'float'], ['E', 'float'], ['l', 'lower'], ['u', 'upper']]) {
+      if (flags.has(f)) entry[key] = true;
+      if (unflags.has(f)) entry[key] = false;
+    }
+    if (flags.has('x')) entry.exported = true;
+    if (unflags.has('x')) { entry.exported = false; delete shell.env[name]; }
+
+    try {
+      if (hasValue) {
+        if (Array.isArray(value)) {
+          if (entry.value instanceof Map) {
+            const m = append ? new Map(entry.value) : new Map();
+            for (let k = 0; k < value.length; k += 2) m.set(value[k], value[k + 1] ?? '');
+            entry.value = m;
+          } else entry.value = append && Array.isArray(entry.value) ? entry.value.concat(value) : value;
+        } else if (append && (entry.integer || entry.float)) {
+          entry.value = shell.coerce(name, entry, `(${entry.value || 0})+(${value || 0})`);
+        } else entry.value = shell.coerce(name, entry, append ? `${entry.value}${value}` : value);
+      } else if (entry.integer && typeof entry.value === 'string') {
+        entry.value = shell.coerce(name, entry, entry.value || '0');
+      } else if ((entry.lower || entry.upper) && typeof entry.value === 'string') {
+        entry.value = shell.coerce(name, entry, entry.value);
+      }
+    } catch (e) { err(shell, io, `typeset: ${e.message}\n`); status = 1; continue; }
+    if (flags.has('r')) entry.readonly = true;
+    if (entry.exported) shell.env[name] = Array.isArray(entry.value) ? entry.value.join(' ') : entry.value instanceof Map ? [...entry.value.values()].join(' ') : entry.value;
   }
-  return 0;
+  return status;
 }
 
-BUILTINS.local = (args, io, shell) => declareLike(args, io, shell, true);
-BUILTINS.typeset = (args, io, shell) => declareLike(args, io, shell, true);
-BUILTINS.declare = (args, io, shell) => declareLike(args, io, shell, false);
+BUILTINS.local = (args, io, shell) => declareLike(args, io, shell);
+BUILTINS.typeset = (args, io, shell) => declareLike(args, io, shell);
+BUILTINS.declare = (args, io, shell) => declareLike(args, io, shell);
+BUILTINS.readonly = (args, io, shell) => declareLike(args, io, shell, { local: false, preset: 'r' });
+BUILTINS.integer = (args, io, shell) => declareLike(args, io, shell, { preset: 'i' });
+BUILTINS.float = (args, io, shell) => declareLike(args, io, shell, { preset: 'F' });
 
+// alias name=value; -g global (expands anywhere on the line); -s suffix
+// (alias -s txt=vim makes `notes.txt` open in vim); -L prints as commands.
 BUILTINS.alias = (args, io, shell) => {
-  if (!args.length) {
-    for (const [name, value] of [...shell.aliases].sort()) {
-      out(shell, io, `alias ${name}=${JSON.stringify(value)}\n`);
-    }
+  let kind = 'aliases';
+  let asCmd = false;
+  const items = [];
+  for (const a of args) {
+    if (/^-[gsLrm]+$/.test(a)) {
+      if (a.includes('g')) kind = 'galiases';
+      if (a.includes('s')) kind = 'saliases';
+      if (a.includes('L')) asCmd = true;
+    } else items.push(a);
+  }
+  const map = shell[kind];
+  const flag = kind === 'galiases' ? ' -g' : kind === 'saliases' ? ' -s' : '';
+  const q = (v) => `'${v.replace(/'/g, "'\\''")}'`;
+  const show = (n, v) => (asCmd ? `alias${flag} ${n}=${q(v)}\n` : `${n}=${/^[\w@%+=:,./-]+$/.test(v) ? v : q(v)}\n`);
+  if (!items.length) {
+    for (const [name, value] of [...map].sort()) out(shell, io, show(name, value));
     return 0;
   }
   let status = 0;
-  for (const a of args) {
+  for (const a of items) {
     const eq = a.indexOf('=');
     if (eq === -1) {
-      if (shell.aliases.has(a)) out(shell, io, `alias ${a}=${JSON.stringify(shell.aliases.get(a))}\n`);
-      else { err(shell, io, `alias: ${a} not found\n`); status = 1; }
+      if (map.has(a)) out(shell, io, show(a, map.get(a)));
+      else { err(shell, io, `alias: no such alias: ${a}\n`); status = 1; }
     } else {
-      shell.aliases.set(a.slice(0, eq), a.slice(eq + 1));
+      map.set(a.slice(0, eq), a.slice(eq + 1));
     }
   }
   return status;
 };
 
 BUILTINS.unalias = (args, io, shell) => {
-  for (const a of args) shell.aliases.delete(a);
-  return 0;
+  let kind = 'aliases';
+  let status = 0;
+  for (const a of args) {
+    if (a === '-g') { kind = 'galiases'; continue; }
+    if (a === '-s') { kind = 'saliases'; continue; }
+    if (a === '-a') { shell[kind].clear(); continue; }
+    if (!shell[kind].delete(a)) { err(shell, io, `unalias: no such hash table element: ${a}\n`); status = 1; }
+  }
+  return status;
 };
 
 BUILTINS.history = (args, io, shell) => {
@@ -626,11 +859,20 @@ BUILTINS.exit = (args, io, shell) => {
 };
 
 BUILTINS.return = (args, io, shell) => {
-  throw new ReturnSignal(args.length ? Number(args[0]) & 0xff : shell.status);
+  const { evalArith } = require('./arith');
+  throw new ReturnSignal(args.length ? Math.trunc(evalArith(args[0], shell)) & 0xff : shell.status);
 };
 
-BUILTINS.break = (args) => { throw new BreakSignal(args.length ? Number(args[0]) : 1); };
-BUILTINS.continue = (args) => { throw new ContinueSignal(args.length ? Number(args[0]) : 1); };
+function loopControl(Signal, word) {
+  return (args, io, shell) => {
+    if (!shell.loopDepth) { err(shell, io, `${word}: not in while, until, select, or repeat loop\n`); return 1; }
+    const n = args.length ? Number(args[0]) : 1;
+    if (!Number.isInteger(n) || n < 1) { err(shell, io, `${word}: argument is not positive: ${args[0]}\n`); return 1; }
+    throw new Signal(Math.min(n, shell.loopDepth));
+  };
+}
+BUILTINS.break = loopControl(BreakSignal, 'break');
+BUILTINS.continue = loopControl(ContinueSignal, 'continue');
 
 BUILTINS.test = (args, io, shell) => (evalTest(args, shell) ? 0 : 1);
 BUILTINS['['] = (args, io, shell) => {
@@ -647,7 +889,7 @@ BUILTINS.let = (args, io, shell) => {
   return last ? 0 : 1;
 };
 
-BUILTINS.eval = (args, io, shell) => shell.runSource(args.join(' '), io);
+BUILTINS.eval = (args, io, shell) => (args.length ? shell.runSource(args.join(' '), io) : 0);
 
 BUILTINS.source = (args, io, shell) => {
   if (!args.length) { err(shell, io, 'source: filename argument required\n'); return 1; }
@@ -659,68 +901,321 @@ BUILTINS.source = (args, io, shell) => {
   }
   const saved = shell.positional;
   if (args.length > 1) shell.positional = args.slice(1);
-  try { return shell.runSource(src, io); } finally { shell.positional = saved; }
+  const savedDepth = shell.funcDepth;
+  try {
+    return shell.runSource(src, io);
+  } catch (e) {
+    // return in a sourced file stops the file.
+    if (e instanceof ReturnSignal && shell.funcDepth === savedDepth) return e.status;
+    throw e;
+  } finally { shell.positional = saved; }
 };
 BUILTINS['.'] = BUILTINS.source;
 
 BUILTINS.read = (args, io, shell) => {
   let raw = false;
   let prompt = null;
+  let arrayName = null;
+  let delim = '\n';
+  let nchars = null;
+  let silent = false;
+  let quiet = false;
   let i = 0;
   while (i < args.length && args[i].startsWith('-') && args[i].length > 1) {
     const flag = args[i];
-    if (flag === '-r') { raw = true; i++; continue; }
+    if (flag === '--') { i++; break; }
     if (flag === '-p') { prompt = args[i + 1] ?? ''; i += 2; continue; }
+    if (flag === '-A' || flag === '-a') { arrayName = args[i + 1]; i += 2; continue; }
+    if (flag === '-d') { delim = (args[i + 1] ?? '\n')[0] ?? '\0'; i += 2; continue; }
+    if (flag === '-k' || flag === '-n') { nchars = Number(args[i + 1]) || 1; i += 2; continue; }
+    if (flag === '-t') { i += /^\d/.test(args[i + 1] || '') ? 2 : 1; continue; }
+    if (/^-[rsqeE]+$/.test(flag)) {
+      if (flag.includes('r')) raw = true;
+      if (flag.includes('s')) silent = true;
+      if (flag.includes('q')) quiet = true;
+      i++;
+      continue;
+    }
     if (flag.startsWith('-p')) { prompt = flag.slice(2); i++; continue; }
     break;
   }
+  // zsh: read 'name?prompt' shows the prompt.
+  if (args[i] && args[i].includes('?')) {
+    const q = args[i].indexOf('?');
+    prompt = args[i].slice(q + 1);
+    args = [...args.slice(0, i), args[i].slice(0, q), ...args.slice(i + 1)];
+  }
   if (prompt !== null) err(shell, io, prompt);
 
-  const line = shell.readLine(io.stdin);
+  let line;
+  if (nchars !== null || delim !== '\n' || silent || quiet) line = readChars(shell, io.stdin, { nchars: quiet ? 1 : nchars, delim, silent });
+  else line = shell.readLine(io.stdin);
+  if (quiet) {
+    const yes = /^[yY]$/.test(line || '');
+    shell.setVar(args[i] || 'REPLY', yes ? 'y' : 'n');
+    return yes ? 0 : 1;
+  }
   if (line === null) return 1;
   const text = raw ? line : line.replace(/\\(.)/g, '$1');
+
+  const ifs = shell.getVar('IFS') ?? ' \t\n';
+  const fieldsOf = (t) => {
+    if (!ifs) return [t];
+    const re = new RegExp(`[${ifs.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}]+`);
+    return t.split(re).filter((f, idx, arr) => !(f === '' && (idx === 0 || idx === arr.length - 1)));
+  };
+  if (arrayName) { shell.setVar(arrayName, fieldsOf(text)); return 0; }
 
   const names = args.slice(i);
   if (!names.length) { shell.setVar('REPLY', text); return 0; }
 
-  const ifs = shell.getVar('IFS') ?? ' \t\n';
-  const fields = text.split(new RegExp(`[${ifs.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}]+`)).filter((f, idx, arr) => !(f === '' && (idx === 0 || idx === arr.length - 1)));
+  const fields = fieldsOf(text);
   names.forEach((name, idx) => {
-    if (idx === names.length - 1) shell.setVar(name, fields.slice(idx).join(' '));
-    else shell.setVar(name, fields[idx] ?? '');
+    if (idx === names.length - 1) {
+      // The last name takes the rest of the line, as typed.
+      let rest = text;
+      for (let k = 0; k < idx && k < fields.length; k++) rest = rest.slice(rest.indexOf(fields[k]) + fields[k].length);
+      const trim = ifs.replace(/[^ \t\n]/g, '');
+      rest = idx ? rest.replace(new RegExp(`^[${trim}]*[${ifs.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}]?[${trim}]*`), '') : rest.replace(new RegExp(`^[${trim}]+`), '');
+      shell.setVar(name, rest.replace(new RegExp(`[${trim}]+$`), '') );
+    } else shell.setVar(name, fields[idx] ?? '');
   });
   return 0;
 };
 
+// Reads up to a delimiter or a number of characters; -s turns echo off.
+function readChars(shell, desc, { nchars, delim, silent }) {
+  if (desc.kind === 'string') {
+    const rest = desc.data.slice(desc.pos);
+    let end = nchars !== null ? Math.min(nchars, rest.length) : rest.indexOf(delim);
+    if (end === -1) end = rest.length;
+    if (!rest.length) return null;
+    desc.pos += end + (nchars === null && end < rest.length ? 1 : 0);
+    return rest.slice(0, end);
+  }
+  const fd = desc.kind === 'fd' ? desc.fd : 0;
+  const tty = fd === 0 && process.stdin.isTTY;
+  let wasRaw = false;
+  if (tty && (silent || nchars !== null)) {
+    wasRaw = process.stdin.isRaw;
+    try { process.stdin.setRawMode(true); } catch { /* not a tty */ }
+  }
+  const buf = Buffer.alloc(4);
+  let line = '';
+  try {
+    for (;;) {
+      let n = 0;
+      try { n = fs.readSync(fd, buf, 0, 1, null); } catch { n = 0; }
+      if (!n) return line === '' ? null : line;
+      const c = buf.toString('utf8', 0, n);
+      if (tty && c === '\x03') { process.stdout.write('\n'); return null; }
+      if (nchars === null && (c === delim || (tty && c === '\r' && delim === '\n'))) break;
+      line += c;
+      if (nchars !== null && [...line].length >= nchars) break;
+    }
+  } finally {
+    if (tty && (silent || nchars !== null)) {
+      try { process.stdin.setRawMode(wasRaw); } catch { /* not a tty */ }
+      if (silent) process.stdout.write('\n');
+    }
+  }
+  return line;
+}
+
+// Option names as zsh spells them: case and underscores don't matter, and
+// a leading "no" turns one off. The one-letter forms map onto the same set.
+const OPTION_LETTERS = { errexit: 'e', nounset: 'u', xtrace: 'x', verbose: 'v', noglob: 'noglob', allexport: 'allexport' };
+const LETTER_OPTIONS = { e: 'e', u: 'u', x: 'x', v: 'v', f: 'noglob', a: 'allexport', C: 'noclobber' };
+const KNOWN_OPTIONS = new Set(['e', 'u', 'x', 'v', 'pipefail', 'noglob', 'allexport', 'noclobber', 'autocd', 'nullglob',
+  'globdots', 'nomatch', 'shwordsplit', 'globsubst', 'extendedglob', 'ignorebraces', 'chaselinks', 'autopushd',
+  'pushdignoredups', 'pushdsilent', 'ksharrays', 'promptsubst', 'interactivecomments', 'histignorespace', 'correct',
+  'caseglob', 'markdirs', 'localoptions', 'nonotify', 'notify', 'monitor', 'banghist', 'sharehistory', 'appendhistory',
+  'incappendhistory', 'histignorealldups', 'histignoredups', 'histreduceblanks', 'extendedhistory', 'autolist',
+  'automenu', 'completeinword', 'alwaystoend', 'autoparamslash', 'listpacked', 'menucomplete', 'nobeep', 'beep']);
+
+function setOption(shell, name, on) {
+  let n = String(name).toLowerCase().replace(/_/g, '');
+  if (OPTION_LETTERS[n]) n = OPTION_LETTERS[n];
+  else if (!KNOWN_OPTIONS.has(n) && n.startsWith('no') && KNOWN_OPTIONS.has(n.slice(2))) { n = n.slice(2); on = !on; } else if (!KNOWN_OPTIONS.has(n) && n.startsWith('no') && OPTION_LETTERS[n.slice(2)]) { n = OPTION_LETTERS[n.slice(2)]; on = !on; }
+  if (!KNOWN_OPTIONS.has(n)) return false;
+  if (on) shell.options.add(n); else shell.options.delete(n);
+  return true;
+}
+
 BUILTINS.set = (args, io, shell) => {
   if (!args.length) {
-    for (const [name, entry] of [...shell.vars].sort()) {
-      out(shell, io, `${name}=${Array.isArray(entry.value) ? `(${entry.value.join(' ')})` : entry.value}\n`);
+    for (const [name, entry] of [...shell.vars].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+      const v = entry.value;
+      out(shell, io, `${name}=${v instanceof Map ? `(${[...v.values()].join(' ')})` : Array.isArray(v) ? `(${v.join(' ')})` : v}\n`);
     }
     return 0;
   }
   let i = 0;
+  let status = 0;
   for (; i < args.length; i++) {
     const a = args[i];
     if (a === '--') { i++; break; }
+    if (a === '-') { i++; break; }
     if (a === '-o' || a === '+o') {
       const name = args[++i];
-      if (!name) continue;
-      if (a === '-o') shell.options.add(name); else shell.options.delete(name);
+      if (!name) {
+        for (const o of [...KNOWN_OPTIONS].sort()) out(shell, io, `${o.padEnd(22)}${shell.options.has(o) ? 'on' : 'off'}\n`);
+        continue;
+      }
+      if (!setOption(shell, name, a === '-o')) { err(shell, io, `set: no such option: ${name}\n`); status = 1; }
       continue;
     }
-    if (a.startsWith('-') && a.length > 1) { for (const f of a.slice(1)) shell.options.add(f); continue; }
-    if (a.startsWith('+') && a.length > 1) { for (const f of a.slice(1)) shell.options.delete(f); continue; }
+    if (a === '-A' || a === '+A') {
+      const name = args[i + 1];
+      if (name) shell.setVar(name, args.slice(i + 2));
+      return 0;
+    }
+    if (/^[-+][a-zA-Z]+$/.test(a)) {
+      for (const f of a.slice(1)) {
+        const n = LETTER_OPTIONS[f];
+        if (!n) { err(shell, io, `set: bad option: ${a[0]}${f}\n`); status = 1; continue; }
+        if (a[0] === '-') shell.options.add(n); else shell.options.delete(n);
+      }
+      continue;
+    }
     break;
   }
-  if (i < args.length || args.includes('--')) shell.positional = args.slice(i);
+  if (i < args.length || args.includes('--') || args.includes('-')) shell.positional = args.slice(i);
+  return status;
+};
+
+BUILTINS.setopt = (args, io, shell) => {
+  if (!args.length) {
+    for (const o of [...shell.options].map((x) => ({ e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose' }[x] || x)).sort()) out(shell, io, `${o}\n`);
+    return 0;
+  }
+  let status = 0;
+  for (const a of args) if (!setOption(shell, a, true)) { err(shell, io, `setopt: no such option: ${a}\n`); status = 1; }
+  return status;
+};
+
+BUILTINS.unsetopt = (args, io, shell) => {
+  let status = 0;
+  for (const a of args) if (!setOption(shell, a, false)) { err(shell, io, `unsetopt: no such option: ${a}\n`); status = 1; }
+  return status;
+};
+
+// maxshell always behaves like zsh; emulate is accepted so scripts that
+// start with `emulate -L zsh` run.
+BUILTINS.emulate = () => 0;
+
+// trap 'code' SIG…   trap - SIG   trap '' SIG   trap (lists them)
+const SIGNAL_NAMES = ['EXIT', 'ERR', 'ZERR', 'DEBUG', 'HUP', 'INT', 'QUIT', 'TERM', 'USR1', 'USR2', 'WINCH', 'ALRM', 'PIPE', 'CHLD', 'CONT', 'TSTP'];
+function sigName(s) {
+  const up = String(s).toUpperCase().replace(/^SIG/, '');
+  if (up === '0') return 'EXIT';
+  if (up === 'ZERR') return 'ERR';
+  if (/^\d+$/.test(up)) {
+    const found = Object.entries(os.constants.signals).find(([, n]) => n === Number(up));
+    return found ? found[0].replace(/^SIG/, '') : null;
+  }
+  return SIGNAL_NAMES.includes(up) || os.constants.signals[`SIG${up}`] ? up : null;
+}
+
+BUILTINS.trap = (args, io, shell) => {
+  if (!args.length || (args.length === 1 && args[0] === '-p')) {
+    for (const [sig, code] of shell.traps) out(shell, io, `trap -- '${code.replace(/'/g, "'\\''")}' ${sig}\n`);
+    return 0;
+  }
+  if (args[0] === '-l') { out(shell, io, `${SIGNAL_NAMES.join(' ')}\n`); return 0; }
+  let code = args[0];
+  let sigs = args.slice(1);
+  if (args[0] === '--') { code = args[1]; sigs = args.slice(2); }
+  if (!sigs.length && sigName(code)) { sigs = [code]; code = '-'; }
+  let status = 0;
+  for (const s of sigs) {
+    const name = sigName(s);
+    if (!name) { err(shell, io, `trap: undefined signal: ${s}\n`); status = 1; continue; }
+    if (code === '-') shell.traps.delete(name);
+    else shell.traps.set(name, code);
+    if (shell.onTrapChange) shell.onTrapChange(name);
+  }
+  return status;
+};
+
+// getopts optstring name [args…] — one option per call, via OPTIND/OPTARG.
+BUILTINS.getopts = (args, io, shell) => {
+  if (args.length < 2) { err(shell, io, 'getopts: not enough arguments\n'); return 2; }
+  let [spec, name, ...list] = args;
+  if (!list.length) list = shell.positional;
+  const silent = spec.startsWith(':');
+  if (silent) spec = spec.slice(1);
+  let ind = Number(shell.getVar('OPTIND') || 1);
+  if (!Number.isInteger(ind) || ind < 1) ind = 1;
+  let pos = shell.getoptsPos && shell.getoptsPos.ind === ind ? shell.getoptsPos.pos : 1;
+  const word = list[ind - 1];
+  if (word === undefined || word === '--' || !/^[-+]./.test(word)) {
+    if (word === '--') shell.setVar('OPTIND', String(ind + 1));
+    shell.setVar(name, '?');
+    shell.getoptsPos = null;
+    return 1;
+  }
+  const opt = word[pos];
+  const next = () => {
+    if (pos + 1 < word.length) { shell.getoptsPos = { ind, pos: pos + 1 }; } else { shell.getoptsPos = null; ind++; }
+    shell.setVar('OPTIND', String(ind));
+  };
+  const at = spec.indexOf(opt);
+  if (at === -1 || opt === ':') {
+    shell.setVar(name, '?');
+    if (silent) shell.setVar('OPTARG', opt); else { shell.unsetVar('OPTARG'); err(shell, io, `${shell.scriptName}: bad option: -${opt}\n`); }
+    next();
+    return 0;
+  }
+  if (spec[at + 1] === ':') {
+    let arg;
+    if (pos + 1 < word.length) { arg = word.slice(pos + 1); ind++; } else { arg = list[ind]; ind += 2; }
+    shell.getoptsPos = null;
+    shell.setVar('OPTIND', String(ind));
+    if (arg === undefined) {
+      if (silent) { shell.setVar(name, ':'); shell.setVar('OPTARG', opt); } else { shell.setVar(name, '?'); err(shell, io, `${shell.scriptName}: argument expected after -${opt} option\n`); }
+      return 0;
+    }
+    shell.setVar(name, word[0] === '+' ? `+${opt}` : opt);
+    shell.setVar('OPTARG', arg);
+    return 0;
+  }
+  shell.setVar(name, word[0] === '+' ? `+${opt}` : opt);
+  shell.unsetVar('OPTARG');
+  next();
   return 0;
 };
 
+// command name args: skips functions and aliases. The system program wins
+// (so `command ls` is the real ls), falling back to a builtin.
+// command -v / -V say what a name is.
 BUILTINS.command = (args, io, shell) => {
+  let i = 0;
+  let mode = null;
+  while (i < args.length && /^-[pvV]+$/.test(args[i])) {
+    if (args[i].includes('v')) mode = 'v';
+    if (args[i].includes('V')) mode = 'V';
+    i++;
+  }
+  const rest = args.slice(i);
+  if (!rest.length) return 0;
+  if (mode) {
+    let status = 0;
+    for (const n of rest) {
+      const d = mode === 'v' ? whenceOne(n, shell, { short: true })[0] : whenceOne(n, shell, { verbose: true })[0];
+      if (d) out(shell, io, `${d}\n`); else { if (mode === 'V') err(shell, io, `${n} not found\n`); status = 1; }
+    }
+    return status;
+  }
+  if (!findInPath(rest[0], shell) && BUILTINS[rest[0]]) return BUILTINS[rest[0]](rest.slice(1), io, shell) ?? 0;
+  return shell.runExternal(rest, io, shell.env);
+};
+
+// builtin name args: runs the builtin even if a function has the name.
+BUILTINS.builtin = (args, io, shell) => {
   if (!args.length) return 0;
-  const argv = args.filter((a) => a !== '-p');
-  return shell.runExternal(argv, io, shell.env);
+  if (!BUILTINS[args[0]]) { err(shell, io, `builtin: no such builtin: ${args[0]}\n`); return 1; }
+  return BUILTINS[args[0]](args.slice(1), io, shell) ?? 0;
 };
 
 BUILTINS.jobs = (args, io, shell) => {
@@ -728,27 +1223,57 @@ BUILTINS.jobs = (args, io, shell) => {
   return 0;
 };
 
-function describe(name, shell, verbose) {
-  if (shell.aliases.has(name)) return `${name} is an alias for ${shell.aliases.get(name)}`;
-  if (shell.funcs.has(name)) return `${name} is a shell function`;
-  if (RESERVED.has(name)) return `${name} is a reserved word`;
-  if (BUILTINS[name]) return `${name} is a shell builtin`;
-  const p = findInPath(name, shell);
-  if (p) return verbose ? `${name} is ${p}` : p;
-  return null;
+// Every meaning of a name, most important first, in one of zsh's styles:
+// short (whence), verbose (whence -v / type), csh (which / whence -c).
+function whenceOne(name, shell, { verbose = false, csh = false, all = false, short = false, pathOnly = false } = {}) {
+  const found = [];
+  if (!pathOnly) {
+    if (shell.aliases.has(name)) {
+      const v = shell.aliases.get(name);
+      found.push(verbose ? `${name} is an alias for ${v}` : csh ? `${name}: aliased to ${v}` : short ? `alias ${name}=${JSON.stringify(v)}` : v);
+    }
+    if (RESERVED.has(name)) found.push(verbose ? `${name} is a reserved word` : csh ? `${name}: shell reserved word` : name);
+    if (shell.funcs.has(name)) found.push(verbose ? `${name} is a shell function` : csh ? `${name} () { … }` : name);
+    if (BUILTINS[name]) found.push(verbose ? `${name} is a shell builtin` : csh ? `${name}: shell built-in command` : name);
+  }
+  const dirs = (shell.env.PATH || '').split(':').filter(Boolean);
+  const paths = [];
+  if (name.includes('/')) { const p = findInPath(name, shell); if (p) paths.push(p); } else {
+    for (const d of dirs) {
+      const p = path.join(d, name);
+      try { if (fs.statSync(p).isFile()) { fs.accessSync(p, fs.constants.X_OK); if (!paths.includes(p)) paths.push(p); } } catch { /* keep looking */ }
+    }
+  }
+  for (const p of paths) found.push(verbose ? `${name} is ${p}` : p);
+  return all ? found : found.slice(0, 1);
 }
 
-BUILTINS.type = (args, io, shell) => {
+function whenceLike(args, io, shell, defaults) {
+  const opts = { ...defaults };
+  let i = 0;
+  for (; i < args.length && /^-[vcapmsw]+$/.test(args[i]); i++) {
+    if (args[i].includes('v')) opts.verbose = true;
+    if (args[i].includes('c')) opts.csh = true;
+    if (args[i].includes('a')) opts.all = true;
+    if (args[i].includes('p')) opts.pathOnly = true;
+  }
   let status = 0;
-  for (const a of args) {
-    const d = describe(a, shell, true);
-    if (d) out(shell, io, `${d}\n`);
-    else { err(shell, io, `type: ${a} not found\n`); status = 1; }
+  for (const a of args.slice(i)) {
+    const lines = whenceOne(a, shell, opts);
+    if (lines.length) out(shell, io, `${lines.join('\n')}\n`);
+    else {
+      status = 1;
+      if (opts.verbose) out(shell, io, `${a} not found\n`);
+      else if (opts.csh) out(shell, io, `${a} not found\n`);
+    }
   }
   return status;
-};
+}
 
-BUILTINS.whence = BUILTINS.type;
+BUILTINS.type = (args, io, shell) => whenceLike(args, io, shell, { verbose: true });
+BUILTINS.whence = (args, io, shell) => whenceLike(args, io, shell, {});
+BUILTINS.which = (args, io, shell) => whenceLike(args, io, shell, { csh: true });
+BUILTINS.where = (args, io, shell) => whenceLike(args, io, shell, { csh: true, all: true });
 
 BUILTINS.gitui = (args, io, shell) => {
   const { runGitUI } = require('./gitui');
@@ -780,15 +1305,6 @@ BUILTINS.top = (args, io, shell) => {
   return runTop(args, io, shell);
 };
 
-BUILTINS.which = (args, io, shell) => {
-  let status = 0;
-  for (const a of args) {
-    const d = describe(a, shell, false);
-    if (d) out(shell, io, `${d}\n`);
-    else { err(shell, io, `which: ${a} not found\n`); status = 1; }
-  }
-  return status;
-};
 
 module.exports = {
   BUILTINS,

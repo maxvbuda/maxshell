@@ -100,8 +100,11 @@ test('command substitution', () => {
   assert.deepStrictEqual(sh('echo `echo backticks`'), ['backticks']);
 });
 
-test('field splitting of unquoted expansions', () => {
-  assert.deepStrictEqual(sh('v="a b c"\nfor x in $v; do echo $x; done'), ['a', 'b', 'c']);
+test('unquoted $v stays one word, as in zsh; ${=v} and shwordsplit split it', () => {
+  assert.deepStrictEqual(sh('v="a b c"\nfor x in $v; do echo $x; done'), ['a b c']);
+  assert.deepStrictEqual(sh('v="a b c"\nfor x in ${=v}; do echo $x; done'), ['a', 'b', 'c']);
+  assert.deepStrictEqual(sh('setopt shwordsplit\nv="a b c"\nfor x in $v; do echo $x; done'), ['a', 'b', 'c']);
+  assert.deepStrictEqual(sh('for x in $(echo a b); do echo $x; done'), ['a', 'b']);
 });
 
 test('quoting prevents field splitting', () => {
@@ -424,6 +427,190 @@ test('globs expand against the filesystem', () => {
 
 test('a glob with no matches stays literal', () => {
   assert.deepStrictEqual(sh('echo /nonexistent-dir-xyz/*.none'), ['/nonexistent-dir-xyz/*.none']);
+});
+
+
+// --- zsh parity -------------------------------------------------------------
+
+test('brace expansion: lists, ranges, padding, steps, nesting', () => {
+  assert.deepStrictEqual(sh('echo {a,b,c} x{1..3} {1..10..4} {05..07} {c..a} {a,{b,c}}d pre{,x}'),
+    ['a b c x1 x2 x3 1 5 9 05 06 07 c b a ad bd cd pre prex']);
+  assert.deepStrictEqual(sh(`echo "{a,b}" '{c,d}' {a} {}`), ['{a,b} {c,d} {a} {}']);
+  assert.deepStrictEqual(sh('for i in {1..3}; do echo -n $i; done; echo'), ['123']);
+});
+
+test('arrays keep their elements through quoting and splicing', () => {
+  assert.deepStrictEqual(sh('a=(one "two three")\nprintf "[%s]" "${a[@]}"; echo'), ['[one][two three]']);
+  assert.deepStrictEqual(sh('a=(one "two three")\nprintf "[%s]" $a; echo'), ['[one][two three]']);
+  assert.deepStrictEqual(sh('a=(one two)\nprintf "[%s]" "$a"; echo'), ['[one two]']);
+  assert.deepStrictEqual(sh('a=()\necho ${#a}\na+=(x)\na=(0 $a)\necho $a'), ['0', '0 x']);
+  assert.deepStrictEqual(sh('a=(1 2 3 4)\na[2,3]=(x)\necho $a\na[1]=()\necho $a'), ['1 x 4', 'x 4']);
+  assert.deepStrictEqual(sh('a=(a b c d e)\necho ${a[2,-2]} ${a[(r)c*]} ${a[(i)d]} $#a ${a:1:2}'), ['b c d c 4 5 b c']);
+  assert.deepStrictEqual(sh('a=(a b)\necho x${^a}y'), ['xay xby']);
+});
+
+test('associative arrays', () => {
+  const src = `
+    typeset -A h
+    h=(one 1 two 2)
+    k=three
+    h[$k]=3
+    echo \${#h} $h[two] \${h[three]} \${+h[one]} \${+h[nope]}
+    for k v in \${(kv)h}; do echo $k=$v; done
+    unset 'h[one]'
+    echo \${(k)h}
+  `;
+  assert.deepStrictEqual(sh(src), ['3 2 3 1 0', 'one=1', 'two=2', 'three=3', 'two three']);
+});
+
+test('parameter flags', () => {
+  assert.deepStrictEqual(sh('x=hello\necho ${(U)x} ${(C)${:-hello world}}'), ['HELLO Hello World']);
+  assert.deepStrictEqual(sh('a=(c a b b)\necho ${(o)a} ${(O)a} ${(u)a} ${(j:,:)a}'), ['a b b c c b b a c a b c,a,b,b']);
+  assert.deepStrictEqual(sh('s=a:b:c\necho ${(s.:.)s[2]} ${${(s.:.)s}[2]} ${#${(s.:.)s}}'), ['b 3']);
+  assert.deepStrictEqual(sh('n=7\necho ${(l:3::0:)n} ${(r:4::-:)n}'), ['007 7---']);
+  assert.deepStrictEqual(sh('v=HOME\n[[ ${(P)v} == $HOME ]] && echo indirect'), ['indirect']);
+  assert.deepStrictEqual(sh('lines=$(printf "a\\nb\\nc")\narr=(${(f)lines})\necho ${#arr}'), ['3']);
+});
+
+test('modifiers, bare and braced', () => {
+  assert.deepStrictEqual(sh('f=/usr/lib/libz.1.dylib\necho $f:t $f:h ${f:t:r} ${f:e} ${f:h:h:t}'), ['libz.1.dylib /usr/lib libz.1 dylib usr']);
+  assert.deepStrictEqual(sh('x=hello\necho ${x:u} ${x:s/l/L/} ${x:gs/l/L/}'), ['HELLO heLlo heLLo']);
+  assert.deepStrictEqual(sh('x=/\necho ${x:h} file:h'), ['/ file:h']);
+});
+
+test('pattern operators honour anchors and quoting', () => {
+  assert.deepStrictEqual(sh('w=word\necho ${w/#w/W} ${w/%d/D} ${w//[ow]/_}'), ['Word worD __rd']);
+  assert.deepStrictEqual(sh('x="a*b"\necho ${x#"a*"} ${x#a*}'), ['b *b']);
+  assert.deepStrictEqual(sh('set -- a b c d\necho ${@:2} ${*:2:2}'), ['b c d b c']);
+});
+
+test("$'...' quoting", () => {
+  assert.deepStrictEqual(sh("echo $'a\\tb' $'it\\'s' $'\\x41\\u00e9'"), ['a\tb it\'s Aé']);
+});
+
+test('arithmetic: 64-bit, bases, floats, short-circuit, array elements', () => {
+  assert.deepStrictEqual(sh('echo $(( 1 << 62 )) $(( 2#101 + 16#ff )) $(( 7 / 2. )) $(( -7 / 2 ))'), ['4611686018427387904 260 3.5 -3']);
+  assert.deepStrictEqual(sh('x=0 y=0\n(( x && y++ ))\n(( 1 || y++ ))\necho $y $(( 1 ? 5 : 1/0 ))'), ['0 5']);
+  assert.deepStrictEqual(sh('a=(1 2 3)\n(( a[2] += 5 ))\necho $a $(( a[3] * 2 )) $(( $#a ))'), ['1 7 3 6 3']);
+  assert.deepStrictEqual(sh('e="2+3"\necho $(( e * 2 ))'), ['10']);
+  assert.deepStrictEqual(sh('typeset -A m\nm[x]=1\n(( ${+m[x]} )) && echo has'), ['has']);
+});
+
+test('typeset attributes: integer, readonly, case, arrays as arguments', () => {
+  assert.deepStrictEqual(sh('integer i=3+4\ni+=2\necho $i\ntypeset -u u=hi\necho $u'), ['9', 'HI']);
+  const { shell, lines } = makeShell();
+  assert.throws(() => shell.run('readonly r=1\nr=2\necho unreached'), /read-only variable: r/);
+  assert.deepStrictEqual(lines, []);
+  assert.deepStrictEqual(sh('declare -a z=(1 "2 3")\necho ${#z}\nf() { local -a q=(x y); echo ${#q}; }\nf\necho "[$q]"'), ['2', '2', '[]']);
+  assert.deepStrictEqual(sh('f() { typeset x=inner; g; }\ng() { echo $x; }\nx=outer\nf\necho $x'), ['inner', 'outer']);
+});
+
+test('the status of x=$(cmd) is the status of cmd', () => {
+  assert.deepStrictEqual(sh('x=$(exit 7)\necho $?\ny=$(true)\necho $?'), ['7', '0']);
+});
+
+test('[[ ]] patterns and regexes may use parentheses', () => {
+  assert.deepStrictEqual(sh('[[ abc =~ ^a(b)c$ ]] && echo $match[1] $MATCH'), ['b abc']);
+  assert.deepStrictEqual(sh('[[ foo.ts == *.(js|ts) ]] && echo ext\nv="*"\n[[ x == $v ]] || echo literal'), ['ext', 'literal']);
+});
+
+test('case: alternation in patterns, ;& and ;|', () => {
+  assert.deepStrictEqual(sh('case foo.h in *.(c|h)) echo csrc;; esac'), ['csrc']);
+  assert.deepStrictEqual(sh('case x in x) echo one;| x) echo two;; x) echo no;; esac'), ['one', 'two']);
+  assert.deepStrictEqual(sh('case x in x) echo one;& y) echo two;; esac'), ['one', 'two']);
+});
+
+test('short loops, repeat, select, always', () => {
+  assert.deepStrictEqual(sh('for i (a b) echo $i\nfor ((i=3; i>0; i-=2)) echo $i\nrepeat 2 echo r'), ['a', 'b', '3', '1', 'r', 'r']);
+  assert.deepStrictEqual(sh('{ echo try; false } always { echo finally }'), ['try', 'finally']);
+  const { shell, lines } = makeShell();
+  shell.run('select x in red green; do echo "picked $x"; break; done <<< 2');
+  assert.deepStrictEqual(lines, ['picked green']);
+});
+
+test("break inside a function ends the caller's loop; at top level it is an error", () => {
+  assert.deepStrictEqual(sh('f() { break; }\nfor i in 1 2; do echo $i; f; done\necho end'), ['1', 'end']);
+  const { shell, errors } = makeShell();
+  assert.strictEqual(shell.run('break'), 1);
+  assert.ok(/not in while/.test(errors.join('')));
+});
+
+test('traps: EXIT and ERR', () => {
+  const { shell, lines } = makeShell();
+  shell.run("trap 'echo bye' EXIT\necho main");
+  shell.runExitTrap();
+  assert.deepStrictEqual(lines, ['main', 'bye']);
+  assert.deepStrictEqual(sh("trap 'echo failed' ERR\nfalse\necho on"), ['failed', 'on']);
+});
+
+test('getopts walks options with OPTARG and OPTIND', () => {
+  assert.deepStrictEqual(sh('while getopts "ab:c" o -a -b val -c rest; do echo "$o ${OPTARG:-}"; done\necho $OPTIND'), ['a ', 'b val', 'c ', '5']);
+  assert.deepStrictEqual(sh('set -- -xy\nwhile getopts xy o; do echo $o; done'), ['x', 'y']);
+});
+
+test('process substitution', () => {
+  assert.deepStrictEqual(sh('cat <(echo from sub)\ndiff <(echo a) <(echo a) && echo same'), ['from sub', 'same']);
+  assert.deepStrictEqual(sh('echo hi > >(tr a-z A-Z)'), ['HI']);
+});
+
+test('aliases: operators inside, trailing space, global and suffix', () => {
+  assert.deepStrictEqual(sh("alias both='echo one && echo two'\nboth"), ['one', 'two']);
+  assert.deepStrictEqual(sh("alias e='echo '\nalias w=world\ne w w"), ['world w']);
+  assert.deepStrictEqual(sh("alias -g C='| tr a-z A-Z'\necho shout C"), ['SHOUT']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxalias-'));
+  fs.writeFileSync(path.join(dir, 'n.txt'), 'note\n');
+  assert.deepStrictEqual(sh(`cd ${dir}\nalias -s txt=cat\nn.txt`), ['note']);
+});
+
+test('glob qualifiers and alternation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxglob-'));
+  fs.mkdirSync(path.join(dir, 'sub'));
+  fs.writeFileSync(path.join(dir, 'a.js'), '');
+  fs.writeFileSync(path.join(dir, 'b.ts'), '');
+  fs.writeFileSync(path.join(dir, '.hidden'), '');
+  assert.deepStrictEqual(sh(`cd ${dir}\necho *(/)\necho *(.)\necho *.(js|ts)\necho *(D.)\necho *.none(N) end`),
+    ['sub', 'a.js b.ts', 'a.js b.ts', '.hidden a.js b.ts', 'end']);
+  assert.deepStrictEqual(sh(`cd ${dir}\nsetopt nullglob\necho x *.none y`), ['x y']);
+});
+
+test('cd keeps the logical path and supports cd old new', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'mxcd-'));
+  fs.mkdirSync(path.join(base, 'real', 'v1'), { recursive: true });
+  fs.mkdirSync(path.join(base, 'real', 'v2'), { recursive: true });
+  fs.symlinkSync(path.join(base, 'real'), path.join(base, 'link'));
+  assert.deepStrictEqual(sh(`cd ${base}/link/v1\npwd\ncd v1 v2\npwd\ncd ..\npwd`), [
+    `${base}/link/v1`, `${base}/link/v2`, `${base}/link`,
+  ]);
+});
+
+test('whence, which, command -v', () => {
+  assert.deepStrictEqual(sh('which cd\nwhence -v cd\ncommand -v cd'), ['cd: shell built-in command', 'cd is a shell builtin', 'cd']);
+  assert.match(sh('command -v sed')[0], /\/sed$/);
+});
+
+test('print, printf -v and %q, echo \\c', () => {
+  assert.deepStrictEqual(sh('print -- -n\nprint -rl a b\nprint -f "%s-%s\\n" a b c d'), ['-n', 'a', 'b', 'a-b', 'c-d']);
+  assert.deepStrictEqual(sh("printf -v out '%03d' 7\necho $out\nprintf '%q\\n' 'a b'\nprintf '%#x\\n' 255"), ['007', 'a\\ b', '0xff']);
+  assert.deepStrictEqual(sh('echo "a\\cb"\necho next'), ['anext']);
+});
+
+test('read -A and IFS', () => {
+  assert.deepStrictEqual(sh('read -A arr <<< "p q r"\necho ${#arr} $arr[2]\nIFS=: read -r x y <<< "a:b:c"\necho "$x|$y"'), ['3 q', 'a|b:c']);
+});
+
+test('setopt and set -o share one set of options', () => {
+  const { shell } = makeShell();
+  shell.run('set -o errexit\nsetopt no_nomatch pipefail');
+  assert.ok(shell.options.has('e') && shell.options.has('pipefail'));
+  shell.run('unsetopt ERR_EXIT');
+  assert.ok(!shell.options.has('e'));
+});
+
+test('auto-cd: a folder on its own goes there, when interactive', () => {
+  const lines = [];
+  const shell = new Shell({ interactive: true, output: (l) => lines.push(l), error: () => {} });
+  shell.run('cd /\nusr\npwd');
+  assert.deepStrictEqual(lines, ['/usr']);
 });
 
 // --- errors -----------------------------------------------------------------

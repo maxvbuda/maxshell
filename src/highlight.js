@@ -8,7 +8,7 @@ const { RESERVED, REDIR_OPS } = require('./lexer');
 const { findInPath } = require('./builtins');
 
 const OPERATORS = [
-  '<<<', '&>>', '<<-', '&&', '||', ';;', ';&', '>>', '<<', '>&', '<&', '&>', '|&',
+  '<<<', '&>>', '<<-', '&&', '||', ';;', ';&', ';|', '>>', '<<', '>&', '<&', '&>', '|&',
   '|', '&', ';', '(', ')', '<', '>',
 ];
 
@@ -21,10 +21,16 @@ function classifyCommand(word, shell) {
   if (BUILTINS[word]) return 'builtin';
   // Anything still containing expansions or globs can't be resolved yet, so
   // don't flag it as unknown while the user is still typing.
-  if (/[$*?`~]/.test(word)) return 'command';
+  if (/[$*?`]/.test(word) || (word.startsWith('~') && word.length > 1 && !word.startsWith('~/'))) return 'command';
 
-  if (!shell._cmdCache) shell._cmdCache = new Map();
-  if (shell._cmdCache.has(word)) return shell._cmdCache.get(word);
+  const ext = /\.([^./]+)$/.exec(word);
+  if (ext && shell.saliases && shell.saliases.has(ext[1])) return 'alias';
+
+  // Keyed by folder and PATH too: `./run` or a folder name means something
+  // else after a cd, and a new PATH finds different programs.
+  if (!shell._cmdCache || shell._cmdCache.size > 2000) shell._cmdCache = new Map();
+  const key = `${shell.cwd}\0${shell.env.PATH}\0${word}`;
+  if (shell._cmdCache.has(key)) return shell._cmdCache.get(key);
 
   let kind = 'unknown';
   try {
@@ -33,9 +39,14 @@ function classifyCommand(word, shell) {
     } else {
       kind = findInPath(word, shell) ? 'command' : 'unknown';
     }
-  } catch { kind = 'unknown'; }
+    // With AUTO_CD a folder name on its own is a fine thing to type.
+    if (kind === 'unknown' && shell.options && shell.options.has('autocd')) {
+      const home = shell.getVar('HOME') || require('os').homedir();
+      if (fs.statSync(shell.resolve(word.replace(/^~(?=$|\/)/, home))).isDirectory()) kind = 'command';
+    }
+  } catch { /* stays unknown */ }
 
-  shell._cmdCache.set(word, kind);
+  shell._cmdCache.set(key, kind);
   return kind;
 }
 

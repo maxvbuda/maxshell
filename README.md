@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.13.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.14.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.13.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.14.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -156,9 +156,43 @@ echo ${name/a/b}         # replace first              (// = all)
 echo ${name:2:3}         # substring
 ```
 
+As in zsh, an unquoted `$name` is **one word** — it isn't split on spaces or
+globbed — so filenames with spaces just work. Ask for splitting with `${=name}`
+and globbing with `${~name}`, or `setopt shwordsplit` for the bash behaviour.
+
+zsh's extras all work:
+
+```sh
+echo ${name:u} ${name:l}          # upper / lower case
+echo $file:t $file:h $file:r $file:e   # tail, head, root, extension
+echo ${file:t:r} ${path:gs/\//:/}  # chain them; :s/old/new/ substitutes
+echo ${+name}                     # 1 if set, 0 if not
+echo ${${name#pre}%suf}           # nest expansions
+echo ${(U)x} ${(L)x} ${(C)x}      # flags: case,
+echo ${(j:,:)arr} ${(s:,:)str}    # join / split,
+echo ${(o)arr} ${(O)arr} ${(u)arr}  # sort, reverse sort, unique,
+echo ${(f)"$(cmd)"}               # lines, ${(k)h} keys, ${(kv)h} pairs,
+echo ${(l:5::0:)n}                # pad, ${(q)x} quote, ${(P)x} indirect
+echo x${^arr}y                    # combine with each element
+```
+
 Special parameters: `$?` (last exit status), `$#` (argument count), `$@` and
 `$*` (all arguments), `$0`–`$9` (positional), `$$` (pid), `$!` (last background
-pid), `$RANDOM`, `$SECONDS`, `$PWD`, `$OLDPWD`.
+pid), `$RANDOM`, `$SECONDS`, `$EPOCHSECONDS`, `$PWD`, `$OLDPWD`.
+
+### Brace expansion
+
+```sh
+echo {a,b,c}.txt          # a.txt b.txt c.txt
+mkdir -p src/{lib,test}   # nests and combines
+echo {1..10..3} {05..07}  # 1 4 7 10  05 06 07
+echo {a..e}               # a b c d e
+```
+
+### Quoting
+
+`'single'` is literal, `"double"` expands, `\x` escapes one character, and
+`$'…'` understands escapes: `$'tab\there'`, `$'\x41'`, `$'\u00e9'`.
 
 ### Arrays
 
@@ -168,12 +202,30 @@ elements:
 ```sh
 fruits=(apple banana cherry)
 echo $fruits[2]           # banana
-echo ${fruits[2]}         # banana
 echo ${fruits[-1]}        # cherry
-echo ${#fruits}           # 3
+echo ${fruits[2,3]}       # banana cherry  (a range)
+echo ${#fruits} $#fruits  # 3 3
+echo ${fruits[(i)cherry]} # 3  (find: (i) index, (r) value)
 fruits+=(date)            # append
+fruits[2,3]=(kiwi)        # replace a slice
 for f in $fruits; do echo $f; done
+for k v in a 1 b 2; do echo $k=$v; done   # several at a time
 ```
+
+Associative arrays:
+
+```sh
+typeset -A color
+color=(apple red banana yellow)
+color[kiwi]=green
+echo $color[apple] ${(k)color} ${#color}
+for fruit c in ${(kv)color}; do echo "$fruit is $c"; done
+```
+
+`typeset` (also `local`, `declare`) sets attributes: `-a` array, `-A`
+associative, `-i` integer (`integer n=2+3`), `-F` float, `-r` read-only
+(`readonly`), `-x` export, `-l`/`-u` lower/upper case, `-g` global; inside a
+function it declares locals.
 
 ### Arithmetic
 
@@ -185,8 +237,10 @@ if (( count > 5 )); then echo big; fi
 let 'x = 3 * 3'
 ```
 
-Supports `+ - * / % **`, comparisons, `&& || !`, bitwise `& | ^ ~ << >>`,
-`?:`, and assignment forms like `+=` and `++`. Integer division truncates.
+Supports `+ - * / % **`, comparisons, `&& || !` (short-circuiting), bitwise
+`& | ^ ~ << >>`, `?:`, assignment forms like `+=` and `++`, array elements
+(`(( a[2] += 1 ))`), and numbers in any base (`16#ff`, `2#1010`, `0x1f`).
+Integers are 64-bit, as in zsh; a float anywhere (`7 / 2.`) gives a float.
 
 ### Conditionals
 
@@ -201,8 +255,9 @@ fi
 ```
 
 `[[ ... ]]` supports file tests (`-e -f -d -r -w -x -s -L`), string tests
-(`-z -n`), pattern matching (`==` and `!=` treat the right side as a glob),
-regex matching (`=~`), numeric comparison (`-eq -ne -lt -le -gt -ge`), file
+(`-z -n -v`), pattern matching (`==` and `!=` treat the right side as a glob,
+with alternation: `[[ $f == *.(js|ts) ]]`), regex matching (`=~`, setting
+`$MATCH` and `$match`), numeric comparison (`-eq -ne -lt -le -gt -ge`), file
 comparison (`-nt -ot -ef`), grouping with `( )`, and `! && ||`.
 
 The POSIX `test` / `[ ... ]` builtins are available too.
@@ -213,10 +268,12 @@ The POSIX `test` / `[ ... ]` builtins are available too.
 for x in a b c; do echo $x; done
 for x (a b c) { echo $x }           # zsh short forms
 foreach x (a b c) echo $x; end
+for x (a b c) echo $x               # one command, no do/done
 for ((i = 0; i < 10; i++)); do echo $i; done
 while read -r line; do echo "> $line"; done < input.txt
 until (( done )); do work; done
-repeat 3 do echo again; done
+repeat 3 echo again
+select color in red green blue; do echo $color; break; done
 ```
 
 `break` and `continue` accept a level count (`break 2`).
@@ -227,9 +284,13 @@ repeat 3 do echo again; done
 case $answer in
   yes|y)  echo affirmative ;;
   n*)     echo negative ;;
+  *.(c|h)) echo C source ;;
   *)      echo unknown ;;
 esac
 ```
+
+`;;` ends a branch, `;&` falls into the next one, and `;|` carries on testing
+the patterns that follow.
 
 ### Functions
 
@@ -255,12 +316,56 @@ Functions get their own positional parameters (`$1`, `$@`, `$#`) and can declare
 ```sh
 { echo a; echo b; } > both.txt    # same shell
 ( cd /tmp; pwd )                  # subshell: cd doesn't escape
+{ risky } always { cleanup }      # cleanup runs whatever happens
+```
+
+### Process substitution
+
+```sh
+diff <(sort a.txt) <(sort b.txt)  # a command's output as a file
+make 2> >(grep error)             # a file whose contents go to a command
+```
+
+### Aliases
+
+```sh
+alias gs='git status && git log --oneline -3'   # operators are fine
+alias -g L='| less'               # global: ls -l L
+alias -s md=edit                  # suffix: notes.md opens in edit
+```
+
+### Traps and options
+
+```sh
+trap 'rm -f $tmp' EXIT            # also ERR, INT, TERM, …
+while getopts "vo:" opt; do …; done
+setopt nullglob autocd            # zsh option names; set -o works too
 ```
 
 ### Globbing
 
-`*`, `?`, `[abc]`, `[!abc]`, alternation `(a|b)`, and recursive `**/` are
-expanded against the filesystem. A pattern with no matches is left alone.
+`*`, `?`, `[abc]`, `[!abc]`, alternation `src/(lexer|parser).js`, and
+recursive `**/` are expanded against the filesystem. zsh's **glob
+qualifiers** filter and sort the matches:
+
+```sh
+ls -d *(/)          # folders          *(.) files, *(@) links, *(*) executables
+echo *(om[1,3])     # the three newest (o sorts: n name, m modified, L size)
+echo *(D)           # include dotfiles
+echo *.bak(N)       # nothing (instead of the pattern) when nothing matches
+```
+
+A pattern with no matches is left alone (`setopt nullglob` removes it,
+`setopt nomatch` makes it an error).
+
+### Directories
+
+`cd` keeps the path as you typed it, symlinks and all (`cd -P` resolves
+them), `cd old new` swaps part of the current path (`~/v1/src` →
+`~/v2/src`), `CDPATH` is searched for relative names, and a `chpwd`
+function runs after every change. At the prompt, **typing a folder's name on
+its own goes there** (`..`, `~/code`, `src`) — `unsetopt autocd` turns that
+off.
 
 ## Interactive shell
 
@@ -682,15 +787,16 @@ real path still works (`j ../other` acts like `cd`).
 | Builtin | Purpose |
 |---|---|
 | `cd`, `pwd`, `pushd`, `popd`, `dirs` | directory navigation and the directory stack |
-| `echo`, `print`, `printf` | output (`echo` interprets `\n`-style escapes, like zsh) |
-| `export`, `unset`, `declare`, `typeset`, `local` | variable scope and environment |
-| `alias`, `unalias` | command aliases |
-| `source` / `.`, `eval`, `command` | run code from a file, a string, or bypassing functions |
-| `read` | read a line of stdin into variables |
-| `set`, `shift` | shell options (`-e`, `-u`, `-x`, `-o pipefail`) and positional parameters |
+| `echo`, `print`, `printf` | output (`echo` interprets `\n`-style escapes, like zsh; `print -l`, `-r`, `-P`, `-f`; `printf -v`, `%q`) |
+| `export`, `unset`, `declare`, `typeset`, `local`, `readonly`, `integer`, `float` | variables, attributes and environment |
+| `alias`, `unalias` | command aliases (`-g` global, `-s` suffix) |
+| `source` / `.`, `eval`, `command`, `builtin` | run code from a file or a string; skip functions (`command -v` says what a name is) |
+| `read` | read a line into variables (`-r`, `-p`, `-A` array, `-s` silent, `-k n`, `-d`, `-q`) |
+| `set`, `setopt`, `unsetopt`, `shift` | options (`errexit`, `nounset`, `xtrace`, `pipefail`, `nullglob`, `autocd`, `shwordsplit`, …) and positional parameters |
+| `trap`, `getopts` | run code on EXIT/ERR/signals; parse options |
 | `test`, `[`, `let` | conditionals and arithmetic |
 | `true`, `false`, `:` | trivial exit statuses |
-| `type`, `whence`, `which` | what does this name refer to? |
+| `type`, `whence`, `which`, `where` | what does this name refer to? |
 | `history`, `jobs`, `help` | session information |
 | `break`, `continue`, `return`, `exit` | control flow |
 | `unfunction` | remove a function |
@@ -756,15 +862,20 @@ test/github.js      gitui's GitHub support, against a fake gh
 
 ## Differences from zsh
 
-- Arrays are 1-indexed and bare `$arr` expands to all elements (zsh behaviour),
-  not bash behaviour.
+maxshell follows zsh's defaults: arrays are 1-indexed, a bare `$arr` expands
+to all its elements, and unquoted `$x` isn't split or globbed. Where it
+differs:
+
 - Pipelines run stage by stage: each stage completes before the next starts, so
   output is buffered rather than streamed. Interactive programs work when run on
-  their own, not in the middle of a pipeline.
+  their own, not in the middle of a pipeline. Process substitution uses
+  temporary files for the same reason.
 - Background jobs (`&`) start a detached process; there is no job control
   (`fg`, `bg`, `%1`).
-- Not implemented: `trap`, `getopts`, process substitution `<(...)`, coprocesses,
-  zsh glob qualifiers, and zsh's parameter expansion flags like `${(U)x}`.
+- Signal traps (`trap … INT`) run once the current command has finished.
+- Not implemented: coprocesses, `EXTENDED_GLOB` operators (`^`, `~`, `#`),
+  zle widgets and `bindkey`, and zsh's completion system (maxshell has its
+  own).
 
 ## License
 
