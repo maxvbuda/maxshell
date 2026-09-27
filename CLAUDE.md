@@ -104,8 +104,9 @@ is lost. Use a temp dir for all scratch output, and when removing one, write
   concrete options with AskUserQuestion; if they say "continue", pick and say
   what you picked in one sentence.
 - After each feature: update README, bump the minor version in
-  package.json, run `npm test`, commit, then ask **"Push it?"**. Push only
-  when they say so — each push needs its own yes.
+  package.json, run `npm test`, and commit. **Don't ask "Push it?" after every
+  commit** — the user finds that repetitive. Just mention the work is
+  committed; push only when the user asks for a push.
 - Stage files by name; never `git add -A`. Commit messages explain why, and
   end with the attribution lines from the session's system reminder.
 - Another Claude session ("maxshell (2)", which wrote gitui) has worked in
