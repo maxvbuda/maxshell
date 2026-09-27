@@ -15,8 +15,9 @@ const {
   BUILTINS, testUnary, testBinary, findInPath,
 } = require('./builtins');
 const {
-  BreakSignal, ContinueSignal, ReturnSignal, ExitSignal,
+  BreakSignal, ContinueSignal, ReturnSignal, ExitSignal, InterruptSignal,
 } = require('./signals');
+const jobs = require('./jobs');
 
 // A variable's value as one string: arrays join with spaces, and an
 // associative array gives its values.
@@ -36,6 +37,9 @@ function logicalStart() {
   } catch { /* fall through */ }
   return real;
 }
+
+// The system shell that runs streaming pipelines.
+const SH = fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
 
 const TERM_IN = { kind: 'term', which: 'in' };
 const TERM_OUT = { kind: 'term', which: 'out' };
@@ -67,6 +71,8 @@ class Shell {
     this.dirForward = [];
     this.lastNotFound = null;
     this.jobs = [];
+    this.currentJob = null;
+    this.interrupted = false;
     this.lastBgPid = null;
     this.startTime = Date.now();
     this.condDepth = 0;
@@ -308,10 +314,12 @@ class Shell {
   }
 
   run(src) {
+    this.interrupted = false;
     try {
       return this.runSource(src, this.defaultIo());
     } catch (e) {
       if (e instanceof ExitSignal) { this.exited = true; return this.setStatus(e.status); }
+      if (e instanceof InterruptSignal) return this.setStatus(e.status);
       // return outside a function ends the script, like zsh.
       if (e instanceof ReturnSignal) return this.setStatus(e.status);
       if (e instanceof BreakSignal || e instanceof ContinueSignal) {
@@ -446,6 +454,7 @@ class Shell {
         }
         if (this.options.has('e')) throw new ExitSignal(status);
       }
+      if (this.interrupted) { this.interrupted = false; throw new InterruptSignal(status); }
     }
     return status;
   }
@@ -462,6 +471,10 @@ class Shell {
     return proceed ? this.exec(node.right, io) : this.setStatus(left);
   }
 
+  // Pipelines stream: runs of stages that are plain programs are handed to
+  // the system shell as one real pipeline (so `tail -f log | grep x` and
+  // `yes | head` work, and Ctrl-Z stops them all). Builtins and functions
+  // in a pipeline still run here, joined to the rest through buffers.
   execPipeline(node, io) {
     const cmds = node.commands;
     let status;
@@ -469,47 +482,253 @@ class Shell {
     if (cmds.length === 1) {
       status = this.exec(cmds[0], io);
     } else {
+      const plans = cmds.map((c) => this.externalStage(c));
       const statuses = [];
       let input = io.stdin;
-      for (let i = 0; i < cmds.length; i++) {
-        const last = i === cmds.length - 1;
+      let i = 0;
+      while (i < cmds.length) {
+        let j = i;
+        if (plans[i]) while (j + 1 < cmds.length && plans[j + 1]) j++;
+        const last = j === cmds.length - 1;
         const sink = last ? io.stdout : { kind: 'capture', chunks: [] };
-        status = this.exec(cmds[i], {
-          stdin: input,
-          stdout: sink,
-          stderr: cmds[i].pipeStderr ? sink : io.stderr,
-        });
-        statuses.push(status);
+        if (j > i) {
+          // Stages i..j are all programs: one streaming pipeline.
+          const script = plans.slice(i, j + 1).map((p, k) => p + (cmds[i + k].pipeStderr && i + k < j ? ' 2>&1' : '')).join(' | ');
+          const errSink = cmds[j].pipeStderr && !last ? sink : io.stderr;
+          const pre = this.options.has('pipefail') && SH === '/bin/bash' ? 'set -o pipefail; ' : '';
+          status = this.runExternal([SH, '-c', pre + script], { stdin: input, stdout: sink, stderr: errSink }, this.env);
+          for (let k = i; k <= j; k++) statuses.push(status);
+        } else {
+          status = this.exec(cmds[i], {
+            stdin: input,
+            stdout: sink,
+            stderr: cmds[i].pipeStderr ? sink : io.stderr,
+          });
+          statuses.push(status);
+        }
         if (!last) input = { kind: 'string', data: sink.chunks.join(''), pos: 0 };
+        if (this.interrupted) break;
+        i = j + 1;
       }
-      if (this.options.has('pipefail')) status = statuses.find((s) => s !== 0) ?? 0;
+      this.setVar('pipestatus', statuses.map(String));
+      if (this.options.has('pipefail')) status = statuses.slice().reverse().find((x) => x !== 0) ?? 0;
     }
 
     if (node.negate) status = status === 0 ? 1 : 0;
     return this.setStatus(status);
   }
 
+  // A pipeline stage as /bin/sh source, if it's a plain program with plain
+  // redirections (expanding its words now); otherwise null.
+  externalStage(cmd) {
+    if (cmd.type !== 'Simple' || !cmd.words.length) return null;
+    const q = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
+    for (const r of cmd.redirects) if (r.op === '<<' || r.op === '<<-' || r.op === '<<<') return null;
+    if (cmd.words.some((w) => w.parts.some((p) => p.t === 'procsub' || p.t === 'cmd'))) return null;
+    let argv;
+    try { argv = this.expandCommandWords(cmd.words); } catch { return null; }
+    if (!argv.length || argv.some((a) => typeof a !== 'string')) return null;
+    const name = argv[0];
+    // ls is a builtin only for its fancy terminal view; in a pipe it's ls.
+    if (this.funcs.has(name) || (BUILTINS[name] && name !== 'ls')) return null;
+    if (!findInPath(name, this)) return null;
+    let out = '';
+    for (const a of cmd.assigns) {
+      if (a.array) return null;
+      out += `${a.name}=${q(expandToString(this, a.value))} `;
+    }
+    out += argv.map(q).join(' ');
+    for (const r of cmd.redirects) {
+      const target = expandToString(this, r.target);
+      const fd = r.fd === null ? '' : String(r.fd);
+      switch (r.op) {
+        case '<': out += ` ${fd}< ${q(this.resolve(target))}`; break;
+        case '>': out += ` ${fd}> ${q(this.resolve(target))}`; break;
+        case '>>': out += ` ${fd}>> ${q(this.resolve(target))}`; break;
+        case '&>': out += ` > ${q(this.resolve(target))} 2>&1`; break;
+        case '&>>': out += ` >> ${q(this.resolve(target))} 2>&1`; break;
+        case '>&': case '<&':
+          if (/^\d+$/.test(target) || target === '-') out += ` ${fd || (r.op === '>&' ? '1' : '0')}${r.op}${target}`;
+          else out += ` > ${q(this.resolve(target))} 2>&1`;
+          break;
+        default: return null;
+      }
+    }
+    return out;
+  }
+
+  // cmd &. With the job helper, the command runs in a process group of its
+  // own and shows up in `jobs`; a single program runs directly, anything
+  // else (a loop, a group, a pipeline) in a child maxshell that is handed
+  // this shell's variables, functions and aliases.
   execBackground(node, io) {
     const single = node.type === 'Pipeline' && !node.negate && node.commands.length === 1
       ? node.commands[0]
       : null;
-
-    if (single && single.type === 'Simple' && !single.redirects.length) {
-      const argv = expandWords(this, single.words);
-      if (argv.length && !this.funcs.has(argv[0]) && !BUILTINS[argv[0]]) {
-        try {
-          const child = spawn(argv[0], argv.slice(1), {
-            cwd: this.cwd, env: this.env, stdio: 'inherit', detached: true,
-          });
-          child.unref();
-          this.lastBgPid = child.pid;
-          this.jobs.push({ pid: child.pid, cmd: argv.join(' ') });
-          if (this.interactive) this.writeStderr(`[${this.jobs.length}] ${child.pid}\n`);
-          return this.setStatus(0);
-        } catch { /* fall back to running it synchronously */ }
-      }
+    let argv = null;
+    let label = node.src || null;
+    if (single && single.type === 'Simple' && !single.redirects.length && !single.assigns.length) {
+      const words = expandWords(this, single.words);
+      if (words.length && !this.funcs.has(words[0]) && !BUILTINS[words[0]] && findInPath(words[0], this)) argv = words;
     }
-    return this.exec(node, io);
+    if (!argv && node.src) {
+      argv = [process.execPath, path.join(__dirname, '..', 'bin', 'maxshell.js'), '-c', `${this.serializeState()}\n${node.src}`];
+    }
+    if (!argv) return this.exec(node, io);
+    if (!label) label = argv.join(' ');
+
+    // Output being captured in memory can't come from a background job.
+    const stdio = this.stdioFor(io, { background: true });
+    // Scripts give background jobs no terminal input, as POSIX shells do.
+    if (!this.interactive && stdio[0] === 'inherit') stdio[0] = 'ignore';
+    const job = jobs.start(argv, { mode: 'bg', cwd: this.cwd, env: this.env, stdio, cmd: label });
+    if (job) {
+      this.addJob(job);
+      this.lastBgPid = job.pgid || job.helperPid;
+      if (this.interactive) this.writeStderr(`[${job.id}] ${this.lastBgPid}\n`);
+      return this.setStatus(0);
+    }
+    try {
+      const child = spawn(argv[0], argv.slice(1), {
+        cwd: this.cwd, env: this.env, stdio: 'ignore', detached: true,
+      });
+      child.unref();
+      child.on('error', () => {});
+      this.lastBgPid = child.pid;
+      if (this.interactive) this.writeStderr(`[bg] ${child.pid}\n`);
+      return this.setStatus(0);
+    } catch {
+      return this.exec(node, io);
+    }
+  }
+
+  // The shell's variables, functions, aliases and options as source text,
+  // for a child maxshell that runs part of this one in the background.
+  serializeState() {
+    const q = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
+    const lines = [];
+    const skip = new Set(['PWD', 'OLDPWD', 'SHLVL', '_']);
+    for (const [name, entry] of this.vars) {
+      if (skip.has(name) || entry.exported) continue;
+      const v = entry.value;
+      if (v instanceof Map) lines.push(`typeset -A ${name}; ${name}=(${[...v].flat().map(q).join(' ')})`);
+      else if (Array.isArray(v)) lines.push(`${name}=(${v.map(q).join(' ')})`);
+      else lines.push(`${name}=${q(v)}`);
+      if (entry.integer) lines.push(`typeset -i ${name}`);
+    }
+    for (const fn of this.funcs.values()) if (fn.src) lines.push(fn.src);
+    for (const [kind, flag] of [['aliases', ''], ['galiases', ' -g'], ['saliases', ' -s']]) {
+      for (const [n, v] of this[kind]) lines.push(`alias${flag} ${n}=${q(v)}`);
+    }
+    const opts = [...this.options].filter((o) => o.length > 1 && o !== 'autocd');
+    if (opts.length) lines.push(`setopt ${opts.join(' ')}`);
+    if (this.positional.length) lines.push(`set -- ${this.positional.map(q).join(' ')}`);
+    return lines.join('\n');
+  }
+
+  // --- jobs -----------------------------------------------------------------
+
+  addJob(job) {
+    let id = 1;
+    while (this.jobs.some((j) => j.id === id)) id++;
+    job.id = id;
+    this.jobs.push(job);
+    this.jobs.sort((a, b) => a.id - b.id);
+    this.currentJob = job;
+    return job;
+  }
+
+  removeJob(job) {
+    this.jobs = this.jobs.filter((j) => j !== job);
+    job.cleanup();
+    if (this.currentJob === job) this.currentJob = this.jobs[this.jobs.length - 1] || null;
+  }
+
+  // %1, %%, %+, %-, %vim (starts with), %?make (contains); a bare pid too.
+  findJob(spec) {
+    if (spec === undefined || spec === '%%' || spec === '%+' || spec === '%') return this.currentJob || this.jobs[this.jobs.length - 1] || null;
+    if (spec === '%-') return this.jobs.filter((j) => j !== this.currentJob).pop() || null;
+    let m = /^%?(\d+)$/.exec(spec);
+    if (m && spec.startsWith('%')) return this.jobs.find((j) => j.id === Number(m[1])) || null;
+    m = /^\d+$/.exec(spec);
+    if (m) return this.jobs.find((j) => j.pgid === Number(spec) || j.helperPid === Number(spec)) || null;
+    if (spec.startsWith('%?')) return this.jobs.find((j) => j.cmd.includes(spec.slice(2))) || null;
+    if (spec.startsWith('%')) return this.jobs.find((j) => j.cmd.startsWith(spec.slice(1))) || null;
+    return null;
+  }
+
+  // "[1]  + suspended  vim notes.md" and friends.
+  jobLine(job, { long = false } = {}) {
+    job.poll();
+    const mark = job === this.currentJob ? '+' : ' ';
+    let state;
+    if (job.state === 'stopped') state = job.signal === 21 || job.signal === 22 ? 'suspended (tty input)' : 'suspended';
+    else if (job.state === 'running') state = 'running';
+    else if (job.signal) state = job.signal === 2 ? 'interrupt' : job.signal === 15 ? 'terminated' : job.signal === 9 ? 'killed' : `signal ${job.signal}`;
+    else state = job.code ? `exit ${job.code}` : 'done';
+    const pid = long ? ` ${job.pgid || job.helperPid}` : '';
+    return `[${job.id}]  ${mark}${pid} ${state.padEnd(10)} ${job.cmd}`;
+  }
+
+  // Before each prompt: report background jobs that finished or stopped.
+  notifyJobs(write = (t) => this.writeStderr(t)) {
+    for (const job of this.jobs.slice()) {
+      const changed = job.poll();
+      if (job.finished) {
+        write(`${this.jobLine(job)}\n`);
+        this.removeJob(job);
+      } else if (changed && job.state === 'stopped' && !job.notified) {
+        job.notified = true;
+        write(`${this.jobLine(job)}\n`);
+      } else if (job.state === 'running') job.notified = false;
+    }
+  }
+
+  // Brings a job to the foreground and waits for it.
+  foregroundJob(job, io) {
+    this.currentJob = job;
+    this.writeTo(io.stderr, `[${job.id}]  - continued  ${job.cmd}\n`);
+    job.foreground();
+    return this.settleForeground(job, io, true);
+  }
+
+  // After a foreground job stops or ends: keep it in the table if it stopped.
+  settleForeground(job, io, known) {
+    if (job.state === 'stopped') {
+      if (!known) this.addJob(job);
+      job.notified = true;
+      this.writeTo(io.stderr, `\n${this.jobLine(job)}\n`);
+      this.interrupted = true;
+      this.suspended = true;
+      return 128 + (job.signal || 20);
+    }
+    if (known) this.removeJob(job); else job.cleanup();
+    if (job.signal === 2) {
+      this.interrupted = true;
+      this.writeTo(io.stderr, '\n');
+    }
+    return job.code ?? 0;
+  }
+
+  // Maps redirected io to what the helper's child gets, or null when the
+  // output is being captured in memory (then there's no job to control).
+  stdioFor(io, { background = false } = {}) {
+    const one = (d, which) => {
+      if (!d) return 'inherit';
+      if (d.kind === 'file') return d.fd;
+      if (d.kind === 'null') return 'ignore';
+      if (d.kind === 'fd') return d.fd;
+      if (d.kind === 'term') return (which === 'out' && this.output) || (which === 'err' && this.errorOutput) ? null : 'inherit';
+      return null;
+    };
+    const stdio = [one(io.stdin, 'in'), one(io.stdout, 'out'), one(io.stderr, 'err')];
+    if (background) return stdio.map((x) => x ?? 'ignore');
+    return stdio.includes(null) ? null : stdio;
+  }
+
+  // Job control applies at an interactive terminal.
+  jobControl() {
+    return this.interactive && !this.output && !!process.stdin.isTTY && !!jobs.helperPath();
   }
 
   execRedirected(node, io) {
@@ -878,6 +1097,10 @@ class Shell {
     if (this.options.has('x')) this.writeStderr(`${this.getVar('PS4') ?? '+'} ${argv.map((x) => (typeof x === 'string' ? x : `${x.name}=(${x.values.join(' ')})`)).join(' ')}\n`);
 
     const name = argv[0];
+    // %1 or %vim on its own brings that job back, as in zsh (%1 & continues it).
+    if (typeof name === 'string' && name.startsWith('%') && this.jobs.length && this.findJob(name)) {
+      return this.setStatus(this.dispatch(argv[1] === '&' ? 'bg' : 'fg', [argv[1] === '&' ? 'bg' : 'fg', name], io));
+    }
     const isLocal = this.funcs.has(name) || !!BUILTINS[name];
 
     // AUTO_CD: a folder typed on its own goes there.
@@ -1014,6 +1237,19 @@ class Shell {
   }
 
   runExternal(argv, io, env) {
+    // At the terminal, programs run as jobs: Ctrl-Z suspends them and Ctrl-C
+    // reaches only them.
+    if (this.jobControl() && findInPath(argv[0], this)) {
+      const jstdio = this.stdioFor(io);
+      if (jstdio) {
+        const job = jobs.start(argv, { mode: 'fg', cwd: this.cwd, env, stdio: jstdio, cmd: this.currentCommand || argv.join(' ') });
+        if (job) {
+          job.waitForeground();
+          return this.settleForeground(job, io, false);
+        }
+      }
+    }
+
     const stdio = [null, null, null];
     let input;
 
@@ -1065,7 +1301,10 @@ class Shell {
     if (res.stdout) this.writeTo(io.stdout, res.stdout);
     if (res.stderr) this.writeTo(io.stderr, res.stderr);
     // Killed by a signal: 128 + its number, as shells report (Ctrl-C → 130).
-    if (res.signal) return 128 + (os.constants.signals[res.signal] || 0);
+    if (res.signal) {
+      if (res.signal === 'SIGINT' && this.interactive) this.interrupted = true;
+      return 128 + (os.constants.signals[res.signal] || 0);
+    }
     return res.status ?? 0;
   }
 }

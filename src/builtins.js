@@ -1241,9 +1241,109 @@ BUILTINS.builtin = (args, io, shell) => {
   return BUILTINS[args[0]](args.slice(1), io, shell) ?? 0;
 };
 
+// --- job control --------------------------------------------------------------
+
 BUILTINS.jobs = (args, io, shell) => {
-  shell.jobs.forEach((j, i) => out(shell, io, `[${i + 1}]  ${j.pid}  ${j.cmd}\n`));
+  const long = args.includes('-l');
+  const pids = args.includes('-p');
+  for (const job of shell.jobs.slice()) {
+    job.poll();
+    if (pids) out(shell, io, `${job.pgid || job.helperPid}\n`);
+    else out(shell, io, `${shell.jobLine(job, { long })}\n`);
+    if (job.finished) shell.removeJob(job);
+  }
   return 0;
+};
+
+function jobArg(args, shell, io, name) {
+  const job = shell.findJob(args[0]);
+  if (!job) {
+    err(shell, io, args[0] ? `${name}: no such job: ${args[0]}\n` : `${name}: no current job\n`);
+    return null;
+  }
+  return job;
+}
+
+BUILTINS.fg = (args, io, shell) => {
+  const job = jobArg(args, shell, io, 'fg');
+  if (!job) return 1;
+  job.poll();
+  if (job.finished) { out(shell, io, `${shell.jobLine(job)}\n`); shell.removeJob(job); return job.code ?? 0; }
+  return shell.foregroundJob(job, io);
+};
+
+BUILTINS.bg = (args, io, shell) => {
+  const job = jobArg(args, shell, io, 'bg');
+  if (!job) return 1;
+  job.poll();
+  if (job.state === 'running') { err(shell, io, `bg: job already in background\n`); return 1; }
+  job.background();
+  job.notified = false;
+  out(shell, io, `[${job.id}]  - continued  ${job.cmd}\n`);
+  return 0;
+};
+
+BUILTINS.disown = (args, io, shell) => {
+  const job = jobArg(args, shell, io, 'disown');
+  if (!job) return 1;
+  shell.jobs = shell.jobs.filter((j) => j !== job);
+  if (shell.currentJob === job) shell.currentJob = shell.jobs[shell.jobs.length - 1] || null;
+  return 0;
+};
+
+// wait [%job|pid…] — for background jobs to finish.
+BUILTINS.wait = (args, io, shell) => {
+  const { sleep } = require('./jobs');
+  const targets = args.length ? args.map((a) => shell.findJob(a.startsWith('%') ? a : a)).filter(Boolean) : shell.jobs.slice();
+  let status = 0;
+  for (const job of targets) {
+    // A job we just signalled may take a moment to act on it.
+    for (let spins = 0; !job.finished; spins++) {
+      job.poll();
+      if (job.finished) break;
+      if (job.state === 'stopped' && spins > 20) break;
+      sleep(10);
+    }
+    status = job.code ?? 0;
+    if (job.finished) shell.removeJob(job);
+  }
+  return status;
+};
+
+// kill with job specs: kill %1, kill -9 %vim, kill -s TERM 1234, kill -l
+BUILTINS.kill = (args, io, shell) => {
+  let sig = 'SIGTERM';
+  const targets = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-l' || a === '-L') {
+      out(shell, io, `${Object.keys(os.constants.signals).map((n) => n.replace(/^SIG/, '')).join(' ')}\n`);
+      return 0;
+    }
+    if (a === '-s' || a === '-n') { sig = args[++i]; continue; }
+    if (/^-\w+$/.test(a) && !targets.length) { sig = a.slice(1); continue; }
+    targets.push(a);
+  }
+  if (/^\d+$/.test(String(sig))) {
+    const found = Object.entries(os.constants.signals).find(([, n]) => n === Number(sig));
+    sig = found ? found[0] : sig;
+  } else if (!String(sig).startsWith('SIG')) sig = `SIG${String(sig).toUpperCase()}`;
+  if (!os.constants.signals[sig] && sig !== 'SIG0') { err(shell, io, `kill: unknown signal: ${sig}\n`); return 1; }
+  if (!targets.length) { err(shell, io, 'kill: not enough arguments\n'); return 1; }
+  let status = 0;
+  for (const t of targets) {
+    try {
+      if (t.startsWith('%')) {
+        const job = shell.findJob(t);
+        if (!job) { err(shell, io, `kill: no such job: ${t}\n`); status = 1; continue; }
+        job.kill(sig);
+      } else process.kill(Number(t), sig === 'SIG0' ? 0 : sig);
+    } catch (e) {
+      err(shell, io, `kill: kill ${t} failed: ${e.code === 'ESRCH' ? 'no such process' : e.code === 'EPERM' ? 'operation not permitted' : e.message}\n`);
+      status = 1;
+    }
+  }
+  return status;
 };
 
 // Every meaning of a name, most important first, in one of zsh's styles:

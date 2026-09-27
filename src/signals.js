@@ -30,4 +30,15 @@ class ExitSignal extends ControlSignal {
   }
 }
 
-module.exports = { ControlSignal, BreakSignal, ContinueSignal, ReturnSignal, ExitSignal };
+// Ctrl-C or Ctrl-Z at the prompt's command: abandon the rest of the line
+// (the rest of a loop, the next commands after ;), as zsh does.
+class InterruptSignal extends ControlSignal {
+  constructor(status = 130) {
+    super('interrupt');
+    this.status = status;
+  }
+}
+
+module.exports = {
+  ControlSignal, BreakSignal, ContinueSignal, ReturnSignal, ExitSignal, InterruptSignal,
+};

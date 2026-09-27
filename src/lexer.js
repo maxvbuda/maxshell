@@ -63,6 +63,8 @@ class Lexer {
   }
 
   push(tok) {
+    if (tok.start === undefined) tok.start = this.tokStart ?? this.pos;
+    tok.end = this.pos;
     this.tokens.push(tok);
     return tok;
   }
@@ -87,6 +89,7 @@ class Lexer {
     for (;;) {
       this.skipBlanks();
       if (this.pos >= this.src.length) break;
+      this.tokStart = this.pos;
       const c = this.src[this.pos];
 
       if (c === '#' && this.atWordStart()) {

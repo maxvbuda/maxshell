@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.15.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.16.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.15.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.16.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -109,12 +109,37 @@ logo.
 ```sh
 ls -la                      # run a program
 sort file | uniq -c | head  # pipeline
+tail -f log | grep error    # pipelines stream
 cmd |& grep error           # pipe stdout *and* stderr
 make && ./run || echo fail  # run on success / on failure
 a; b; c                     # sequence
 sleep 5 &                   # background
 ! grep -q foo file          # negate the exit status
 ```
+
+Pipelines of programs run concurrently and stream, like any shell; builtins
+and functions in a pipeline (`… | while read line; do …; done`) run in
+maxshell itself, so variables they set are still there afterwards, as in
+zsh. `$pipestatus` holds every stage's status.
+
+### Jobs
+
+At the prompt, **`Ctrl-Z` suspends** whatever is running — an editor, a
+build, a whole pipeline — and gives you the prompt back:
+
+```sh
+vim notes.md      # …Ctrl-Z
+jobs              # [1]  + suspended  vim notes.md
+bg                # carry on in the background   (bg %2, %vim, %?notes)
+fg                # back to the foreground; %1 on its own does the same
+kill %1           # signal a job;  wait waits for them;  disown forgets one
+```
+
+`Ctrl-C` stops the command in front of you *and the rest of the line* — a
+loop, or the commands after `;` — rather than just one step of it. Anything
+can go in the background, loops and groups included (`{ make; say done } &`).
+When a background job finishes, the next prompt says so. Leaving with
+suspended jobs warns once first.
 
 ### Redirection
 
@@ -821,6 +846,7 @@ real path still works (`j ../other` acts like `cd`).
 | `edit`, `pyedit` | the built-in editor (see above) |
 | `view`, `files`, `top` | pager, file browser, process monitor (see above) |
 | `j`, `back`, `forward` | jump to frequent folders; walk folder history (see above) |
+| `jobs`, `fg`, `bg`, `kill`, `wait`, `disown` | job control (see above) |
 | `theme` | list or switch colour themes (see above) |
 | `abbr` | fish-style abbreviations that expand as you type |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
@@ -863,6 +889,8 @@ src/banner.js       The logo and startup tips
 src/context.js      Project detection and the prompt's version modules
 src/ls.js           The modern ls: grid, long view, tree, git status
 src/top.js          top: ps parsing, process table, screen
+src/jobs.js         Job control: starting, waiting on and steering jobs
+src/jobrun.c        The job helper: process groups, the terminal, stop/continue
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks
@@ -877,6 +905,7 @@ test/features.js    History search, did-you-mean, j/back/forward, alerts
 test/look.js        Themes, logo, banner and the prompt
 test/modern.js      Completion menu, context-aware prompt, ls
 test/github.js      gitui's GitHub support, against a fake gh
+test/jobs.js        Job control and streaming pipelines
 ```
 
 ## Differences from zsh
@@ -885,12 +914,13 @@ maxshell follows zsh's defaults: arrays are 1-indexed, a bare `$arr` expands
 to all its elements, and unquoted `$x` isn't split or globbed. Where it
 differs:
 
-- Pipelines run stage by stage: each stage completes before the next starts, so
-  output is buffered rather than streamed. Interactive programs work when run on
-  their own, not in the middle of a pipeline. Process substitution uses
-  temporary files for the same reason.
-- Background jobs (`&`) start a detached process; there is no job control
-  (`fg`, `bg`, `%1`).
+- Where a builtin or function sits in the middle of a pipeline, its input is
+  gathered before it runs (programs on either side still stream), and
+  process substitution uses temporary files.
+- Job control relies on a small C helper (`src/jobrun.c`) that is compiled
+  on first use; on a machine without a C compiler, Ctrl-Z isn't available.
+  A job continued from another terminal (`kill -CONT`) shows as suspended
+  until it next changes state (macOS doesn't report it).
 - Signal traps (`trap … INT`) run once the current command has finished.
 - Not implemented: coprocesses, `EXTENDED_GLOB` operators (`^`, `~`, `#`),
   zle widgets and `bindkey`, and zsh's completion system (maxshell has its

@@ -88,6 +88,7 @@ class Parser {
   // aliases expand in command position, global ones (-g) anywhere, and
   // suffix ones (-s) turn `notes.txt` into `vim notes.txt`.
   constructor(src, { aliases = null } = {}) {
+    this.src = src;
     this.tokens = new Lexer(src).tokenize();
     this.i = 0;
     this.braceDepth = 0;
@@ -211,13 +212,25 @@ class Parser {
     return { type: 'List', items };
   }
 
+  // The source text from token `from` to the last one consumed (for running
+  // a command in the background, or showing it in `jobs`). Tokens that came
+  // from an alias have no place in the source, so those give nothing.
+  sourceFrom(from) {
+    const a = this.tokens[from];
+    const b = this.tokens[this.i - 1];
+    if (!a || !b || a.fromAlias || b.fromAlias || a.start === undefined || b.end === undefined) return null;
+    return this.src.slice(a.start, b.end);
+  }
+
   parseAndOr() {
+    const from = this.i;
     let left = this.parsePipeline();
     while (this.at('OP', '&&') || this.at('OP', '||')) {
       const op = this.next().value;
       this.skipNewlines();
       left = { type: 'AndOr', op, left, right: this.parsePipeline() };
     }
+    left.src = this.sourceFrom(from);
     return left;
   }
 
@@ -465,6 +478,13 @@ class Parser {
   }
 
   parseFunctionKeyword() {
+    const from = this.i;
+    const fn = this.parseFunctionKeywordInner();
+    fn.src = this.sourceFrom(from);
+    return fn;
+  }
+
+  parseFunctionKeywordInner() {
     this.expectReserved('function');
     const name = wordText(this.expectWord('a function name'));
     if (this.at('OP', '(')) {
@@ -565,9 +585,12 @@ class Parser {
         && this.peek(1).type === 'OP' && this.peek(1).value === '('
         && this.peek(2).type === 'OP' && this.peek(2).value === ')') {
         const name = wordText(t);
+        const from = this.i;
         this.i += 3;
         this.skipNewlines();
-        return { type: 'FunctionDef', name, body: this.parseCommand() };
+        const fn = { type: 'FunctionDef', name, body: this.parseCommand() };
+        fn.src = this.sourceFrom(from);
+        return fn;
       }
 
       if (words.length === 0) {

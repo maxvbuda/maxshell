@@ -14,7 +14,7 @@ changing behaviour, and keep it updated with each feature.
 
 ```sh
 node bin/maxshell.js            # REPL   (maxshell -c 'cmd', or a script path)
-npm test                        # 9 suites, ~5 seconds; all must pass
+npm test                        # 10 suites, ~10 seconds; all must pass
 ```
 
 Suites: `test/run.js` (language), `interactive.js` (line editor, highlight,
@@ -22,7 +22,8 @@ prompt), `pyedit.js` (editor buffer, Python tokenizer, key reader),
 `gitui.js`, `tools.js` (languages, view, files, top), `features.js` (history
 search, did-you-mean, j/back/forward, alerts), `look.js` (themes, logo,
 prompt), `modern.js` (completion menu, context prompt, ls), `github.js`
-(gitui's GitHub support against a fake `gh`). New features get tests in a
+(gitui's GitHub support against a fake `gh`), `jobs.js` (job control,
+streaming pipelines). New features get tests in a
 suite; new suites get appended to the `test` script in package.json.
 
 ## Architecture
@@ -30,9 +31,18 @@ suite; new suites get appended to the `test` script in package.json.
 **Language core** — `lexer.js` → `parser.js` (AST) → `interpreter.js`
 (`Shell`: variables/scopes, redirection, pipelines, subshells) with
 `expand.js` (parameters, fields, globs, patterns), `arith.js`, `builtins.js`,
-`signals.js`. Arrays are 1-indexed and bare `$arr` expands to all elements
-(zsh semantics). Pipelines run stage by stage (buffered, not concurrent) — a
-known, documented limitation.
+`signals.js`. zsh semantics throughout: arrays are 1-indexed, bare `$arr`
+expands to all elements, unquoted `$x` is not split or globbed. Scripts are
+parsed and run one top-level command at a time (so aliases, expanded at
+parse time, apply from the next line). Runs of external stages in a
+pipeline go to `/bin/bash -c` as one streaming pipeline; builtin stages are
+buffered in-process.
+
+**Jobs** — `jobs.js` + `jobrun.c`: a C helper (compiled on first use into
+`~/.cache/maxshell`, `MAXSHELL_CACHE` overrides) runs each foreground program
+at the terminal in its own process group and reports stop/exit through a
+status file; the interpreter stays synchronous and polls it. `Ctrl-C`/`Ctrl-Z`
+set `shell.interrupted`, which abandons the rest of the command line.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion
@@ -52,6 +62,9 @@ GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
 
 ## Rules that are easy to break
 
+- **Test the shell against zsh.** A differential runner (same snippet
+  through `zsh -f -c` and `maxshell -c`, compare output) finds language bugs
+  fast; keep new behaviour zsh-compatible unless there's a reason not to.
 - **Builtins run synchronously.** Full-screen tools read keys with
   `KeyReader` (blocking `fs.readSync`), never Node's keypress events;
   `reader.next(ms)` returns `{ name: 'timeout' }` for polling. Only the REPL's

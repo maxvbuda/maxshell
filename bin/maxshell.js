@@ -67,6 +67,8 @@ function notifyThreshold(shell) {
 // desktop notification when something long finished while you were away.
 function afterCommand(shell, source, ms) {
   if (shell.exited) return;
+  // A suspended job has already said so.
+  if (shell.suspended) { shell.suspended = false; return; }
   const line = alerts.statusLine(shell.status, ms);
   if (line) {
     const color = line.ok ? ansi.fg('green') : ansi.fg('red');
@@ -124,10 +126,12 @@ async function runEditorRepl(shell) {
   banner(shell);
   let buffer = '';
   let fix = null;
+  let warnedJobs = false;
 
   for (;;) {
     // The signature prompt is one line with information on the right; a
     // custom PROMPT uses PROMPT and RPROMPT as given.
+    if (!buffer) shell.notifyJobs((t) => process.stdout.write(t));
     const fancy = !buffer && usesDefaultPrompt(shell);
     if (!buffer) process.stdout.write(terminalTitle(shell));
     let prompt;
@@ -150,7 +154,17 @@ async function runEditorRepl(shell) {
     }
     fix = null;
 
-    if (result.eof) break;
+    if (result.eof || /^\s*exit(\s|$)/.test(result.line || '')) {
+      // Like zsh: the first attempt to leave with suspended jobs only warns.
+      const stopped = shell.jobs.filter((j) => { j.poll(); return j.state === 'stopped'; });
+      if (stopped.length && !warnedJobs) {
+        warnedJobs = true;
+        if (result.eof) process.stdout.write('\n');
+        process.stdout.write(`${ansi.fg('yellow')}maxshell: you have suspended jobs.${ansi.reset()}\n`);
+        continue;
+      }
+      if (result.eof) break;
+    } else warnedJobs = false;
     if (result.aborted) { buffer = ''; continue; }
 
     // Redraw the finished prompt without its right side, so scrollback reads
@@ -192,6 +206,8 @@ async function runEditorRepl(shell) {
 
   saveHistory();
   shell.runExitTrap();
+  // Jobs are hung up when the shell leaves, as a login shell would.
+  for (const job of shell.jobs) job.hangup();
   return shell.status;
 }
 
