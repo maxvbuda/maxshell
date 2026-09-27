@@ -79,28 +79,27 @@ function rightPrompt(shell) {
 }
 
 // Whether the user has chosen their own prompt; if not, maxshell draws its
-// signature two-line prompt.
+// signature prompt.
 function usesDefaultPrompt(shell) {
   return !shell.getVar('PROMPT') && !shell.getVar('PS1');
 }
 
-// The two-line prompt: a framed information line (folder, git, and the right
-// prompt pushed to the far edge), then a short input line whose ❯ turns red
-// when the last command failed.
+// The signature prompt, on one line: the folder and git state on the left,
+// then ❯ (the error colour after a failed command); on the right, the tools
+// this project uses, how long a slow command took, and the time.
 //
-//   ╭─ ~/maxshell · main !?                              node v25 · 12:04
-//   ╰─❯
+//   ~/maxshell · main !? ❯                          📦 v0.12.0 · ⬢ 25.1.0 · 12:04
 function promptParts(shell, cols = 80) {
   const p = theme.current().prompt;
   const R = ansi.reset();
   const frame = ansi.fg(p.frame);
   const home = shell.getVar('HOME') || os.homedir();
   const full = shortCwd(shell.cwd, home);
-  // Long paths shorten fish-style so the right side keeps its room:
+  // Long paths shorten fish-style so there's room to type:
   // ~/projects/website/src → ~/p/w/src
-  const where = shortenPath(full, Math.max(12, Math.floor((cols - 1) * 0.5)));
+  const where = shortenPath(full, Math.max(12, Math.floor((cols - 1) * 0.4)));
 
-  let left = `${frame}╭─${R} ${ansi.bold()}${ansi.fg(p.path)}${where}${R}`;
+  let left = `${ansi.bold()}${ansi.fg(p.path)}${where}${R}`;
   const info = gitInfo(shell.cwd);
   if (info) {
     left += `${frame} · ${R}${ansi.fg(p.branch)}${info.branch}${R}`;
@@ -112,6 +111,8 @@ function promptParts(shell, cols = 80) {
     if (info.untracked) marks += '?';
     if (marks) left += ` ${ansi.fg(p.marks)}${marks}${R}`;
   }
+  const failed = shell.status !== 0 && shell.status !== 130;
+  const input = `${left} ${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
 
   // The right side: RPROMPT if you set one; otherwise the tools this project
   // uses, how long the last command took (if it was slow), and the time.
@@ -129,36 +130,14 @@ function promptParts(shell, cols = 80) {
     parts.push(`${ansi.fg(p.right)}${new Date().toTimeString().slice(0, 5)}${R}`);
   }
 
-  // Leave the last column free so the line never wraps; if everything won't
-  // fit, drop modules from the front, keeping the time.
-  const room = cols - 1;
-  const lw = textWidth(ansi.strip(left));
+  // Keep the right side to about half the line, leaving room to type; if
+  // everything won't fit, drop modules from the front, keeping the time.
   const sep = `${ansi.fg(p.frame)} · ${R}`;
   const widthOf = (list) => textWidth(ansi.strip(list.join(sep)));
-  while (parts.length > 1 && lw + widthOf(parts) + 2 > room) parts.shift();
+  const room = Math.max(0, cols - 1 - textWidth(ansi.strip(input)) - 10);
+  while (parts.length && widthOf(parts) > room) parts.shift();
   const right = parts.join(sep);
-  const rw = widthOf(parts);
-  let header = left;
-  if (right && lw + rw + 2 <= room) header += ' '.repeat(room - lw - rw) + right;
-  else if (lw > room) header = ansi.strip(left).slice(0, room);
-
-  // The input line names the folder you're in, right where you type, so a
-  // cd is visible at a glance even without reading the frame above.
-  const failed = shell.status !== 0 && shell.status !== 130;
-  const here = folderName(shell.cwd, home, Math.max(8, Math.floor(cols / 3)));
-  const input = `${frame}╰─${R} ${ansi.bold()}${ansi.fg(p.path)}${here}${R} ${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
-  return { header, input };
-}
-
-// The last part of the folder: "~" at home, "/" at the root, otherwise its
-// name, shortened in the middle when it is very long.
-function folderName(cwd, home, maxW = 30) {
-  if (home && cwd === home) return '~';
-  const name = path.basename(cwd) || '/';
-  if (textWidth(name) <= maxW) return name;
-  const keep = Math.max(1, maxW - 1);
-  const head = Math.ceil(keep / 2);
-  return `${name.slice(0, head)}…${name.slice(name.length - (keep - head))}`;
+  return { input, right };
 }
 
 // Abbreviates every folder but the last to its first letter (keeping a
@@ -197,5 +176,5 @@ function terminalTitle(shell) {
 
 module.exports = {
   expandPrompt, leftPrompt, rightPrompt, gitSegment, shortCwd, DEFAULT_PROMPT, DEFAULT_RPROMPT,
-  usesDefaultPrompt, promptParts, compactPrompt, shortenPath, folderName, terminalTitle,
+  usesDefaultPrompt, promptParts, compactPrompt, shortenPath, terminalTitle,
 };

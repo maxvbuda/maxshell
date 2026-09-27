@@ -1,6 +1,6 @@
 {
   "name": "maxshell",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "A zsh-flavoured shell language — lexer, parser, and interpreter — implemented in Node.js",
   "main": "src/interpreter.js",
   "bin": {

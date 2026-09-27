@@ -11,7 +11,7 @@ const ansi = require('./ansi');
 //
 //   gradient  the logo, left to right
 //   ui        accents, bars, selection, meters and the files folder icon
-//   prompt    the two-line default prompt
+//   prompt    the default prompt
 //   shell     the live command-line highlighter
 //   syntax    code in edit / view / files previews
 

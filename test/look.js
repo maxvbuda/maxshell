@@ -119,27 +119,25 @@ test('the banner sits beside the logo when wide and stacks when narrow', () => {
 
 // --- the prompt -----------------------------------------------------------------
 
-test('the two-line prompt never wraps', () => {
+test('the prompt is one line that never wraps', () => {
   const sh = shell();
   for (const cols of [30, 60, 100, 200]) {
-    const { header, input } = promptParts(sh, cols);
-    assert.ok(textWidth(ansi.strip(header)) <= cols - 1, `${cols} cols: ${ansi.strip(header)}`);
-    assert.strictEqual(ansi.strip(input), '╰─ maxshell ❯ ');
+    const { input, right } = promptParts(sh, cols);
+    assert.ok(!input.includes('\n'));
+    const w = textWidth(ansi.strip(input)) + textWidth(ansi.strip(right));
+    assert.ok(w <= cols - 1, `${cols} cols: ${ansi.strip(input)}${ansi.strip(right)}`);
+    assert.match(ansi.strip(input), /maxshell.* ❯ $/);
   }
-  // In this repository (a Node project) the prompt shows the Node module.
-  assert.match(ansi.strip(promptParts(sh, 100).header), /^╭─ .*⬢ \d+\.\d+\.\d+/);
+  // In this repository (a Node project) the right side shows the Node module.
+  assert.match(ansi.strip(promptParts(sh, 120).right), /⬢ \d+\.\d+\.\d+/);
 });
 
-test('the input line names the folder, and follows cd', () => {
-  const { folderName } = require('../src/prompt');
+test('the prompt shows the folder, and follows cd', () => {
   const sh = shell();
   sh.run('cd src');
-  assert.strictEqual(ansi.strip(promptParts(sh, 80).input), '╰─ src ❯ ');
+  assert.match(ansi.strip(promptParts(sh, 80).input), /^\S*maxshell\/src · \S+.* ❯ $/);
   sh.run('cd /');
-  assert.strictEqual(ansi.strip(promptParts(sh, 80).input), '╰─ / ❯ ');
-  assert.strictEqual(folderName('/Users/me', '/Users/me'), '~');
-  const long = folderName('/x/a-very-long-folder-name-that-goes-on-and-on', '/h', 12);
-  assert.ok(textWidth(long) <= 12 && long.includes('…'), long);
+  assert.strictEqual(ansi.strip(promptParts(sh, 80).input), '/ ❯ ');
 });
 
 test('the terminal is told the folder, for its title and new tabs', () => {
@@ -162,7 +160,7 @@ test('the ❯ turns the error colour after a failed command', () => {
   assert.ok(promptParts(sh, 80).input.includes(`38;5;${theme.current().prompt.char}m❯`), 'Ctrl-C is not an error');
 });
 
-test('a custom PROMPT switches off the two-line prompt', () => {
+test('a custom PROMPT switches off the signature prompt', () => {
   const sh = shell();
   assert.strictEqual(usesDefaultPrompt(sh), true);
   sh.run("PROMPT='%~ $ '");

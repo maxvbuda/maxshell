@@ -38,7 +38,7 @@ known, documented limitation.
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion
 menu, did-you-mean fix), `highlight.js`, `complete.js` (context-aware
 completion with icons/descriptions), `prompt.js` + `context.js` +
-`gitprompt.js` (two-line prompt that collapses after Enter; Starship-style
+`gitprompt.js` (one-line prompt with a right side, trimmed after Enter; Starship-style
 version modules), `history.js` (history with folder + time), `suggest.js`,
 `alerts.js` (✓/✗ lines, macOS notifications), `jump.js` (frecency `j`),
 `banner.js`, `theme.js`, `ls.js` (modern ls).

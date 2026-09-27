@@ -40,19 +40,17 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.12.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.13.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
 ### The prompt
 
-The default prompt is two lines: a framed information line, then an input
-line that names the folder you're in, with a `❯` that turns the theme's error
-colour when the last command failed.
+The default prompt is one line: the folder you're in and its git state, then
+a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-╭─ ~/maxshell · main !?                         📦 v0.12.0 · ⬢ 25.1.0 · 12:04
-╰─ maxshell ❯ git status
+~/maxshell · main !? ❯ git status                 📦 v0.13.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -64,12 +62,12 @@ only inside projects that use it — ⬢ Node (and the 📦 package version) whe
 there's a `package.json`, 🐍 Python with the active virtualenv, 🦀 Rust, 🐹 Go,
 💎 Ruby, 🐳 Docker — plus `took 4.2s` after a slow command, and the time.
 Outside any project it's just the time. Long paths shorten fish-style
-(`~/p/w/src`) so the right side keeps its room, and if the window is narrow the
-modules give way before the time does.
+(`~/p/w/src`) so there's room to type, and if the window is narrow the modules
+give way before the time does; the right side also hides itself when your
+command grows long enough to need the space.
 
-Once you press Enter the prompt **collapses to a single line** (long paths
-shortened), so scrollback reads as a clean list of what you ran rather than a
-wall of frames:
+Once you press Enter the right side is dropped, so scrollback reads as a
+clean list of what you ran:
 
 ```
 ~/maxshell ❯ git status
@@ -751,7 +749,7 @@ test/pyedit.js      Python editor, tokenizer and key reader test suite
 test/gitui.js       git layer and browser test suite
 test/tools.js       Languages, view, files and top test suite
 test/features.js    History search, did-you-mean, j/back/forward, alerts
-test/look.js        Themes, logo, banner and the two-line prompt
+test/look.js        Themes, logo, banner and the prompt
 test/modern.js      Completion menu, context-aware prompt, ls
 test/github.js      gitui's GitHub support, against a fake gh
 ```

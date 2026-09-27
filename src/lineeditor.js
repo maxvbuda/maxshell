@@ -451,14 +451,14 @@ class LineEditor {
     let ghost = ghostText ? `${ansi.dim()}${ghostText}${ansi.reset()}` : '';
     if (!this.buf && this.fix) {
       const hint = '   ⏎ runs it';
-      if (ansi.width(this.prompt) + this.fix.length + hint.length < cols) {
+      if (ansi.width(this.prompt) + ansi.width(this.fix) + hint.length < cols) {
         ghostText = this.fix + hint;
         ghost = `${ansi.dim()}${this.fix}${ansi.reset()}${ansi.fg('gray')}${hint}${ansi.reset()}`;
       }
     }
 
     const promptW = ansi.width(this.prompt);
-    const totalW = promptW + [...this.buf].length + [...ghostText].length;
+    const totalW = promptW + ansi.width(this.buf) + ansi.width(ghostText);
     const endRow = Math.floor(totalW / cols);
 
     if (this.rprompt) {
@@ -473,7 +473,7 @@ class LineEditor {
     if (menu.length) s += `\r\n${menu.join('\r\n')}`;
     const bottom = endRow + menu.length;
 
-    const cursorCell = promptW + [...this.buf.slice(0, this.cursor)].length;
+    const cursorCell = promptW + ansi.width(this.buf.slice(0, this.cursor));
     const cursorRow = Math.floor(cursorCell / cols);
     const cursorCol = cursorCell % cols;
 

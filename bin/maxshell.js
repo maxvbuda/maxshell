@@ -126,17 +126,16 @@ async function runEditorRepl(shell) {
   let fix = null;
 
   for (;;) {
-    // The signature prompt draws its information line first, then reads on
-    // the short line below it. A custom PROMPT keeps the one-line behaviour.
-    const twoLine = !buffer && usesDefaultPrompt(shell);
+    // The signature prompt is one line with information on the right; a
+    // custom PROMPT uses PROMPT and RPROMPT as given.
+    const fancy = !buffer && usesDefaultPrompt(shell);
     if (!buffer) process.stdout.write(terminalTitle(shell));
     let prompt;
     let rprompt;
-    if (twoLine) {
+    if (fancy) {
       const parts = promptParts(shell, process.stdout.columns || 80);
-      process.stdout.write(`${parts.header}\n`);
       prompt = parts.input;
-      rprompt = '';
+      rprompt = parts.right;
     } else {
       prompt = buffer ? continuationPrompt(shell) : leftPrompt(shell);
       rprompt = buffer ? '' : rightPrompt(shell);
@@ -154,10 +153,10 @@ async function runEditorRepl(shell) {
     if (result.eof) break;
     if (result.aborted) { buffer = ''; continue; }
 
-    // Collapse the finished two-line prompt into one tidy line, so
-    // scrollback reads as a list of commands rather than a wall of frames.
-    if (twoLine) {
-      const up = editor.lastEndRow + 2;
+    // Redraw the finished prompt without its right side, so scrollback reads
+    // as a tidy list of commands.
+    if (fancy) {
+      const up = editor.lastEndRow + 1;
       process.stdout.write(`\x1b[${up}A\r\x1b[J${compactPrompt(shell, result.line, (l) => highlight(l, shell))}\n`);
     }
 

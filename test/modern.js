@@ -210,11 +210,11 @@ test('a plain folder shows just the time; a slow command adds "took"', () => {
   clearCaches();
   const sh = shellIn(tmp());
   ansi.setEnabled(true);
-  const plain = ansi.strip(promptParts(sh, 100).header);
+  const plain = ansi.strip(promptParts(sh, 100).right);
   assert.match(plain, /\d\d:\d\d$/);
   assert.ok(!/⬢|📦|took/.test(plain));
   sh.lastDuration = 3500;
-  assert.match(ansi.strip(promptParts(sh, 100).header), /took 3\.5s · \d\d:\d\d$/);
+  assert.match(ansi.strip(promptParts(sh, 100).right), /took 3\.5s · \d\d:\d\d$/);
   ansi.setEnabled(false);
 });
 
@@ -234,7 +234,8 @@ test('when space runs out, modules go before the time does', () => {
   const sh = shellIn(dir);
   ansi.setEnabled(true);
   for (const cols of [40, 70, 120]) {
-    const h = ansi.strip(promptParts(sh, cols).header);
+    const { input, right } = promptParts(sh, cols);
+    const h = ansi.strip(input) + ansi.strip(right);
     assert.ok(textWidth(h) <= cols - 1, `${cols}: ${h}`);
     if (cols >= 70) assert.match(h, /\d\d:\d\d$/, 'the time survives');
   }

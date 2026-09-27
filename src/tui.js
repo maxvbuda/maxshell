@@ -28,17 +28,7 @@ function fullscreen(fn, { cursor = true, mouse = false } = {}) {
   }
 }
 
-// Terminal columns a code point occupies: 0 for combining marks and joiners,
-// 2 for emoji and East Asian wide characters, otherwise 1.
-function charWidth(cp) {
-  if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x300 && cp <= 0x36f)) return 0;
-  if ((cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x1f000 && cp <= 0x1f2ff)
-    || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3)
-    || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f)
-    || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)
-    || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
-  return 1;
-}
+const { charWidth } = ansi;
 
 function textWidth(text) {
   let w = 0;
