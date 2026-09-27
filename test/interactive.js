@@ -117,6 +117,69 @@ async function main() {
     assert.deepStrictEqual(await eof, { line: '', eof: true });
   });
 
+
+  // --- editing niceties ------------------------------------------------------
+
+  await test('backspace and arrows treat an emoji as one character', async () => {
+    const { promise } = drive([...keysFor('echo 📦x'), key('left'), key('backspace'), ENTER]);
+    assert.strictEqual((await promise).line, 'echo x');
+  });
+
+  await test('^_ undoes, ^Y yanks what ^W or ^K killed', async () => {
+    const undo = { str: '\x1f', key: {} };
+    const { promise: p1 } = drive([...keysFor('echo keep me'), key('w', { ctrl: true }), undo, ENTER]);
+    assert.strictEqual((await p1).line, 'echo keep me');
+    const { promise: p2 } = drive([...keysFor('one two'), key('w', { ctrl: true }), key('a', { ctrl: true }), key('y', { ctrl: true }), ENTER]);
+    assert.strictEqual((await p2).line, 'twoone ');
+  });
+
+  await test('↑ with something typed visits only commands that start with it', async () => {
+    const history = ['git status', 'ls -la', 'git push', 'make'];
+    const { promise } = drive([...keysFor('git'), key('up'), key('up'), ENTER], { history });
+    assert.strictEqual((await promise).line, 'git status');
+    const { promise: p2 } = drive([...keysFor('git'), key('up'), key('down'), ENTER], { history });
+    assert.strictEqual((await p2).line, 'git');
+  });
+
+  await test('Alt-. inserts the last word of earlier commands', async () => {
+    const dot = { str: undefined, key: { sequence: '\x1b.', meta: true } };
+    const { promise } = drive([...keysFor('cat '), dot, dot, ENTER], { history: ['ls src', 'vim notes.md'] });
+    assert.strictEqual((await promise).line, 'cat src');
+  });
+
+  await test('quotes and brackets pair up, and typing the closer steps over it', async () => {
+    const { promise } = drive([...keysFor('echo "hi" (x) done'), ENTER]);
+    assert.strictEqual((await promise).line, 'echo "hi" (x) done');
+    const { promise: p2 } = drive([...keysFor('echo ('), key('backspace'), ENTER]);
+    assert.strictEqual((await p2).line, 'echo ');
+    const { promise: p3 } = drive([...keysFor("don't"), ENTER]);
+    assert.strictEqual((await p3).line, "don't");
+  });
+
+  await test('a pasted block keeps its newlines instead of running each line', async () => {
+    const paste = [key('paste-start'), ...keysFor('echo a\recho b'), key('paste-end')];
+    const { promise, editor } = drive([...paste]);
+    assert.strictEqual(editor.buf, 'echo a\necho b');
+    editor.input.emit('keypress', '\r', { name: 'return' });
+    assert.strictEqual((await promise).line, 'echo a\necho b');
+  });
+
+  await test('abbreviations expand on space and Enter', async () => {
+    const shell = new Shell({ output: () => {}, error: () => {} });
+    shell.run("abbr gco='git checkout'");
+    const { promise } = drive([...keysFor('gco main; gco'), ENTER], { shell });
+    assert.strictEqual((await promise).line, 'git checkout main; git checkout');
+    const { promise: p2 } = drive([...keysFor('echo gco '), ENTER], { shell });
+    assert.strictEqual((await p2).line, 'echo gco ', 'only in command position');
+  });
+
+  await test('layout wraps wide characters early and follows newlines', () => {
+    const l = LineEditor.layout(2, '日本語', 6, [0, 3]);
+    assert.deepStrictEqual(l.at.get(0), { row: 0, col: 2 });
+    assert.deepStrictEqual(l.at.get(3), { row: 1, col: 2 });
+    assert.strictEqual(LineEditor.layout(0, 'ab\ncd', 80).endRow, 1);
+  });
+
   // --- history and suggestions ---------------------------------------------
 
   await test('up arrow walks back through history', async () => {

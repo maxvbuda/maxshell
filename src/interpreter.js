@@ -55,6 +55,7 @@ class Shell {
     this.aliases = new Map();
     this.galiases = new Map();
     this.saliases = new Map();
+    this.abbrs = new Map();
     this.options = new Set();
     this.positional = opts.positional || [];
     this.scriptName = opts.name || 'maxshell';

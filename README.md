@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.14.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.15.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.14.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.15.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -393,16 +393,34 @@ hidden automatically when the line grows long enough to need the space.
 | Key | Action |
 |---|---|
 | `→` / `ctrl-e` | accept the ghost suggestion (at end of line) |
-| `tab` | complete; lists candidates when ambiguous |
-| `↑` / `↓`, `ctrl-p` / `ctrl-n` | walk history |
+| `tab` | complete — a menu when there are several choices |
+| `↑` / `↓`, `ctrl-p` / `ctrl-n` | walk history; with something typed, only commands that start with it |
+| `ctrl-r` | fuzzy history search |
 | `ctrl-a` / `ctrl-e` | start / end of line |
 | `ctrl-b` / `ctrl-f`, `←` / `→` | move by character |
-| `alt-b` / `alt-f` | move by word |
-| `ctrl-w` | delete previous word |
+| `alt-b` / `alt-f`, `ctrl-←` / `ctrl-→` | move by word |
+| `ctrl-w` / `alt-backspace` | delete the previous word / path segment |
 | `ctrl-u` / `ctrl-k` | kill to start / end of line |
+| `ctrl-y` | paste back what was last killed |
+| `ctrl-_` | undo |
+| `alt-.` | insert the last word of the previous command (repeat to go further back) |
+| `alt-u` / `alt-l` / `alt-c` | upper / lower / capitalise the next word |
+| `ctrl-t` | swap the two characters at the cursor |
+| `alt-enter` | a newline without running |
 | `ctrl-l` | clear the screen |
 | `ctrl-c` | cancel the line |
 | `ctrl-d` | exit on an empty line |
+
+**Paste safely.** A pasted block goes onto the line as one edit, newlines and
+all, and runs only when you press Enter.
+
+**Pairs.** Typing `"`, `'`, `(`, `[` or `{` at the end of a word adds its
+partner; typing the partner steps over it, and Backspace on an empty pair
+removes both. `AUTOPAIR=off` in `~/.maxshellrc` turns this off.
+
+**Abbreviations**, as in fish: `abbr gco='git checkout'` makes `gco` expand
+in place when you press space or Enter, so what you see (and what history
+keeps) is the real command. `abbr` lists them, `abbr -e gco` removes one.
 
 ### Configuring the prompt
 
@@ -702,9 +720,9 @@ maxshell ❯ git st
 - `cd`, `j` and `files` offer only folders; `theme` offers the themes
 - files show their icon, kind and size
 
-`Tab` / `↓` and `Shift-Tab` / `↑` move, `Enter` or `→` picks (without running
-anything), typing narrows the list, and `Esc` closes it. A single match still
-completes at once.
+`Tab` / `↓` and `Shift-Tab` / `↑` move — the line previews the highlighted
+choice as you go — `Enter` or `→` picks (without running anything), typing
+narrows the list, and `Esc` closes it. A single match still completes at once.
 
 ### ls, modernised
 
@@ -804,6 +822,7 @@ real path still works (`j ../other` acts like `cd`).
 | `view`, `files`, `top` | pager, file browser, process monitor (see above) |
 | `j`, `back`, `forward` | jump to frequent folders; walk folder history (see above) |
 | `theme` | list or switch colour themes (see above) |
+| `abbr` | fish-style abbreviations that expand as you type |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 

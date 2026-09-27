@@ -836,6 +836,29 @@ BUILTINS.unalias = (args, io, shell) => {
   return status;
 };
 
+// abbr gco='git checkout' — typed at the start of a command, it expands in
+// place when you press space or Enter, so history shows what really ran.
+BUILTINS.abbr = (args, io, shell) => {
+  if (!args.length || args[0] === '-l' || args[0] === '--list') {
+    for (const [n, v] of [...shell.abbrs].sort()) out(shell, io, args.length ? `${n}\n` : `abbr ${n}='${v.replace(/'/g, "'\\''")}'\n`);
+    return 0;
+  }
+  if (args[0] === '-e' || args[0] === '--erase') {
+    let status = 0;
+    for (const n of args.slice(1)) if (!shell.abbrs.delete(n)) { err(shell, io, `abbr: no abbreviation ${n}\n`); status = 1; }
+    return status;
+  }
+  let status = 0;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const eq = a.indexOf('=');
+    if (eq > 0) shell.abbrs.set(a.slice(0, eq), a.slice(eq + 1));
+    else if (args[i + 1] !== undefined) { shell.abbrs.set(a, args.slice(i + 1).join(' ')); break; } else if (shell.abbrs.has(a)) out(shell, io, `${shell.abbrs.get(a)}\n`);
+    else { err(shell, io, `abbr: no abbreviation ${a}\n`); status = 1; }
+  }
+  return status;
+};
+
 BUILTINS.history = (args, io, shell) => {
   const limit = args[0] ? Number(args[0]) : shell.history.length;
   const start = Math.max(0, shell.history.length - limit);
