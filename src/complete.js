@@ -37,6 +37,14 @@ const BUILTIN_DESC = {
   files: 'Finder-style file browser', top: 'live process monitor', gitui: 'stage, diff, commit and push',
   j: 'jump to a frequent folder', back: 'previous folder', forward: 'next folder', theme: 'switch colour theme',
   break: 'leave a loop', continue: 'next loop iteration', return: 'leave a function', unfunction: 'remove a function',
+  ls: 'list files (icons and git status at the prompt)', gitui: 'stage, diff, commit and push', fg: 'bring a job back',
+  bg: 'continue a job in the background', kill: 'signal a process or job', wait: 'wait for background jobs',
+  disown: 'forget a job', trap: 'run code on a signal or exit', getopts: 'parse options', setopt: 'turn options on',
+  unsetopt: 'turn options off', readonly: 'a variable that can’t change', integer: 'an integer variable',
+  float: 'a floating-point variable', builtin: 'run a builtin', where: 'every meaning of a name', abbr: 'expanding abbreviations',
+  emulate: 'accepted for zsh scripts', dash: 'live dashboard', palette: 'the command palette (Ctrl-P)',
+  explain: 'what a command line will do', snip: 'saved command snippets', mark: 'bookmark this folder',
+  go: 'jump to a bookmarked folder',
 };
 
 const COMMAND_DESC = {

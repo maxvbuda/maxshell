@@ -14,7 +14,7 @@ changing behaviour, and keep it updated with each feature.
 
 ```sh
 node bin/maxshell.js            # REPL   (maxshell -c 'cmd', or a script path)
-npm test                        # 10 suites, ~10 seconds; all must pass
+npm test                        # 11 suites, ~15 seconds; all must pass
 ```
 
 Suites: `test/run.js` (language), `interactive.js` (line editor, highlight,
@@ -23,7 +23,8 @@ prompt), `pyedit.js` (editor buffer, Python tokenizer, key reader),
 search, did-you-mean, j/back/forward, alerts), `look.js` (themes, logo,
 prompt), `modern.js` (completion menu, context prompt, ls), `github.js`
 (gitui's GitHub support against a fake `gh`), `jobs.js` (job control,
-streaming pipelines). New features get tests in a
+streaming pipelines), `palette.js` (palette, picker, explain, dash,
+snippets/bookmarks). New features get tests in a
 suite; new suites get appended to the `test` script in package.json.
 
 ## Architecture
@@ -51,11 +52,14 @@ completion with icons/descriptions), `prompt.js` + `context.js` +
 `gitprompt.js` (one-line prompt with a right side, trimmed after Enter; Starship-style
 version modules), `history.js` (history with folder + time), `suggest.js`,
 `alerts.js` (✓/✗ lines, macOS notifications), `jump.js` (frecency `j`),
-`banner.js`, `theme.js`, `ls.js` (modern ls).
+`banner.js`, `theme.js`, `ls.js` (modern ls). The editor hands Ctrl-P
+(palette), Alt-H (explain) and Alt-S (save snippet) back to the REPL as
+flags on its result; `shell.prefill` puts text on the next prompt.
 
 **Full-screen tools** — `pyedit.js` is the editor for every language (`edit`,
 `pyedit`), with languages in `syntax.js` (+ `pyhighlight.js` for Python) and
-colouring in `paint.js`; `view.js` pager; `files.js` + `fileops.js` (icon and
+colouring in `paint.js`; `dash.js` dashboard; `picker.js` (the fuzzy list
+behind the palette, snippets and bookmarks); `view.js` pager; `files.js` + `fileops.js` (icon and
 column views, mouse, undoable file ops); `top.js`; `gitui.js` + `git.js`, with
 GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
 `tui.js` (fullscreen, bars, width-aware `fit`), `keys.js`, `ansi.js`.
@@ -85,6 +89,7 @@ GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
   interactive at a terminal with flags it knows; scripts, pipes and unknown
   flags get the real `ls`. Colour is off for `-c` and scripts.
 - **Env overrides keep tests off real files:** `MAXSHELL_TRASH`,
+  `MAXSHELL_SNIPPETS_FILE`, `MAXSHELL_MARKS_FILE`, `MAXSHELL_CACHE`,
   `MAXSHELL_HISTORY_FILE`, `MAXSHELL_DIRS_FILE`, `MAXSHELL_THEME_FILE`,
   `MAXSHELL_THEME`, `MAXSHELL_BANNER=0`, `MAXSHELL_ICONS=0`,
   `MAXSHELL_FILES_VIEW=columns`.

@@ -12,7 +12,8 @@ const PAIRS = { '"': '"', "'": "'", '`': '`', '(': ')', '[': ']', '{': '}' };
 const CLOSERS = new Set(['"', "'", '`', ')', ']', '}']);
 
 class LineEditor {
-  constructor({ input, output, shell, highlight, complete, history, searchHistory }) {
+  constructor({ input, output, shell, highlight, complete, history, searchHistory, palette = false }) {
+    this.palette = palette;
     this.input = input;
     this.output = output;
     this.shell = shell;
@@ -35,15 +36,15 @@ class LineEditor {
 
   // `fix` is a corrected command offered after a typo: shown dimmed while the
   // line is empty, and run by pressing Enter.
-  read(prompt, rprompt, { fix = null } = {}) {
+  read(prompt, rprompt, { fix = null, initial = '' } = {}) {
     this.attach();
     this.fix = fix;
     this.search = null;
     this.menu = null;
     this.prompt = prompt || '';
     this.rprompt = rprompt || '';
-    this.buf = '';
-    this.cursor = 0;
+    this.buf = initial || '';
+    this.cursor = this.buf.length;
     this.histIdx = this.history.length;
     this.stash = '';
     this.suggestion = '';
@@ -599,7 +600,11 @@ class LineEditor {
         case 'w': this.deleteWordBack(); break;
         case 'y': this.yank(); break;
         case 't': this.transpose(); break;
-        case 'p': this.historyPrev(); break;
+        // ^P opens the command palette (↑ walks history).
+        case 'p':
+          if (this.palette) return this.finish({ line: this.buf, palette: true });
+          this.historyPrev();
+          break;
         case 'n': this.historyNext(); break;
         case 'delete': this.kill(this.cursor, this.wordEnd()); break;
         case 'l':
@@ -620,6 +625,8 @@ class LineEditor {
       else if (name === 'backspace') this.kill(this.wordStart(), this.cursor);
       else if (name === '.' || key.sequence === '\x1b.') this.insertLastArg();
       else if (name === 'u' || name === 'l' || name === 'c') this.caseWord(name);
+      // Alt-H explains the line; Alt-S saves it as a snippet.
+      else if (name === 'h' && this.buf.trim() && this.palette) { this.suggestion = ''; this.render(); return this.finish({ line: this.buf, explain: true }); } else if (name === 's' && this.buf.trim() && this.palette) { this.suggestion = ''; this.render(); return this.finish({ line: this.buf, saveSnippet: true }); }
       else if (name === 'return' || name === 'enter') { this.insert('\n'); }
       this.updateSuggestion();
       return this.render();

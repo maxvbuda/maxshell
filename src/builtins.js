@@ -325,6 +325,11 @@ Editing
   top                       live process monitor: sort, filter, k to kill
 
 Getting around
+  Ctrl-P  /  palette        the command palette: anything, searchable
+  Alt-H  /  explain 'cmd'   what a command line will do, from the manuals
+  dash                      live dashboard: git, jobs, CPU, memory, recent
+  Alt-S  /  snip            save and reuse command snippets
+  mark [name]  /  go        bookmark folders and jump back to them
   j words…                  jump to your most-used folder matching the words
   back / forward            walk your folder history, like a browser
   Ctrl-R                    fuzzy-search every command you've run
@@ -857,6 +862,116 @@ BUILTINS.abbr = (args, io, shell) => {
     else { err(shell, io, `abbr: no abbreviation ${a}\n`); status = 1; }
   }
   return status;
+};
+
+// --- the palette, explain, dash, snippets and bookmarks -----------------------
+
+BUILTINS.dash = (args, io, shell) => require('./dash').runDash(args, io, shell);
+
+// palette: pick anything and run it (Ctrl-P at the prompt does the same and
+// puts "insert" items on the line to edit).
+BUILTINS.palette = (args, io, shell) => {
+  const { requireTty } = require('./tui');
+  if (!requireTty('palette', io, shell)) return 1;
+  const item = require('./picker').pick(require('./palette').paletteItems(shell), { title: 'maxshell — do anything', hint: 'run' });
+  if (!item) return 0;
+  if (item.insert) { shell.prefill = item.value; return 0; }
+  return shell.runSource(item.value, io);
+};
+
+// explain 'command line' — what it will do, piece by piece (Alt-H at the prompt).
+BUILTINS.explain = (args, io, shell) => {
+  if (!args.length) { err(shell, io, "explain: give it a command line, e.g. explain 'tar -czf x.tgz src'\n"); return 1; }
+  const cols = process.stdout.columns || 80;
+  out(shell, io, `${require('./explain').explain(args.join(' '), shell, cols).join('\n')}\n`);
+  return 0;
+};
+
+// snip                 pick a saved snippet (it goes on the prompt to edit)
+// snip add NAME CMD…   save one     snip save NAME   save the last command
+// snip rm NAME   snip mv OLD NEW   snip -l
+BUILTINS.snip = (args, io, shell) => {
+  const { Store, snippetsFile } = require('./snippets');
+  const store = new Store(snippetsFile());
+  const [sub, ...rest] = args;
+  if (sub === '-l' || sub === 'list' || (!sub && !process.stdout.isTTY)) {
+    const w = Math.max(4, ...store.entries().map(([n]) => n.length));
+    for (const [n, v] of store.entries()) out(shell, io, `${n.padEnd(w)}  ${v}\n`);
+    return 0;
+  }
+  if (!sub) {
+    if (!store.entries().length) { out(shell, io, 'no snippets yet — Alt-S at the prompt saves the line you are typing\n'); return 0; }
+    const item = require('./picker').pick(store.entries().map(([n, v]) => ({ label: n, desc: v, icon: '✂️', value: v })), { title: 'snippets', hint: 'put on the prompt' });
+    if (item) shell.prefill = item.value;
+    return 0;
+  }
+  if (sub === 'add' && rest.length >= 2) { store.set(rest[0], rest.slice(1).join(' ')); return 0; }
+  if (sub === 'save' && rest.length === 1) {
+    const last = [...shell.history].reverse().find((c) => !/^\s*snip\b/.test(c));
+    if (!last) { err(shell, io, 'snip: no command to save yet\n'); return 1; }
+    store.set(rest[0], last);
+    out(shell, io, `saved ${rest[0]}: ${last}\n`);
+    return 0;
+  }
+  if (sub === 'rm' && rest.length) {
+    let status = 0;
+    for (const n of rest) if (!store.delete(n)) { err(shell, io, `snip: no snippet ${n}\n`); status = 1; }
+    return status;
+  }
+  if (sub === 'mv' && rest.length === 2) {
+    if (!store.rename(rest[0], rest[1])) { err(shell, io, `snip: no snippet ${rest[0]}\n`); return 1; }
+    return 0;
+  }
+  if (store.get(sub) !== undefined && !rest.length) { shell.prefill = store.get(sub); return 0; }
+  err(shell, io, 'usage: snip [NAME] | snip add NAME CMD… | snip save NAME | snip rm NAME | snip mv OLD NEW | snip -l\n');
+  return 1;
+};
+
+// mark [NAME] bookmarks this folder (named after it by default);
+// mark -d NAME removes one; marks lists them; go [NAME] goes there.
+BUILTINS.mark = (args, io, shell) => {
+  const { Store, marksFile } = require('./snippets');
+  const store = new Store(marksFile());
+  if (args[0] === '-d') {
+    let status = 0;
+    for (const n of args.slice(1)) if (!store.delete(n)) { err(shell, io, `mark: no bookmark ${n}\n`); status = 1; }
+    return status;
+  }
+  if (args[0] === '-l') return BUILTINS.marks([], io, shell);
+  const name = args[0] || path.basename(shell.cwd) || 'root';
+  store.set(name, shell.cwd);
+  out(shell, io, `🔖 ${name} → ${shell.cwd}\n`);
+  return 0;
+};
+
+BUILTINS.marks = (args, io, shell) => {
+  const { Store, marksFile } = require('./snippets');
+  const entries = new Store(marksFile()).entries();
+  const w = Math.max(4, ...entries.map(([n]) => n.length));
+  for (const [n, d] of entries) out(shell, io, `${n.padEnd(w)}  ${d}\n`);
+  return 0;
+};
+
+BUILTINS.go = (args, io, shell) => {
+  const { Store, marksFile } = require('./snippets');
+  const store = new Store(marksFile());
+  let dir;
+  if (args[0]) {
+    dir = store.get(args[0]);
+    if (!dir) {
+      const hit = store.entries().find(([n]) => n.startsWith(args[0]));
+      if (hit) [, dir] = hit;
+    }
+    if (!dir) { err(shell, io, `go: no bookmark ${args[0]} (mark saves one)\n`); return 1; }
+  } else {
+    if (!store.entries().length) { out(shell, io, 'no bookmarks yet — mark saves this folder\n'); return 0; }
+    if (!process.stdout.isTTY) return BUILTINS.marks([], io, shell);
+    const item = require('./picker').pick(store.entries().map(([n, d]) => ({ label: n, desc: d, icon: '🔖', value: d })), { title: 'bookmarks', hint: 'go there' });
+    if (!item) return 0;
+    dir = item.value;
+  }
+  try { shell.setCwd(dir); } catch (e) { err(shell, io, `go: ${dir}: ${e.code === 'ENOENT' ? 'no longer exists' : e.message}\n`); return 1; }
+  return 0;
 };
 
 BUILTINS.history = (args, io, shell) => {

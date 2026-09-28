@@ -113,6 +113,7 @@ async function runEditorRepl(shell) {
     complete: completions,
     history: shell.history,
     searchHistory: (q) => history.search(q, { cwd: shell.cwd }),
+    palette: true,
   });
 
   // Ctrl-C should stop the running command, not the shell: the child gets
@@ -147,12 +148,43 @@ async function runEditorRepl(shell) {
 
     let result;
     try {
-      result = await editor.read(prompt, rprompt, { fix: buffer ? null : fix });
+      const initial = buffer ? '' : shell.prefill || '';
+      shell.prefill = null;
+      result = await editor.read(prompt, rprompt, { fix: buffer ? null : fix, initial });
     } catch (e) {
       reportError(e);
       break;
     }
     fix = null;
+
+    // Ctrl-P: the palette. What you pick runs as if typed (or, for a
+    // snippet or recent command, goes on the line to edit).
+    if (result.palette) {
+      const item = require('../src/picker').pick(require('../src/palette').paletteItems(shell), { title: 'maxshell — do anything', hint: 'run' });
+      const erase = () => process.stdout.write(`\x1b[${editor.lastEndRow + 1}A\r\x1b[J`);
+      if (!item) { erase(); shell.prefill = result.line; continue; }
+      if (item.insert) { erase(); shell.prefill = item.value; continue; }
+      result.line = item.value;
+    }
+    // Alt-H: explain the line, then hand it back to edit.
+    if (result.explain) {
+      const { explain } = require('../src/explain');
+      process.stdout.write(`${explain(result.line, shell, process.stdout.columns || 80).join('\n')}\n`);
+      shell.prefill = result.line;
+      continue;
+    }
+    // Alt-S: save the line as a snippet, asking for a name.
+    if (result.saveSnippet) {
+      const { Store, snippetsFile, suggestName } = require('../src/snippets');
+      const named = await editor.read(`${theme.fg('accent')}snippet name ❯${ansi.reset()} `, '', { initial: suggestName(result.line) });
+      const name = (named.line || '').trim().replace(/\s+/g, '-');
+      if (!named.aborted && !named.eof && name) {
+        new Store(snippetsFile()).set(name, result.line);
+        process.stdout.write(`${ansi.fg('gray')}✂ saved ${name} — snip or Ctrl-P brings it back${ansi.reset()}\n`);
+      }
+      shell.prefill = result.line;
+      continue;
+    }
 
     if (result.eof || /^\s*exit(\s|$)/.test(result.line || '')) {
       // Like zsh: the first attempt to leave with suspended jobs only warns.

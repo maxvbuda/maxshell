@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.18.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.19.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.18.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.19.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -421,6 +421,9 @@ hidden automatically when the line grows long enough to need the space.
 | `tab` | complete — a menu when there are several choices |
 | `↑` / `↓`, `ctrl-p` / `ctrl-n` | walk history; with something typed, only commands that start with it |
 | `ctrl-r` | fuzzy history search |
+| `ctrl-p` | the command palette |
+| `alt-h` | explain the line before running it |
+| `alt-s` | save the line as a snippet |
 | `ctrl-a` / `ctrl-e` | start / end of line |
 | `ctrl-b` / `ctrl-f`, `←` / `→` | move by character |
 | `alt-b` / `alt-f`, `ctrl-←` / `ctrl-→` | move by word |
@@ -771,6 +774,60 @@ pipes (`ls | wc -l`), and with any flag it doesn't know, `ls` is the real
 
 ## Things terminals should have had years ago
 
+### The command palette — Ctrl-P
+
+`Ctrl-P` opens one searchable list of everything you can do right now: your
+jobs, the tools (`dash`, `files`, `gitui`, `top`…), this project's `npm`
+scripts and `make` targets, git actions and recent branches, your snippets
+and bookmarks, the folders you visit most, every theme, and recent commands.
+Type any words to narrow it; `Enter` runs the choice as if you'd typed it
+(snippets and recent commands go on the line to edit instead). `↑` still
+walks history; `palette` opens it from a script or alias.
+
+### What will this do? — Alt-H
+
+Type a command and press **`Alt-H`** (or run `explain 'cmd'`) to have it
+taken apart before you run it: each program and what it is, each flag as
+its manual describes it (`-czf` is split into `-c`, `-z`, `-f`), what globs
+and `$variables` expand to, and what `|`, `&&`, `>`, `2>&1` mean. Nothing
+runs — `$(…)` is described, not executed. Your line comes back to edit.
+
+```
+~ ❯ tar -czf site.tgz *.html
+tar       manipulate tape archives · /usr/bin/tar
+  -czf    several options together:
+    -c    Create a new archive containing the specified items.
+    -z    (c mode only) Compress the resulting archive with gzip(1).
+    -f    Read the archive from or write the archive to the specified file.
+  *.html  matches index.html about.html
+```
+
+### The dashboard — dash
+
+`dash` is one live screen with what you'd otherwise check with five
+commands: the project's branch, changes and last commits; CPU, memory and
+battery meters and the busiest processes; your jobs; and what you ran in
+this folder recently. It refreshes every second and a half; `g` `f` `t` `e`
+`j` `p` jump to gitui, files, top, edit, jobs or the palette, `q` leaves.
+
+### Snippets and bookmarks
+
+Press **`Alt-S`** to save the line you're typing as a snippet (you're asked
+for a name). `snip` picks one to put back on the prompt; `snip NAME` does it
+by name.
+
+```sh
+snip add deploy 'npm run build && rsync -a dist/ server:/www'
+snip save last-build        # the command you just ran
+snip -l    snip mv a b    snip rm a
+mark                        # bookmark this folder (named after it)
+mark work                   # …or give it a name
+go work    go               # go there, or pick from a list;  marks lists them
+```
+
+Snippets live in `~/.maxshell_snippets` and bookmarks in `~/.maxshell_marks`;
+both show up in the palette.
+
 ### Fuzzy history search — Ctrl-R
 
 `Ctrl-R` opens a live search over every command you've ever run. Type any
@@ -853,6 +910,8 @@ real path still works (`j ../other` acts like `cd`).
 | `jobs`, `fg`, `bg`, `kill`, `wait`, `disown` | job control (see above) |
 | `theme` | list or switch colour themes (see above) |
 | `abbr` | fish-style abbreviations that expand as you type |
+| `palette`, `explain`, `dash` | the command palette, command explainer, live dashboard (see above) |
+| `snip`, `mark`, `marks`, `go` | snippets and folder bookmarks (see above) |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
@@ -895,6 +954,11 @@ src/ls.js           The modern ls: grid, long view, tree, git status
 src/top.js          top: ps parsing, process table, screen
 src/jobs.js         Job control: starting, waiting on and steering jobs
 src/jobrun.c        The job helper: process groups, the terminal, stop/continue
+src/picker.js       The fuzzy full-screen list the palette and pickers share
+src/palette.js      What the command palette offers
+src/explain.js      Alt-H: a command line explained from the manuals
+src/dash.js         The live dashboard
+src/snippets.js     Snippet and bookmark storage
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks
@@ -910,6 +974,7 @@ test/look.js        Themes, logo, banner and the prompt
 test/modern.js      Completion menu, context-aware prompt, ls
 test/github.js      gitui's GitHub support, against a fake gh
 test/jobs.js        Job control and streaming pipelines
+test/palette.js     Palette, picker, explain, dash, snippets and bookmarks
 ```
 
 ## Differences from zsh
