@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.17.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.18.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.17.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.18.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -427,7 +427,7 @@ hidden automatically when the line grows long enough to need the space.
 | `ctrl-w` / `alt-backspace` | delete the previous word / path segment |
 | `ctrl-u` / `ctrl-k` | kill to start / end of line |
 | `ctrl-y` | paste back what was last killed |
-| `ctrl-_` | undo |
+| `ctrl-z` (or `ctrl-_`) | undo — while a command is running, `ctrl-z` still suspends it |
 | `alt-.` | insert the last word of the previous command (repeat to go further back) |
 | `alt-u` / `alt-l` / `alt-c` | upper / lower / capitalise the next word |
 | `ctrl-t` | swap the two characters at the cursor |

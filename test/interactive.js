@@ -131,6 +131,8 @@ async function main() {
     assert.strictEqual((await p1).line, 'echo keep me');
     const { promise: p2 } = drive([...keysFor('one two'), key('w', { ctrl: true }), key('a', { ctrl: true }), key('y', { ctrl: true }), ENTER]);
     assert.strictEqual((await p2).line, 'twoone ');
+    const { promise: p3 } = drive([...keysFor('echo hi'), key('w', { ctrl: true }), key('z', { ctrl: true }), ENTER]);
+    assert.strictEqual((await p3).line, 'echo hi', '^Z undoes too');
   });
 
   await test('↑ with something typed visits only commands that start with it', async () => {

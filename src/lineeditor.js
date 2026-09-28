@@ -562,8 +562,9 @@ class LineEditor {
       if (!(key.ctrl && name === 'r')) this.fix = null;
     }
 
-    // ^_ (and ^/) undo; some terminals send it without a key name.
-    if (str === '\x1f' || (key.ctrl && (name === '_' || name === '/'))) {
+    // ^Z undoes at the prompt (while a command runs, ^Z still suspends it);
+    // ^_ and ^/ too. Some terminals send ^_ without a key name.
+    if (str === '\x1f' || str === '\x1a' || (key.ctrl && (name === 'z' || name === '_' || name === '/'))) {
       this.undoEdit();
       this.updateSuggestion();
       return this.render();
