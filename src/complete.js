@@ -44,7 +44,7 @@ const BUILTIN_DESC = {
   float: 'a floating-point variable', builtin: 'run a builtin', where: 'every meaning of a name', abbr: 'expanding abbreviations',
   emulate: 'accepted for zsh scripts', dash: 'live dashboard', palette: 'the command palette (Ctrl-P)',
   explain: 'what a command line will do', snip: 'saved command snippets', mark: 'bookmark this folder',
-  go: 'jump to a bookmarked folder',
+  go: 'jump to a bookmarked folder', cleanup: 'free memory (-r) or CPU (-c)',
 };
 
 const COMMAND_DESC = {

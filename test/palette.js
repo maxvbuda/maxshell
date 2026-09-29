@@ -200,6 +200,47 @@ test('the dashboard draws in one or two columns, always within the width', () =>
   assert.ok(screen.done);
 });
 
+// --- cleanup -------------------------------------------------------------------
+
+test('cleanup groups an app’s helpers, skips the system and other users, and ranks', () => {
+  const { hogs } = require('../src/cleanup');
+  const MB = 1024 * 1024;
+  const procs = [
+    { pid: 1, name: 'Google Chrome', user: 'me', rss: 800 * MB, cpu: 10, command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+    { pid: 2, name: 'Google Chrome Helper', user: 'me', rss: 900 * MB, cpu: 30, command: '/Applications/Google Chrome.app/Contents/Frameworks/x/Helper' },
+    { pid: 3, name: 'node', user: 'me', rss: 1200 * MB, cpu: 5, command: 'node server.js' },
+    { pid: 4, name: 'WindowServer', user: 'me', rss: 3000 * MB, cpu: 50, command: '/System/WindowServer' },
+    { pid: 5, name: 'mysqld', user: '_mysql', rss: 2000 * MB, cpu: 80, command: 'mysqld' },
+    { pid: 6, name: 'tiny', user: 'me', rss: 1 * MB, cpu: 0, command: 'tiny' },
+    { pid: 7, name: 'node', user: 'me', rss: 5000 * MB, cpu: 90, command: 'node maxshell' },
+  ];
+  const byMem = hogs(procs, { kind: 'r', user: 'me', exclude: new Set([7]) });
+  assert.deepStrictEqual(byMem.map((g) => g.name), ['Google Chrome', 'node']);
+  assert.deepStrictEqual(byMem[0].pids, [1, 2]);
+  const byCpu = hogs(procs, { kind: 'c', user: 'me', exclude: new Set([7]) });
+  assert.strictEqual(byCpu[0].name, 'Google Chrome');
+  assert.strictEqual(byCpu[0].cpu, 40);
+});
+
+test('cleanup reads choices like 1 3, 2-4 and all', () => {
+  const { parseChoice } = require('../src/cleanup');
+  assert.deepStrictEqual(parseChoice('1 3', 5), [0, 2]);
+  assert.deepStrictEqual(parseChoice('2-4, 9', 5), [1, 2, 3]);
+  assert.deepStrictEqual(parseChoice('all', 3), [0, 1, 2]);
+  assert.deepStrictEqual(parseChoice('', 3), []);
+  assert.deepStrictEqual(parseChoice('no', 3), []);
+});
+
+test('cleanup without a terminal only lists, and needs -r or -c', () => {
+  const sh = shellIn(scratch);
+  const errors = [];
+  sh.errorOutput = (l) => errors.push(l);
+  assert.strictEqual(sh.run('cleanup'), 2);
+  assert.ok(errors.join(' ').includes('cleanup -r'));
+  assert.strictEqual(sh.run('cleanup -r < /dev/null'), 0);
+  assert.ok(sh.lines.some((l) => /Memory .* in use/.test(ansi.strip(l))));
+});
+
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* fine */ }
 
 if (failures) {

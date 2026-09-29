@@ -38,6 +38,20 @@ function logicalStart() {
   return real;
 }
 
+// Reads from a descriptor, waiting when it has nothing yet: a terminal's
+// stdin is non-blocking under Node, so a plain read fails with EAGAIN
+// instead of waiting for the user to type. Returns 0 at end of input.
+function readRetrying(fd, buf, len) {
+  for (;;) {
+    try {
+      return fs.readSync(fd, buf, 0, len, null);
+    } catch (e) {
+      if (e.code !== 'EAGAIN') return 0;
+      jobs.sleep(10);
+    }
+  }
+}
+
 // The system shell that runs streaming pipelines.
 const SH = fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
 
@@ -273,7 +287,7 @@ class Shell {
       const buf = Buffer.alloc(65536);
       for (;;) {
         let n = 0;
-        try { n = fs.readSync(desc.fd, buf, 0, buf.length, null); } catch { n = 0; }
+        n = readRetrying(desc.fd, buf, buf.length);
         if (!n) break;
         chunks.push(Buffer.from(buf.subarray(0, n)));
       }
@@ -297,7 +311,7 @@ class Shell {
       let line = '';
       for (;;) {
         let n = 0;
-        try { n = fs.readSync(fd, buf, 0, 1, null); } catch { n = 0; }
+        n = readRetrying(fd, buf, 1);
         if (!n) return line === '' ? null : line;
         const c = buf.toString('utf8');
         if (c === '\n') return line;
@@ -1310,6 +1324,7 @@ class Shell {
 }
 
 module.exports = {
+  readRetrying,
   Shell,
   ShellError,
   IncompleteError,

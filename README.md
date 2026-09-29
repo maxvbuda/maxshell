@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.19.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.20.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.19.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.20.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -828,6 +828,22 @@ go work    go               # go there, or pick from a list;  marks lists them
 Snippets live in `~/.maxshell_snippets` and bookmarks in `~/.maxshell_marks`;
 both show up in the palette.
 
+### cleanup — free memory or CPU
+
+```sh
+cleanup -r      # what is using the most memory
+cleanup -c      # what is keeping the CPU busy
+```
+
+Memory and CPU are freed by quitting what's using them, so `cleanup` shows
+your biggest users — an app's helper processes counted together (Chrome's
+dozens become one line) — with a meter of how full things are, and asks
+which to quit (`1 3`, `2-4`, `all`, or Enter for none). Apps are asked to
+quit the normal way, so they can offer to save; other programs get a polite
+`SIGTERM`. System processes, other users' programs and your terminal are
+never offered, and nothing is quit without asking. After `-r` it shows how
+much memory came back.
+
 ### Fuzzy history search — Ctrl-R
 
 `Ctrl-R` opens a live search over every command you've ever run. Type any
@@ -912,6 +928,7 @@ real path still works (`j ../other` acts like `cd`).
 | `abbr` | fish-style abbreviations that expand as you type |
 | `palette`, `explain`, `dash` | the command palette, command explainer, live dashboard (see above) |
 | `snip`, `mark`, `marks`, `go` | snippets and folder bookmarks (see above) |
+| `cleanup` | `-r` free memory, `-c` free the CPU, by quitting what you pick (see above) |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
@@ -959,6 +976,7 @@ src/palette.js      What the command palette offers
 src/explain.js      Alt-H: a command line explained from the manuals
 src/dash.js         The live dashboard
 src/snippets.js     Snippet and bookmark storage
+src/cleanup.js      cleanup: the biggest memory and CPU users, and quitting them
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks

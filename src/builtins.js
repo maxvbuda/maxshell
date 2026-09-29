@@ -330,6 +330,7 @@ Getting around
   dash                      live dashboard: git, jobs, CPU, memory, recent
   Alt-S  /  snip            save and reuse command snippets
   mark [name]  /  go        bookmark folders and jump back to them
+  cleanup -r  /  cleanup -c quit what uses the most memory / CPU (asks first)
   j words…                  jump to your most-used folder matching the words
   back / forward            walk your folder history, like a browser
   Ctrl-R                    fuzzy-search every command you've run
@@ -866,6 +867,9 @@ BUILTINS.abbr = (args, io, shell) => {
 
 // --- the palette, explain, dash, snippets and bookmarks -----------------------
 
+// cleanup -r / -c: quit what's using the most memory / CPU, after asking.
+BUILTINS.cleanup = (args, io, shell) => require('./cleanup').runCleanup(args, io, shell);
+
 BUILTINS.dash = (args, io, shell) => require('./dash').runDash(args, io, shell);
 
 // palette: pick anything and run it (Ctrl-P at the prompt does the same and
@@ -1143,7 +1147,7 @@ function readChars(shell, desc, { nchars, delim, silent }) {
   try {
     for (;;) {
       let n = 0;
-      try { n = fs.readSync(fd, buf, 0, 1, null); } catch { n = 0; }
+      n = require('./interpreter').readRetrying(fd, buf, 1);
       if (!n) return line === '' ? null : line;
       const c = buf.toString('utf8', 0, n);
       if (tty && c === '\x03') { process.stdout.write('\n'); return null; }
