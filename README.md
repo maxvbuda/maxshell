@@ -17,10 +17,24 @@ maxshell %~ % for f in src/*.js; do
 ## Install / run
 
 ```sh
-npm install -g .        # exposes the `maxshell` command
-# or, without installing:
-node bin/maxshell.js
+git clone https://github.com/maxvbuda/maxshell
+cd maxshell
+./install.sh
 ```
+
+`install.sh` checks for Node.js (16 or newer), installs the `maxshell`
+command, and offers to make maxshell **your default shell**, so every new
+terminal window opens in it. If you skip that — or install another way, e.g.
+`npm install -g .` — maxshell asks once, the first time you start it, and
+`maxshell --make-default` does it any time.
+
+Making it the default writes a small login wrapper (`~/.maxshell/bin/maxshell`)
+that starts maxshell with the Node you have now — and falls back to zsh if
+Node or maxshell ever goes missing, so you're never locked out of the
+terminal. It's added to `/etc/shells` (your password, for `sudo`) and set
+with `chsh`. Your current `PATH` is saved in `~/.maxshell_profile`, which a
+login maxshell loads, so Homebrew and your other tools stay on hand. To go
+back: `chsh -s /bin/zsh`.
 
 ## Usage
 
@@ -28,10 +42,13 @@ node bin/maxshell.js
 maxshell                      # interactive shell
 maxshell script.mxsh a b c    # run a script with arguments
 maxshell -c 'echo hello'      # run one command
+maxshell -l                   # a login shell (also -lc, -i, as zsh accepts)
+maxshell --make-default       # make it your login shell
 maxshell --version
 ```
 
-The interactive shell reads `~/.maxshellrc` at startup and saves input to
+A login shell loads the system `PATH` and `~/.maxshell_profile` first. The
+interactive shell reads `~/.maxshellrc` at startup and saves input to
 `~/.maxshell_history`. Tab completion works for commands and file paths.
 
 ## The look
@@ -40,7 +57,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.22.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.23.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +67,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.22.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.23.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title

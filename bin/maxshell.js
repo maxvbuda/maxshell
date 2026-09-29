@@ -282,22 +282,32 @@ function runPlainRepl(shell) {
   });
 }
 
-async function runRepl() {
+async function runRepl(opts = {}) {
   const interactive = !!(process.stdin.isTTY && process.stdout.isTTY);
   ansi.setEnabled(!!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb');
 
   theme.loadSavedTheme();
   const shell = new Shell({ interactive: true });
+  if (opts.login) loginSetup(shell);
   sourceRcFile(shell);
+
+  // The first time, offer to become the default shell (once, ever).
+  if (interactive) {
+    await require('../src/setup').offerDefault(
+      async () => shell.readLine({ kind: 'term', which: 'in' }),
+      (t) => process.stdout.write(t),
+    );
+  }
   loadHistory(shell);
 
   const status = interactive ? await runEditorRepl(shell) : await runPlainRepl(shell);
   process.exit(status);
 }
 
-function runSource(src, name, args) {
+function runSource(src, name, args, opts = {}) {
   ansi.setEnabled(false);
   const shell = new Shell({ name, positional: args });
+  if (opts.login) loginSetup(shell);
   let status;
   try {
     status = shell.run(src);
@@ -310,8 +320,43 @@ function runSource(src, name, args) {
   return status;
 }
 
+// Login shells get the system PATH (path_helper) and ~/.maxshell_profile,
+// which `maxshell --make-default` fills with the PATH you had then.
+function loginSetup(shell) {
+  try {
+    const r = require('child_process').spawnSync('/usr/libexec/path_helper', ['-s'], { encoding: 'utf8', timeout: 2000 });
+    const m = /PATH="([^"]*)"/.exec(r.stdout || '');
+    if (m) { shell.env.PATH = m[1]; process.env.PATH = m[1]; }
+  } catch { /* not macOS */ }
+  const profile = require('../src/setup').profileFile();
+  if (fs.existsSync(profile)) {
+    try { shell.run(fs.readFileSync(profile, 'utf8')); } catch (e) { if (!(e instanceof ExitSignal)) reportError(e); }
+    process.env.PATH = shell.env.PATH;
+  }
+}
+
 function main() {
-  const argv = process.argv.slice(2);
+  let argv = process.argv.slice(2);
+  // Flags a login shell gets: -l / --login, -i, and combinations like -lc
+  // (VS Code and friends run `$SHELL -l -i -c 'env'`).
+  const opts = { login: false, command: null };
+  while (argv.length && /^(-[lisc]+|--login|--interactive)$/.test(argv[0])) {
+    const a = argv.shift();
+    if (a === '--login' || (a.startsWith('-') && !a.startsWith('--') && a.includes('l'))) opts.login = true;
+    if (/^-[lis]*c[lis]*$/.test(a)) {
+      if (argv[0] === undefined) {
+        process.stderr.write('maxshell: -c requires an argument\n');
+        process.exit(2);
+      }
+      opts.command = argv.shift();
+    }
+  }
+  // Terminal starts a login shell through login(1); through the wrapper the
+  // usual "-maxshell" name is lost, so look at who started us instead.
+  if (!opts.login && !argv.length && opts.command === null && process.stdin.isTTY) {
+    const r = require('child_process').spawnSync('ps', ['-o', 'comm=', '-p', String(process.ppid)], { encoding: 'utf8', timeout: 1000 });
+    if (/(^|\/)login\s*$/.test(r.stdout || '')) opts.login = true;
+  }
 
   if (argv[0] === '--version' || argv[0] === '-v') {
     process.stdout.write(`maxshell ${VERSION}\n`);
@@ -322,17 +367,27 @@ function main() {
     process.stdout.write(
       'usage: maxshell [script [args...]]\n'
       + '       maxshell -c "command"\n'
-      + '       maxshell            start an interactive shell\n',
+      + '       maxshell               start an interactive shell\n'
+      + '       maxshell --make-default   make maxshell your login shell\n',
     );
     return;
   }
 
-  if (argv[0] === '-c') {
-    if (argv[1] === undefined) {
-      process.stderr.write('maxshell: -c requires an argument\n');
-      process.exit(2);
+  if (argv[0] === '--make-default') {
+    const setup = require('../src/setup');
+    if (setup.isDefault()) {
+      setup.writeWrapper();
+      setup.writeProfile();
+      process.stdout.write('maxshell is already your default shell (wrapper and PATH refreshed)\n');
+      return;
     }
-    process.exit(runSource(argv[1], 'maxshell', argv.slice(2)));
+    process.stdout.write('Making maxshell your default shell:\n');
+    process.exit(setup.makeDefault() ? 0 : 1);
+  }
+
+  // As in sh and zsh, `-c 'cmd' name a b` makes name $0 and a b $1 $2.
+  if (opts.command !== null) {
+    process.exit(runSource(opts.command, argv[0] ?? 'maxshell', argv.slice(1), opts));
   }
 
   if (argv.length && !argv[0].startsWith('-')) {
@@ -344,14 +399,14 @@ function main() {
       process.stderr.write(`maxshell: cannot read ${argv[0]}\n`);
       process.exit(127);
     }
-    process.exit(runSource(src, argv[0], argv.slice(1)));
+    process.exit(runSource(src, argv[0], argv.slice(1), opts));
   }
 
   if (!process.stdin.isTTY) {
-    process.exit(runSource(fs.readFileSync(0, 'utf8'), 'maxshell', []));
+    process.exit(runSource(fs.readFileSync(0, 'utf8'), 'maxshell', [], opts));
   }
 
-  runRepl();
+  runRepl(opts);
 }
 
 main();

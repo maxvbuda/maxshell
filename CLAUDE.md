@@ -45,6 +45,12 @@ at the terminal in its own process group and reports stop/exit through a
 status file; the interpreter stays synchronous and polls it. `Ctrl-C`/`Ctrl-Z`
 set `shell.interrupted`, which abandons the rest of the command line.
 
+**Setup** — `install.sh` and `src/setup.js`: `--make-default` writes a sh
+login wrapper (`~/.maxshell/bin/maxshell`, absolute Node path, falls back to
+zsh), adds it to /etc/shells, runs chsh, and saves PATH to
+`~/.maxshell_profile` (loaded by login shells, detected via -l or a `login`
+parent). The REPL offers this once on first run (`~/.maxshell_state`).
+
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion
 menu, did-you-mean fix), `highlight.js`, `complete.js` (context-aware
@@ -90,6 +96,9 @@ GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
   flags get the real `ls`. Colour is off for `-c` and scripts.
 - **Env overrides keep tests off real files:** `MAXSHELL_TRASH`,
   `MAXSHELL_SNIPPETS_FILE`, `MAXSHELL_MARKS_FILE`, `MAXSHELL_CACHE`,
+  `MAXSHELL_STATE_FILE`, `MAXSHELL_WRAPPER`, and **`MAXSHELL_SETUP=0` in every
+  pty run** (else the one-time "make maxshell your default shell?" offer
+  appears and is marked as answered on the user's machine),
   `MAXSHELL_HISTORY_FILE`, `MAXSHELL_DIRS_FILE`, `MAXSHELL_THEME_FILE`,
   `MAXSHELL_THEME`, `MAXSHELL_BANNER=0`, `MAXSHELL_ICONS=0`,
   `MAXSHELL_FILES_VIEW=columns`.
@@ -102,7 +111,7 @@ real program through a pty and check the result:
 
 ```sh
 ( sleep 2.5; printf 'ls\r'; sleep 1; printf '\x12'; sleep .5 ) \
-  | MAXSHELL_BANNER=0 TERM=xterm-256color perl -e 'alarm 30; exec @ARGV' \
+  | MAXSHELL_SETUP=0 MAXSHELL_BANNER=0 TERM=xterm-256color perl -e 'alarm 30; exec @ARGV' \
     script -q /dev/null node bin/maxshell.js > log 2>&1
 ```
 

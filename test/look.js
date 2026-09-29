@@ -15,13 +15,19 @@ const { textWidth, bar } = require('../src/tui');
 const { Shell } = require('../src/interpreter');
 
 let failures = 0;
+// Async tests are awaited, in order, before the summary.
+const pending = [];
 function test(name, fn) {
+  const fail = (e) => { failures++; console.error(`not ok - ${name}\n  ${e.message}`); };
   try {
-    fn();
+    const r = fn();
+    if (r && typeof r.then === 'function') {
+      pending.push(r.then(() => console.log(`ok - ${name}`), fail));
+      return;
+    }
     console.log(`ok - ${name}`);
   } catch (e) {
-    failures++;
-    console.error(`not ok - ${name}\n  ${e.message}`);
+    fail(e);
   }
   theme.setTheme(theme.DEFAULT);
 }
@@ -179,6 +185,69 @@ test('theme colour names work in a custom prompt', () => {
   assert.strictEqual(expandPrompt('%F{accent}', shell()), ansi.fg(theme.current().ui.accent));
 });
 
+// --- becoming the default shell ---------------------------------------------------
+
+test('the login wrapper runs a known Node, and falls back to zsh', () => {
+  const { wrapperScript } = require('../src/setup');
+  const w = wrapperScript('/opt/homebrew/bin/node', "/Users/o'hara/maxshell/bin/maxshell.js");
+  assert.match(w, /^#!\/bin\/sh/);
+  assert.match(w, /NODE='\/opt\/homebrew\/bin\/node'/);
+  assert.match(w, /MAXSHELL='\/Users\/o'\\''hara\/maxshell\/bin\/maxshell\.js'/);
+  assert.match(w, /exec \/bin\/zsh "\$@"/);
+});
+
+test('the wrapper actually starts maxshell, passing arguments through', () => {
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxwrap-'));
+  const env = { ...process.env, MAXSHELL_WRAPPER: path.join(dir, 'maxshell'), HOME: dir };
+  const setup = spawnSync(process.execPath, ['-e', "require('./src/setup').writeWrapper()"], { cwd: path.resolve(__dirname, '..'), env });
+  assert.strictEqual(setup.status, 0);
+  const r = spawnSync(path.join(dir, 'maxshell'), ['-l', '-c', 'echo "hi $1"', 'x', 'there'], { encoding: 'utf8', env });
+  assert.strictEqual(r.stdout, 'hi there\n');
+});
+
+test('login flags: -l, -i, -lc and friends', () => {
+  const { spawnSync } = require('child_process');
+  const bin = path.resolve(__dirname, '..', 'bin', 'maxshell.js');
+  const run = (...args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', input: '' }).stdout;
+  assert.strictEqual(run('-lc', 'echo a'), 'a\n');
+  assert.strictEqual(run('-l', '-i', '-c', 'echo b'), 'b\n');
+  assert.strictEqual(run('--login', '-c', 'echo c'), 'c\n');
+});
+
+test('the saved PATH is kept in ~/.maxshell_profile, replaced on refresh', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxprof-'));
+  const saved = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    const { writeProfile, profileFile } = require('../src/setup');
+    fs.writeFileSync(path.join(dir, '.maxshell_profile'), 'alias k=kubectl\n');
+    writeProfile('/a/bin:/b');
+    writeProfile("/c/it's");
+    const body = fs.readFileSync(profileFile(), 'utf8');
+    assert.strictEqual((body.match(/export PATH=/g) || []).length, 1);
+    assert.match(body, /export PATH='\/c\/it'\\''s'/);
+    assert.match(body, /alias k=kubectl/);
+  } finally { process.env.HOME = saved; }
+});
+
+test('the offer to become the default shell is made once, and "no" changes nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxstate-'));
+  process.env.MAXSHELL_STATE_FILE = path.join(dir, 'state');
+  const setup = require('../src/setup');
+  let said = '';
+  let asked = 0;
+  await setup.offerDefault(async () => { asked++; return 'n'; }, (t) => { said += t; });
+  if (!setup.isDefault()) {
+    assert.strictEqual(asked, 1);
+    assert.match(said, /default shell/);
+  }
+  await setup.offerDefault(async () => { asked++; return 'y'; }, () => {});
+  assert.ok(asked <= 1, 'never asks twice');
+  assert.strictEqual(setup.readState().askedDefault, true);
+  delete process.env.MAXSHELL_STATE_FILE;
+});
+
 // --- the theme command ----------------------------------------------------------
 
 test('theme lists every theme, marking the current one', () => {
@@ -201,8 +270,10 @@ test('theme <name> switches, saves, and catches typos', () => {
   assert.ok(lines.some((l) => /✓ theme tokyo-night/.test(l)));
 });
 
-if (failures) {
-  console.error(`\n${failures} look test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall look tests passed');
+Promise.all(pending).then(() => {
+  if (failures) {
+    console.error(`\n${failures} look test(s) failed`);
+    process.exit(1);
+  }
+  console.log('\nall look tests passed');
+});
