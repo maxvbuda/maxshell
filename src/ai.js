@@ -1,0 +1,430 @@
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// `ai`: mx, maxshell's on-device language model — a small GPT trained on
+// this Mac by ai/train.py. This file runs it with no dependencies: it reads
+// the int8 weights in models/mx.bin, tokenizes with the byte-level BPE in
+// models/mx-tokenizer.json, and runs the transformer forward pass in plain
+// JavaScript with a key/value cache, streaming the reply as it's sampled.
+
+const MODELS = process.env.MAXSHELL_AI_MODEL_DIR || path.join(__dirname, '..', 'models');
+
+// --- tokenizer --------------------------------------------------------------------
+
+class Tokenizer {
+  constructor(spec) {
+    this.merges = spec.merges;
+    this.ranks = new Map(spec.merges.map(([a, b], i) => [`${a},${b}`, i]));
+    this.special = spec.specials;
+    this.split = new RegExp(spec.split, 'gu');
+    this.bytes = [];
+    for (let i = 0; i < 256; i++) this.bytes[i] = [i];
+    spec.merges.forEach(([a, b], i) => { this.bytes[256 + i] = this.bytes[a].concat(this.bytes[b]); });
+    this.cache = new Map();
+  }
+
+  encodeChunk(chunk) {
+    const hit = this.cache.get(chunk);
+    if (hit) return hit;
+    let ids = [...Buffer.from(chunk, 'utf8')];
+    while (ids.length > 1) {
+      let best = -1;
+      let at = -1;
+      for (let i = 0; i < ids.length - 1; i++) {
+        const r = this.ranks.get(`${ids[i]},${ids[i + 1]}`);
+        if (r !== undefined && (best === -1 || r < best)) { best = r; at = i; }
+      }
+      if (best === -1) break;
+      ids = [...ids.slice(0, at), 256 + best, ...ids.slice(at + 2)];
+    }
+    if (this.cache.size < 50000) this.cache.set(chunk, ids);
+    return ids;
+  }
+
+  encode(text) {
+    const out = [];
+    for (const m of text.matchAll(this.split)) out.push(...this.encodeChunk(m[0]));
+    return out;
+  }
+
+  // Bytes for a token (specials have none).
+  tokenBytes(id) { return this.bytes[id] || []; }
+
+  decode(ids) {
+    return Buffer.from(ids.flatMap((i) => this.tokenBytes(i))).toString('utf8');
+  }
+}
+
+// --- the model -----------------------------------------------------------------------
+
+function loadWeights(file) {
+  const buf = fs.readFileSync(file);
+  if (buf.toString('latin1', 0, 4) !== 'MXAI') throw new Error('not an mx model');
+  const headerLen = buf.readUInt32LE(4);
+  const header = JSON.parse(buf.toString('utf8', 8, 8 + headerLen));
+  const base = 8 + headerLen + ((4 - ((8 + headerLen) % 4)) % 4);
+  const raw = {};
+  for (const t of header.tensors) {
+    const n = t.shape.reduce((a, b) => a * b, 1);
+    const start = buf.byteOffset + base + t.offset;
+    if (t.dtype === 'i8') raw[t.name] = { q: new Int8Array(buf.buffer, start, n), shape: t.shape };
+    else raw[t.name] = { f: new Float32Array(buf.buffer.slice(start, start + n * 4)), shape: t.shape };
+  }
+  // Matrices are dequantized once (int8 × per-row scale) into Float32Arrays.
+  const w = {};
+  for (const [name, t] of Object.entries(raw)) {
+    if (name.endsWith('.scale')) continue;
+    if (t.q) {
+      const scale = raw[`${name}.scale`].f;
+      const [rows, cols] = t.shape;
+      const f = new Float32Array(rows * cols);
+      for (let r = 0; r < rows; r++) {
+        const s = scale[r];
+        for (let c = 0; c < cols; c++) f[r * cols + c] = t.q[r * cols + c] * s;
+      }
+      w[name] = { data: f, shape: t.shape };
+    } else w[name] = { data: t.f, shape: t.shape };
+  }
+  return { config: header.config, meta: header.meta || {}, w };
+}
+
+// out = W·x + b, with W stored [rows][cols].
+function matvec(out, W, x, b, rows, cols) {
+  for (let r = 0; r < rows; r++) {
+    let s = b ? b[r] : 0;
+    const o = r * cols;
+    for (let c = 0; c < cols; c++) s += W[o + c] * x[c];
+    out[r] = s;
+  }
+}
+
+function layerNorm(out, x, g, b, n) {
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += x[i];
+  mean /= n;
+  let v = 0;
+  for (let i = 0; i < n; i++) { const d = x[i] - mean; v += d * d; }
+  const inv = 1 / Math.sqrt(v / n + 1e-5);
+  for (let i = 0; i < n; i++) out[i] = (x[i] - mean) * inv * g[i] + b[i];
+}
+
+const GELU_C = Math.sqrt(2 / Math.PI);
+const gelu = (x) => 0.5 * x * (1 + Math.tanh(GELU_C * (x + 0.044715 * x * x * x)));
+
+class Model {
+  constructor({ config, meta, w }) {
+    this.config = config;
+    this.meta = meta;
+    this.w = w;
+    const { d, vocab } = config;
+    this.x = new Float32Array(d);
+    this.h = new Float32Array(d);
+    this.qkv = new Float32Array(3 * d);
+    this.att = new Float32Array(d);
+    this.tmp = new Float32Array(d);
+    this.ff = new Float32Array(4 * d);
+    this.logits = new Float32Array(vocab);
+    this.reset();
+  }
+
+  reset() {
+    const { layers, ctx, d } = this.config;
+    this.pos = 0;
+    this.k = Array.from({ length: layers }, () => new Float32Array(ctx * d));
+    this.v = Array.from({ length: layers }, () => new Float32Array(ctx * d));
+  }
+
+  // Feeds one token at the next position; returns the logits for what comes next.
+  step(token) {
+    const { d, heads, layers, vocab, ctx } = this.config;
+    if (this.pos >= ctx) throw new Error('context full');
+    const W = (n) => this.w[n].data;
+    const x = this.x;
+    const wte = W('wte.weight');
+    const wpe = W('wpe.weight');
+    for (let i = 0; i < d; i++) x[i] = wte[token * d + i] + wpe[this.pos * d + i];
+    const hd = d / heads;
+    const scale = 1 / Math.sqrt(hd);
+    const T = this.pos + 1;
+    const scores = new Float32Array(T);
+
+    for (let l = 0; l < layers; l++) {
+      const p = `blocks.${l}.`;
+      layerNorm(this.h, x, W(`${p}ln1.weight`), W(`${p}ln1.bias`), d);
+      matvec(this.qkv, W(`${p}qkv.weight`), this.h, W(`${p}qkv.bias`), 3 * d, d);
+      const K = this.k[l];
+      const V = this.v[l];
+      K.set(this.qkv.subarray(d, 2 * d), this.pos * d);
+      V.set(this.qkv.subarray(2 * d, 3 * d), this.pos * d);
+      for (let hh = 0; hh < heads; hh++) {
+        const qo = hh * hd;
+        let max = -Infinity;
+        for (let t = 0; t < T; t++) {
+          let s = 0;
+          const ko = t * d + qo;
+          for (let i = 0; i < hd; i++) s += this.qkv[qo + i] * K[ko + i];
+          s *= scale;
+          scores[t] = s;
+          if (s > max) max = s;
+        }
+        let sum = 0;
+        for (let t = 0; t < T; t++) { scores[t] = Math.exp(scores[t] - max); sum += scores[t]; }
+        for (let i = 0; i < hd; i++) this.att[qo + i] = 0;
+        for (let t = 0; t < T; t++) {
+          const a = scores[t] / sum;
+          const vo = t * d + qo;
+          for (let i = 0; i < hd; i++) this.att[qo + i] += a * V[vo + i];
+        }
+      }
+      matvec(this.tmp, W(`${p}proj.weight`), this.att, W(`${p}proj.bias`), d, d);
+      for (let i = 0; i < d; i++) x[i] += this.tmp[i];
+      layerNorm(this.h, x, W(`${p}ln2.weight`), W(`${p}ln2.bias`), d);
+      matvec(this.ff, W(`${p}fc.weight`), this.h, W(`${p}fc.bias`), 4 * d, d);
+      for (let i = 0; i < 4 * d; i++) this.ff[i] = gelu(this.ff[i]);
+      matvec(this.tmp, W(`${p}out.weight`), this.ff, W(`${p}out.bias`), d, 4 * d);
+      for (let i = 0; i < d; i++) x[i] += this.tmp[i];
+    }
+    layerNorm(this.h, x, W('ln_f.weight'), W('ln_f.bias'), d);
+    matvec(this.logits, wte, this.h, null, vocab, d);
+    this.pos++;
+    return this.logits;
+  }
+}
+
+// --- sampling ------------------------------------------------------------------------
+
+function sampleToken(logits, { temperature = 0.7, topK = 40, rand = Math.random, banned = null } = {}) {
+  const n = logits.length;
+  const idx = [];
+  for (let i = 0; i < n; i++) if (!banned || !banned.has(i)) idx.push(i);
+  idx.sort((a, b) => logits[b] - logits[a]);
+  const top = idx.slice(0, Math.max(1, topK));
+  if (temperature <= 0) return top[0];
+  const max = logits[top[0]];
+  const ps = top.map((i) => Math.exp((logits[i] - max) / temperature));
+  const sum = ps.reduce((a, b) => a + b, 0);
+  let r = rand() * sum;
+  for (let k = 0; k < top.length; k++) { r -= ps[k]; if (r <= 0) return top[k]; }
+  return top[top.length - 1];
+}
+
+// --- chat ------------------------------------------------------------------------------
+
+let loaded = null;
+
+function available() {
+  return fs.existsSync(path.join(MODELS, 'mx.bin')) && fs.existsSync(path.join(MODELS, 'mx-tokenizer.json'));
+}
+
+function load() {
+  if (loaded) return loaded;
+  const tok = new Tokenizer(JSON.parse(fs.readFileSync(path.join(MODELS, 'mx-tokenizer.json'), 'utf8')));
+  const model = new Model(loadWeights(path.join(MODELS, 'mx.bin')));
+  loaded = { tok, model };
+  return loaded;
+}
+
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// The context line the model was trained to read: date, time, your name,
+// and the calculator's answer when the message is a sum.
+function contextLine(now = new Date(), name = null, calc = null) {
+  const time = `${((now.getHours() + 11) % 12) + 1}:${String(now.getMinutes()).padStart(2, '0')} ${now.getHours() < 12 ? 'AM' : 'PM'}`;
+  const date = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
+  return `date: ${date} · time: ${time}${name ? ` · user: ${name}` : ''}${calc ? ` · calc: ${calc}` : ''}`;
+}
+
+// The calculator tool: "what's 7 plus 5" → "7 + 5 = 12". Small models are
+// bad at arithmetic, so the runtime does the sum and the model reads it.
+function calculate(message) {
+  const m = /(-?\d+(?:\.\d+)?)\s*(\+|-|\*|x|×|\/|÷|plus|minus|times|divided by|multiplied by)\s*(-?\d+(?:\.\d+)?)/i.exec(message);
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[3]);
+  const op = { '+': '+', plus: '+', '-': '-', minus: '-', '*': '×', x: '×', '×': '×', times: '×', 'multiplied by': '×', '/': '÷', '÷': '÷', 'divided by': '÷' }[m[2].toLowerCase()];
+  let v;
+  if (op === '+') v = a + b;
+  else if (op === '-') v = a - b;
+  else if (op === '×') v = a * b;
+  else { if (b === 0) return null; v = Math.round((a / b) * 1e6) / 1e6; }
+  return `${a} ${op} ${b} = ${v}`;
+}
+
+// Tokens for a conversation so far, ending with the AI's turn marker. Old
+// turns are dropped when the whole thing wouldn't fit the context.
+function promptTokens(tok, sys, turns, room) {
+  const S = tok.special;
+  const head = [S['<|doc|>'], S['<|sys|>'], ...tok.encode(sys), S['<|end|>']];
+  const encTurn = ([who, text]) => [who === 'user' ? S['<|user|>'] : S['<|ai|>'], ...tok.encode(text), S['<|end|>']];
+  let body = [];
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = encTurn(turns[i]);
+    if (head.length + t.length + body.length + 1 > room) break;
+    body = t.concat(body);
+  }
+  return [...head, ...body, S['<|ai|>']];
+}
+
+// Generates the reply to a conversation. `onText` receives text as it's
+// produced (whole UTF-8 characters only).
+function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = 120, rand = Math.random, onText = null } = {}) {
+  const { tok, model } = load();
+  const S = tok.special;
+  const ctx = model.config.ctx;
+  const last = turns.length ? turns[turns.length - 1][1] : '';
+  const prompt = promptTokens(tok, contextLine(now, name, calculate(last)), turns, ctx - Math.min(maxTokens, 96));
+  model.reset();
+  let logits;
+  for (const t of prompt) logits = model.step(t);
+  // Special tokens other than <|end|> never belong in a reply.
+  const banned = new Set(Object.entries(S).filter(([k]) => k !== '<|end|>').map(([, v]) => v));
+  const out = [];
+  let pending = [];
+  let text = '';
+  const flush = (final) => {
+    const bytes = Buffer.from(pending);
+    // Hold back an incomplete UTF-8 sequence at the end.
+    let cut = bytes.length;
+    if (!final) {
+      for (let back = 1; back <= Math.min(3, bytes.length); back++) {
+        const b = bytes[bytes.length - back];
+        if ((b & 0xc0) === 0xc0) { const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2; if (back < need) cut = bytes.length - back; break; }
+        if ((b & 0x80) === 0) break;
+      }
+    }
+    const piece = bytes.subarray(0, cut).toString('utf8');
+    pending = [...bytes.subarray(cut)];
+    if (piece) { text += piece; if (onText) onText(piece); }
+  };
+  for (let i = 0; i < maxTokens && model.pos < ctx; i++) {
+    const next = sampleToken(logits, { temperature, topK, rand, banned });
+    if (next === S['<|end|>']) break;
+    out.push(next);
+    pending.push(...tok.tokenBytes(next));
+    flush(false);
+    if (model.pos >= ctx) break;
+    logits = model.step(next);
+  }
+  flush(true);
+  return text.trim();
+}
+
+// --- training progress -------------------------------------------------------------------
+
+// Reads ai/data/train.log: steps, losses, validation checks, samples.
+function trainingStatus(logFile = path.join(__dirname, '..', 'ai', 'data', 'train.log')) {
+  let text;
+  try { text = fs.readFileSync(logFile, 'utf8'); } catch { return null; }
+  const steps = [...text.matchAll(/^step\s+(\d+)\s+loss ([\d.]+)\s+lr ([\d.e+-]+)\s+([\d.]+) min/gm)]
+    .map((m) => ({ step: +m[1], loss: +m[2], lr: +m[3], min: +m[4] }));
+  const vals = [...text.matchAll(/validation loss ([\d.]+)/g)].map((m) => +m[1]);
+  const total = Number((/--steps (\d+)/.exec(text) || [])[1]) || 5000;
+  const params = (/model: ([\d.]+)M parameters/.exec(text) || [])[1];
+  const tokens = (/([\d.]+)M training tokens/.exec(text) || [])[1];
+  const samples = [];
+  const lastBlock = text.lastIndexOf('validation loss');
+  if (lastBlock >= 0) {
+    for (const m of text.slice(lastBlock).matchAll(/^\s+'(.*?)'\s+→ '(.*)'$/gm)) samples.push([m[1], m[2]]);
+  }
+  const done = /exported [\d.]+ MB/.test(text);
+  return { steps, vals, total, params, tokens, samples, done, mtime: fs.statSync(logFile).mtimeMs };
+}
+
+function showStatus(write, t, ansi) {
+  const st = trainingStatus();
+  if (!st || !st.steps.length) { write('No training run found (ai/data/train.log). Start one with: python3 ai/train.py\n'); return 1; }
+  const R = ansi.reset();
+  const mu = (s) => `${ansi.fg(t.ui.muted)}${s}${R}`;
+  const last = st.steps[st.steps.length - 1];
+  const pct = Math.min(1, (last.step + 1) / st.total);
+  const { meter } = require('./tui');
+  // Pace from the last few reports, so time the Mac spent asleep doesn't count.
+  // The median minutes-per-step of the last reports: sleep and evaluation
+  // pauses are outliers and don't count.
+  const recent = st.steps.slice(-10);
+  const rates = [];
+  for (let i = 1; i < recent.length; i++) {
+    const ds = recent[i].step - recent[i - 1].step;
+    if (ds > 0) rates.push((recent[i].min - recent[i - 1].min) / ds);
+  }
+  rates.sort((a, b) => a - b);
+  const rate = rates.length ? rates[Math.floor(rates.length / 2)] : null;
+  const left = rate ? Math.round((st.total - last.step) * rate) : null;
+  const stale = Date.now() - st.mtime > 5 * 60 * 1000;
+  write(`${ansi.bold()}mx training${R}  ${st.done ? `${ansi.fg(t.ui.ok)}finished${R}` : stale ? `${ansi.fg(t.ui.warn)}paused or stopped (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}` : `${ansi.fg(t.ui.ok)}running${R}`}\n`);
+  write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  ~${left} min to go`) : ''}\n`);
+  if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
+  const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
+  const bars = '▁▂▃▄▅▆▇█';
+  const hi = Math.max(...trend);
+  const lo = Math.min(...trend);
+  write(`  loss      ${last.loss.toFixed(3)} now  ${mu(trend.map((v) => bars[Math.round(((v - lo) / (hi - lo || 1)) * 7)]).join(''))}  ${mu(`started at ${st.steps[0].loss.toFixed(2)}`)}\n`);
+  if (st.vals.length) write(`  held out  ${st.vals[st.vals.length - 1].toFixed(3)} validation loss ${mu(`(${st.vals.map((v) => v.toFixed(2)).join(' → ')})`)}\n`);
+  write(`  lr        ${last.lr.toExponential(2)}\n`);
+  if (st.samples.length) {
+    write(`  ${mu('latest samples:')}\n`);
+    for (const [q, a] of st.samples) write(`    ${q.padEnd(30)} ${mu('→')} ${a}\n`);
+  }
+  return 0;
+}
+
+// --- the `ai` command ---------------------------------------------------------------------
+
+function runAi(args, io, shell) {
+  const ansi = require('./ansi');
+  const theme = require('./theme');
+  const t = theme.current();
+  const R = ansi.reset();
+  const write = (s) => shell.writeTo(io.stdout, s);
+  const err = (s) => shell.writeTo(io.stderr, s);
+  if (args[0] === '--status' || args[0] === '--training') return showStatus(write, t, ansi);
+  if (args[0] === '--info') {
+    if (!available()) { err('ai: no model yet — train one with: python3 ai/train.py\n'); return 1; }
+    const { model } = load();
+    const m = model.meta;
+    write(`mx — ${((m.params || 0) / 1e6).toFixed(1)}M parameters, ${model.config.layers} layers × ${model.config.d} wide, `
+      + `${model.config.ctx}-token context, trained ${m.trained || '?'} on ${m.device || '?'} (${m.steps || '?'} steps, validation loss ${m.val_loss ?? '?'})\n`);
+    return 0;
+  }
+  if (!available()) {
+    err('ai: the model isn’t trained yet. Run:  node ai/make-dataset.js && python3 ai/train.py\n');
+    return 1;
+  }
+  let name = null;
+  try {
+    const saved = JSON.parse(fs.readFileSync(process.env.MAXSHELL_BOT_FILE || path.join(os.homedir(), '.maxshell_bot'), 'utf8'));
+    name = saved.name || null;
+  } catch { /* nobody introduced yet */ }
+  const tag = `${ansi.fg(t.ui.accent)}${ansi.bold()}✨ ai ❯${R} `;
+  const youTag = `${ansi.fg(t.ui.accent2)}${ansi.bold()}you ❯${R} `;
+  const answer = (turns) => {
+    write(tag);
+    const text = reply(turns, { name, onText: (piece) => write(piece) });
+    write('\n');
+    return text;
+  };
+
+  if (args.length) {
+    answer([['user', args.join(' ')]]);
+    return 0;
+  }
+  write(`${ansi.fg(t.ui.muted)}mx, a small AI running on this Mac. It can be wrong — double-check anything important. bye to leave.${R}\n`);
+  const turns = [];
+  for (;;) {
+    write(youTag);
+    const line = shell.readLine(io.stdin);
+    if (line === null) { write('\n'); return 0; }
+    if (/^\s*(bye|exit|quit|goodbye)\s*[.!]*$/i.test(line)) { write(`${tag}Bye! 👋\n`); return 0; }
+    if (!line.trim()) continue;
+    turns.push(['user', line.trim()]);
+    turns.push(['ai', answer(turns)]);
+  }
+}
+
+module.exports = {
+  Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, reply, runAi, available, load, trainingStatus,
+};

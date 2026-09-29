@@ -57,7 +57,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.27.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.28.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -67,7 +67,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.27.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.28.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -909,6 +909,28 @@ while you type at `you ❯`.
 `bye`, `exit`, `quit` or Ctrl-D leave; `bot what time is it` answers one
 question and returns.
 
+### ai — a small AI that runs on your Mac
+
+`ai` chats with **mx**, a 15-million-parameter GPT-style language model made
+for maxshell and trained on a Mac — its dataset, tokenizer and architecture
+included (see `ai/README.md`). It runs entirely on your computer, in plain
+JavaScript: no internet, no API, nothing you type leaves the machine.
+
+```
+~ ❯ ai what does grep do
+✨ ai ❯ `grep` — file pattern searcher.
+~ ❯ ai
+you ❯ hi! what time is it?
+✨ ai ❯ It’s 10:15 AM. ⏰
+```
+
+Replies stream in as they're written. It knows maxshell, your Mac's commands,
+small talk, simple facts and sums, and the date and time (and your name, if
+you told `bot`), and keeps track of the conversation. It's small — about an
+eighth the size of GPT-2 small — so it can be confidently wrong about things
+outside that; it'll tell you so if you ask. `ai --info` describes the model.
+`bot` is the rule-based chat; `ai` is the trained one.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
@@ -1004,6 +1026,7 @@ real path still works (`j ../other` acts like `cd`).
 | `cleanup` | quit what isn't needed; `-r` / `-c` then free memory / CPU (see above) |
 | `6-7` | brainrot mode (see above) |
 | `bot` | chat with a rules-only "AI" bot (see above) |
+| `ai` | chat with mx, a small AI model running on this Mac (see above) |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
@@ -1057,6 +1080,9 @@ src/bot.js          bot: a chat made of if/else rules, with conversation state
 src/botdata.js      bot's jokes, facts, riddles, trivia and quotes
 src/botmodel.js     bot's word-trigram Markov chain and README retrieval
 src/botcorpus.txt   the text the Markov chain learns from
+src/ai.js           ai: runs mx (tokenizer, transformer, sampling) in plain JavaScript
+models/             mx's weights (int8) and tokenizer
+ai/                 how mx is made: dataset generator, training script (PyTorch)
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks
@@ -1073,6 +1099,7 @@ test/modern.js      Completion menu, context-aware prompt, ls
 test/github.js      gitui's GitHub support, against a fake gh
 test/jobs.js        Job control and streaming pipelines
 test/palette.js     Palette, picker, explain, dash, snippets and bookmarks
+test/ai.js          mx: tokenizer, prompts, sampling and the model
 ```
 
 ## Differences from zsh

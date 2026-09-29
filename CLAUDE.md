@@ -14,7 +14,7 @@ changing behaviour, and keep it updated with each feature.
 
 ```sh
 node bin/maxshell.js            # REPL   (maxshell -c 'cmd', or a script path)
-npm test                        # 11 suites, ~15 seconds; all must pass
+npm test                        # 12 suites, ~20 seconds; all must pass
 ```
 
 Suites: `test/run.js` (language), `interactive.js` (line editor, highlight,
@@ -24,7 +24,7 @@ search, did-you-mean, j/back/forward, alerts), `look.js` (themes, logo,
 prompt), `modern.js` (completion menu, context prompt, ls), `github.js`
 (gitui's GitHub support against a fake `gh`), `jobs.js` (job control,
 streaming pipelines), `palette.js` (palette, picker, explain, dash,
-snippets/bookmarks). New features get tests in a
+snippets/bookmarks), `ai.js` (the on-device model). New features get tests in a
 suite; new suites get appended to the `test` script in package.json.
 
 ## Architecture
@@ -50,6 +50,14 @@ login wrapper (`~/.maxshell/bin/maxshell`, absolute Node path, falls back to
 zsh), adds it to /etc/shells, runs chsh, and saves PATH to
 `~/.maxshell_profile` (loaded by login shells, detected via -l or a `login`
 parent). The REPL offers this once on first run (`~/.maxshell_state`).
+
+**AI** — `ai` runs mx, a 15M-parameter GPT trained for maxshell: `ai/`
+holds how it's made (`make-dataset.js` → `ai/data/dataset.jsonl`,
+`train.py` with PyTorch/MPS → `models/mx.bin` int8 + `mx-tokenizer.json`);
+`src/ai.js` is the dependency-free JS runtime (BPE, forward pass with KV
+cache, sampling). After changing the architecture or export format, check
+`python3 ai/train.py --parity` against the JS logits. Python/PyTorch are
+training-time only; `ai/data/` is gitignored, `models/` is committed.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

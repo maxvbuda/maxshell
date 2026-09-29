@@ -333,6 +333,7 @@ Getting around
   cleanup [-r|-c]           quit what isn't needed; then free memory / CPU
   6-7                       brainrot mode (6-7 again to stop)
   bot [question]            chat with a (fake, rules-only) bot
+  ai [question]             chat with mx, a small AI model running on this Mac
   j words…                  jump to your most-used folder matching the words
   back / forward            walk your folder history, like a browser
   Ctrl-R                    fuzzy-search every command you've run
@@ -868,6 +869,10 @@ BUILTINS.abbr = (args, io, shell) => {
 };
 
 // --- the palette, explain, dash, snippets and bookmarks -----------------------
+
+// ai: mx, the small language model trained for maxshell (models/mx.bin),
+// run on this Mac with no dependencies.
+BUILTINS.ai = (args, io, shell) => require('./ai').runAi(args, io, shell);
 
 // bot: a chat "AI" that is really a list of if/else rules (no AI, no network).
 BUILTINS.bot = (args, io, shell) => require('./bot').runBot(args, io, shell);
