@@ -269,6 +269,37 @@ function promptTokens(tok, sys, turns, room) {
   return [...head, ...body, S['<|ai|>']];
 }
 
+// --- your name ------------------------------------------------------------------------
+// A model this small is bad at copying a name it has seen once in the chat,
+// but good at reading one from its context line. So the runtime spots the
+// name ("my name is Max", "call me Max", or "Max" right after being asked)
+// and puts it there — and a guard fixes a reply that still gets it wrong.
+
+const NOT_NAMES = new Set(('yes no nope nah ok okay sure hi hey hello thanks fine good great bad tired sad happy '
+  + 'bored here back sorry what why how who nothing none busy lol haha cool nice well').split(' '));
+
+function nameFrom(turns) {
+  let found = null;
+  for (let i = 0; i < turns.length; i++) {
+    const [who, text] = turns[i];
+    if (who !== 'user') continue;
+    let m = /\b(?:my name is|my name's|call me|you can call me|i am called|name's)\s+([A-Za-z][A-Za-z'-]{1,20})\b/i.exec(text);
+    const asked = i > 0 && turns[i - 1][0] === 'ai' && /what('s| is) your name|what should i call you|your name\?/i.test(turns[i - 1][1]);
+    if (!m && asked) m = /^\s*(?:(?:i am|i'm|im|it's|its|it is|this is)\s+)?([A-Za-z][A-Za-z'-]{1,20})[\s.!]*$/i.exec(text);
+    if (m && !NOT_NAMES.has(m[1].toLowerCase())) found = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+  }
+  return found;
+}
+
+// "Nice to meet you, Nora!" when you're Max → "Nice to meet you, Max!"
+function guardName(text, name) {
+  if (!name) return text;
+  const other = `(?!${name}\\b)([A-Z][a-z]{1,15})`;
+  return text
+    .replace(new RegExp(`\\b(Nice to meet you,|Hi|Hey|Hello|Welcome back,|Good (?:morning|afternoon|evening),|You’re|You're|Your name is|Bye,?|Thanks,) ${other}\\b`, 'g'), (m, lead, n) => (NOT_NAMES.has(n.toLowerCase()) ? m : `${lead} ${name}`))
+    .replace(new RegExp(`^${other}(,| —)`), (m, n, sep) => (/^(Sure|Here|Good|Easy|Yes|No|Okay|Great|Nice|Press|Run|Open|Type|Hmm|Well|Oh|Ah)$/.test(n) ? m : `${name}${sep}`));
+}
+
 // Generates the reply to a conversation. `onText` receives text as it's
 // produced (whole UTF-8 characters only).
 function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = 120, rand = Math.random, onText = null } = {}) {
@@ -276,6 +307,7 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
   const S = tok.special;
   const ctx = model.config.ctx;
   const last = turns.length ? turns[turns.length - 1][1] : '';
+  name = nameFrom(turns) || name;
   const prompt = promptTokens(tok, contextLine(now, name, calculate(last)), turns, ctx - Math.min(maxTokens, 96));
   model.reset();
   let logits;
@@ -310,7 +342,7 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
     logits = model.step(next);
   }
   flush(true);
-  return text.trim();
+  return guardName(text.trim(), name);
 }
 
 // --- training progress -------------------------------------------------------------------
@@ -401,10 +433,22 @@ function runAi(args, io, shell) {
   } catch { /* nobody introduced yet */ }
   const tag = `${ansi.fg(t.ui.accent)}${ansi.bold()}✨ ai ❯${R} `;
   const youTag = `${ansi.fg(t.ui.accent2)}${ansi.bold()}you ❯${R} `;
+  const memoryFile = process.env.MAXSHELL_BOT_FILE || path.join(os.homedir(), '.maxshell_bot');
+  // The whole reply is checked (the name guard) before it's shown.
   const answer = (turns) => {
-    write(tag);
-    const text = reply(turns, { name, onText: (piece) => write(piece) });
-    write('\n');
+    const told = nameFrom(turns);
+    if (told && told !== name) {
+      name = told;
+      // Shared with `bot`, so both remember you.
+      try {
+        let saved = {};
+        try { saved = JSON.parse(fs.readFileSync(memoryFile, 'utf8')); } catch { /* new */ }
+        fs.writeFileSync(memoryFile, `${JSON.stringify({ ...saved, name }, null, 2)}\n`);
+      } catch { /* can't save; still used for this chat */ }
+    }
+    write(`${tag}${ansi.fg(t.ui.muted)}…${R}`);
+    const text = reply(turns, { name });
+    write(`\r\x1b[K${tag}${text}\n`);
     return text;
   };
 
@@ -426,5 +470,6 @@ function runAi(args, io, shell) {
 }
 
 module.exports = {
-  Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, reply, runAi, available, load, trainingStatus,
+  Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, nameFrom, guardName, reply, runAi, available,
+  load, trainingStatus,
 };

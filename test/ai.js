@@ -38,6 +38,27 @@ test('sampling: temperature 0 takes the best, banned tokens never come out', () 
   for (let i = 0; i < 50; i++) assert.ok([3, 1].includes(ai.sampleToken(logits, { topK: 2, rand: seeded(i) })));
 });
 
+test('your name is picked up from the chat, but not from “I am tired”', () => {
+  const asked = ['ai', 'Hi! 👋 I’m mx. What’s your name?'];
+  assert.strictEqual(ai.nameFrom([['user', 'hi'], asked, ['user', 'max']]), 'Max');
+  assert.strictEqual(ai.nameFrom([['user', 'hi'], asked, ['user', "i'm Priya"]]), 'Priya');
+  assert.strictEqual(ai.nameFrom([['user', 'my name is Ada and I like cats']]), 'Ada');
+  assert.strictEqual(ai.nameFrom([['user', 'call me Zed']]), 'Zed');
+  assert.strictEqual(ai.nameFrom([['user', 'i am tired']]), null);
+  assert.strictEqual(ai.nameFrom([['user', 'hi'], asked, ['user', 'no']]), null);
+  assert.strictEqual(ai.nameFrom([['user', 'how do i make a tab']]), null);
+});
+
+test('the name guard fixes the wrong name and leaves the rest alone', () => {
+  assert.strictEqual(ai.guardName('Nice to meet you, Nora! 😊', 'Max'), 'Nice to meet you, Max! 😊');
+  assert.strictEqual(ai.guardName('You’re Alex! 😊', 'Max'), 'You’re Max! 😊');
+  assert.strictEqual(ai.guardName('Nora, press ⌘T.', 'Max'), 'Max, press ⌘T.');
+  assert.strictEqual(ai.guardName('Press ⌘T to open a tab.', 'Max'), 'Press ⌘T to open a tab.');
+  assert.strictEqual(ai.guardName('Hi Max! 👋', 'Max'), 'Hi Max! 👋');
+  assert.strictEqual(ai.guardName('The capital of France is Paris.', 'Max'), 'The capital of France is Paris.');
+  assert.strictEqual(ai.guardName('Nice to meet you, Nora!', null), 'Nice to meet you, Nora!');
+});
+
 test('the tokenizer round-trips any text, emoji included', () => {
   if (!have) return;
   const { tok } = ai.load();

@@ -924,7 +924,10 @@ you ❯ hi! what time is it?
 ✨ ai ❯ It’s 10:15 AM. ⏰
 ```
 
-Replies stream in as they're written. It knows maxshell, your Mac's commands,
+When you tell it your name ("my name is Max", or just "Max" when it asks),
+maxshell gives it to the model directly and remembers it — shared with `bot` —
+since a model this small is bad at copying names from the chat. Sums go
+through a calculator the same way. It knows maxshell, your Mac's commands,
 small talk, simple facts and sums, and the date and time (and your name, if
 you told `bot`), and keeps track of the conversation. It's small — about an
 eighth the size of GPT-2 small — so it can be confidently wrong about things

@@ -180,7 +180,7 @@ function multiTurn() {
     emit(ctx, turns);
   }
   // Names told in the conversation, and remembered.
-  for (let i = 0; i < 7000; i++) {
+  for (let i = 0; i < 2500; i++) {
     const ctx = { now: randomContext().now, name: null };
     const name = pick(NAMES);
     const turns = [];
@@ -327,6 +327,50 @@ function howto() {
       `I’m not sure how to ${task}, and I’d rather not guess. A video guide would be a good place to start.`,
     ]);
     emit(randomContext(), [['user', vary(q)], ['ai', a]]);
+  }
+}
+
+// Standalone questions with known answers (no context needed), to mix into
+// longer conversations.
+function standaloneQA() {
+  const [tasks, answer] = pick(HOWTO);
+  const r = rand();
+  if (r < 0.45) return [vary(pick(HOW_ASK)(pick(tasks))), howAnswer(answer)];
+  if (r < 0.6) { const [q, a] = pick(QA); return [vary(q), a]; }
+  if (r < 0.7) { const [c, cap] = pick(CAPITALS); return [vary(`what is the capital of ${c}`), `The capital of ${c} is ${cap}${/\.$/.test(cap) ? '' : '.'}`]; }
+  if (r < 0.8) { const q = pick(ASKS.joke); return [vary(q), bot.reply('tell me a joke', shell, {})]; }
+  if (r < 0.9) { const q = pick(ASKS.fact); return [vary(q), bot.reply('tell me a fun fact', shell, {})]; }
+  return [vary(pick(['thanks', 'cool', 'ok thanks', 'nice'])), pick(['You’re welcome! 😊', 'Any time!', '👍 Anything else?'])];
+}
+
+// After you introduce yourself, the chat moves on: real questions get real
+// answers; the name is used now and then, and recalled when asked.
+function introductions() {
+  for (let i = 0; i < 14000; i++) {
+    const ctx = { now: randomContext().now, name: null };
+    const name = pick(NAMES);
+    const turns = [];
+    turns.push(['user', vary(pick(['hi', 'hello', 'hey', 'hey there', 'yo', 'hi!']))], ['ai', pick(['Hi! 👋 I’m mx. What’s your name?', 'Hey there! 👋 What should I call you?', 'Hello! What’s your name?'])]);
+    turns.push(['user', vary(pick([name, `i am ${name}`, `my name is ${name}`, `call me ${name}`, `it's ${name}`]))], ['ai', pick([`Nice to meet you, ${name}! 😊 What can I help with?`, `Hi ${name}! 👋 What would you like to do?`, `${name} — great name! How can I help?`])]);
+    const n = int(1, 4);
+    for (let k = 0; k < n; k++) {
+      let [q, a] = standaloneQA();
+      if (chance(0.12) && /^[A-Z][a-z]/.test(a) && !/^I[\s’']/.test(a)) a = `${name}, ${a.charAt(0).toLowerCase()}${a.slice(1)}`;
+      turns.push(['user', q], ['ai', a]);
+    }
+    if (chance(0.35)) turns.push(['user', vary(pick(['what is my name', 'do you remember my name', 'who am i']))], ['ai', pick([`You’re ${name}! 😊`, `Your name is ${name}.`])]);
+    emit(ctx, turns, true);
+  }
+}
+
+// Several unrelated questions in a row: each is its own thing.
+function longChats() {
+  for (let i = 0; i < 14000; i++) {
+    const ctx = randomContext();
+    const turns = [];
+    const n = int(3, 6);
+    for (let k = 0; k < n; k++) { const [q, a] = standaloneQA(); turns.push(['user', q], ['ai', a]); }
+    emit(ctx, turns);
   }
 }
 
@@ -570,7 +614,7 @@ function mixed(n) {
 
 // --- go ---------------------------------------------------------------------------------------
 
-const steps = [['distilling bot', distill], ['multi-turn', multiTurn], ['clock and context', clock], ['identity', identity], ['README', readme], ['how-to', howto], ['topic switches', topicSwitch], ['commands', commands], ['general knowledge', knowledge], ['limits', limits], ['arithmetic', arithmetic], ['chat', chat]];
+const steps = [['distilling bot', distill], ['multi-turn', multiTurn], ['clock and context', clock], ['identity', identity], ['README', readme], ['how-to', howto], ['topic switches', topicSwitch], ['introductions', introductions], ['commands', commands], ['general knowledge', knowledge], ['long chats', longChats], ['limits', limits], ['arithmetic', arithmetic], ['chat', chat]];
 for (const [label, fn] of steps) {
   const before = out.length;
   fn();

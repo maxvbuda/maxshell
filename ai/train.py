@@ -277,6 +277,7 @@ def main():
     torch.manual_seed(args.seed)
 
     device = 'mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'run: --steps {args.steps} --batch {args.batch} --lr {args.lr}{" --resume" if args.resume else ""}', flush=True)
     convs = [json.loads(l) for l in open(os.path.join(DATA, 'dataset.jsonl'))]
     random.shuffle(convs)
     n_val = max(200, len(convs) // 100)
