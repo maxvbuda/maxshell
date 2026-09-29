@@ -69,7 +69,9 @@ function afterCommand(shell, source, ms) {
   if (shell.exited) return;
   // A suspended job has already said so.
   if (shell.suspended) { shell.suspended = false; return; }
-  const line = alerts.statusLine(shell.status, ms);
+  const brainrot = shell.brainrot ? require('../src/brainrot') : null;
+  const line = brainrot ? brainrot.statusLine(shell.status, ms, alerts.formatDuration) : alerts.statusLine(shell.status, ms);
+  if (brainrot && brainrot.mentions67(source)) process.stdout.write(`${brainrot.reaction()}\n`);
   if (line) {
     const color = line.ok ? ansi.fg('green') : ansi.fg('red');
     process.stdout.write(`${color}${line.text.slice(0, 1)}${ansi.reset()}${ansi.fg('gray')}${line.text.slice(1)}${ansi.reset()}\n`);

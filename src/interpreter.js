@@ -1301,7 +1301,8 @@ class Shell {
         try { guess = require('./suggest').suggestCommand(argv[0], this); } catch { /* best effort */ }
         this.lastNotFound = { name: argv[0], guess };
         const hint = guess ? ` — did you mean ${guess}?` : '';
-        this.writeTo(io.stderr, `maxshell: command not found: ${argv[0]}${hint}\n`);
+        if (this.brainrot) this.writeTo(io.stderr, require('./brainrot').notFound(argv[0], guess));
+        else this.writeTo(io.stderr, `maxshell: command not found: ${argv[0]}${hint}\n`);
         return 127;
       }
       if (res.error.code === 'EACCES') {

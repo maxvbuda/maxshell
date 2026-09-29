@@ -248,6 +248,37 @@ test('the offer to become the default shell is made once, and "no" changes nothi
   delete process.env.MAXSHELL_STATE_FILE;
 });
 
+// --- 6-7 -------------------------------------------------------------------------
+
+test('6-7 turns brainrot mode on and off, restoring the theme', () => {
+  const sh = shell();
+  theme.setTheme('nord');
+  const out = [];
+  sh.output = (l) => out.push(l);
+  sh.run('6-7');
+  assert.ok(sh.brainrot);
+  assert.ok(out.join('\n').includes('██████'));
+  assert.match(ansi.strip(promptParts(sh, 80).input), /^💀 .* 🗿❯ $/);
+  assert.match(ansi.strip(compactPrompt(sh, 'ls')), /^💀 /);
+  sh.run('6-7');
+  assert.strictEqual(sh.brainrot, null);
+  assert.strictEqual(theme.currentThemeName(), 'nord');
+  assert.match(out[out.length - 1], /touching grass/);
+});
+
+test('brainrot status lines, not-found messages and the 67 detector', () => {
+  const b = require('../src/brainrot');
+  const { formatDuration } = require('../src/alerts');
+  assert.match(b.statusLine(1, 10, formatDuration).text, /^✗ .* 💀 exit 1$/);
+  assert.match(b.statusLine(0, 2500, formatDuration).text, /^✓ .* 🔥 · 2\.5s$/);
+  assert.strictEqual(b.statusLine(0, 10, formatDuration), null);
+  assert.match(b.notFound('gti', 'git'), /gti\?\? .* you meant git, no cap/);
+  assert.ok(b.mentions67('echo 67'));
+  assert.ok(b.mentions67('echo 6 7'));
+  assert.ok(!b.mentions67('echo 167'));
+  assert.ok(!b.mentions67('6-7'), 'the command itself does not count');
+});
+
 // --- the theme command ----------------------------------------------------------
 
 test('theme lists every theme, marking the current one', () => {

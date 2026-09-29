@@ -331,6 +331,7 @@ Getting around
   Alt-S  /  snip            save and reuse command snippets
   mark [name]  /  go        bookmark folders and jump back to them
   cleanup [-r|-c]           quit what isn't needed; then free memory / CPU
+  6-7                       brainrot mode (6-7 again to stop)
   j words…                  jump to your most-used folder matching the words
   back / forward            walk your folder history, like a browser
   Ctrl-R                    fuzzy-search every command you've run
@@ -866,6 +867,12 @@ BUILTINS.abbr = (args, io, shell) => {
 };
 
 // --- the palette, explain, dash, snippets and bookmarks -----------------------
+
+// 6-7: brainrot mode for this session (6-7 again, or 6-7 off, to stop).
+BUILTINS['6-7'] = (args, io, shell) => {
+  out(shell, io, require('./brainrot').toggle(shell, args[0]));
+  return 0;
+};
 
 // cleanup: quit what isn't needed; -r / -c then offer the biggest users.
 BUILTINS.cleanup = (args, io, shell) => require('./cleanup').runCleanup(args, io, shell);

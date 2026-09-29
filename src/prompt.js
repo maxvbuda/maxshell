@@ -112,7 +112,9 @@ function promptParts(shell, cols = 80) {
     if (marks) left += ` ${ansi.fg(p.marks)}${marks}${R}`;
   }
   const failed = shell.status !== 0 && shell.status !== 130;
-  const input = `${left} ${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
+  let input = `${left} ${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
+  // 6-7 mode.
+  if (shell.brainrot) input = `💀 ${left} ${failed ? '😭' : '🗿'}${ansi.fg(failed ? p.charErr : p.char)}❯${R} `;
 
   // The right side: RPROMPT if you set one; otherwise the tools this project
   // uses, how long the last command took (if it was slow), and the time.
@@ -161,7 +163,8 @@ function compactPrompt(shell, line, paint = (x) => x) {
   const R = ansi.reset();
   const home = shell.getVar('HOME') || os.homedir();
   const where = shortenPath(shortCwd(shell.cwd, home), 40);
-  return `${ansi.fg(p.right)}${where}${R} ${ansi.fg(p.char)}❯${R} ${paint(line)}`;
+  const skull = shell.brainrot ? '💀 ' : '';
+  return `${skull}${ansi.fg(p.right)}${where}${R} ${ansi.fg(p.char)}❯${R} ${paint(line)}`;
 }
 
 // Tells the terminal where we are: OSC 7 (so a new tab or window opens in
