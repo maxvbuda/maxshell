@@ -222,6 +222,52 @@ test('cleanup groups an app’s helpers, skips the system and other users, and r
   assert.strictEqual(byCpu[0].cpu, 40);
 });
 
+test('cleanup finds windowless apps, leftover helpers and orphaned stopped processes', () => {
+  const { unnecessary } = require('../src/cleanup');
+  const MB = 1024 * 1024;
+  const P = (pid, name, command, extra = {}) => ({ pid, ppid: 100, name, user: 'me', rss: 100 * MB, cpu: 1, command, ...extra });
+  const procs = [
+    P(10, 'Slack', '/Applications/Slack.app/Contents/MacOS/Slack'),
+    P(11, 'Slack Helper', '/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper'),
+    P(20, 'Notes', '/System/Applications/Notes.app/Contents/MacOS/Notes'),
+    P(30, 'Music', '/System/Applications/Music.app/Contents/MacOS/Music'),
+    P(40, 'Chrome Helper', '/Applications/Google Chrome.app/Contents/Frameworks/x/Helper', { ppid: 1 }),
+    P(41, 'Chrome Helper', '/Applications/Google Chrome.app/Contents/Frameworks/x/Helper', { ppid: 1 }),
+    P(50, 'Login', '/Applications/1Password.app/Contents/Library/LoginItems/1Password Launcher'),
+    P(55, 'sys', '/System/Library/CoreServices/Setup Assistant.app/Contents/Resources/helper'),
+    P(60, 'vim', 'vim notes.txt', { ppid: 1 }),
+    P(70, 'vim', 'vim other.txt'),
+    P(80, 'Terminal', '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'),
+  ];
+  const found = unnecessary(procs, {
+    user: 'me',
+    apps: [{ name: 'Slack', pid: 10 }, { name: 'Notes', pid: 20 }, { name: 'Music', pid: 30 }, { name: 'Terminal', pid: 80 }],
+    windows: { 20: 2 },
+    states: [{ pid: 60, ppid: 1, stopped: true }, { pid: 70, ppid: 100, stopped: true }],
+    exclude: new Set([80]),
+    keep: new Set(['Music']),
+  });
+  const names = found.map((g) => `${g.name}: ${g.reason}`);
+  assert.deepStrictEqual(names, [
+    'Slack: open with no windows',
+    'Google Chrome helpers: Google Chrome isn\'t running',
+    'vim: suspended, and its shell has closed',
+  ]);
+  assert.deepStrictEqual(found[0].pids, [10, 11], 'the app goes with its helpers');
+  assert.strictEqual(found[0].app, 'Slack', 'apps get a normal Quit');
+});
+
+test('cleanup -n only reports; --keep remembers apps to leave alone', () => {
+  process.env.MAXSHELL_CLEANUP_KEEP_FILE = path.join(scratch, 'keep');
+  const sh = shellIn(scratch);
+  sh.run('cleanup --keep Slack');
+  sh.lines.length = 0;
+  sh.run('cleanup --keep');
+  assert.ok(sh.lines.includes('Slack') && sh.lines.includes('Music'));
+  assert.strictEqual(sh.run('cleanup -n < /dev/null'), 0);
+  assert.ok(sh.lines.some((l) => /Unnecessary|nothing unnecessary/.test(ansi.strip(l))));
+});
+
 test('cleanup reads choices like 1 3, 2-4 and all', () => {
   const { parseChoice } = require('../src/cleanup');
   assert.deepStrictEqual(parseChoice('1 3', 5), [0, 2]);
@@ -231,13 +277,13 @@ test('cleanup reads choices like 1 3, 2-4 and all', () => {
   assert.deepStrictEqual(parseChoice('no', 3), []);
 });
 
-test('cleanup without a terminal only lists, and needs -r or -c', () => {
+test('cleanup explains its options, and -rn lists the biggest users without quitting', () => {
   const sh = shellIn(scratch);
   const errors = [];
   sh.errorOutput = (l) => errors.push(l);
-  assert.strictEqual(sh.run('cleanup'), 2);
+  assert.strictEqual(sh.run('cleanup -x'), 2);
   assert.ok(errors.join(' ').includes('cleanup -r'));
-  assert.strictEqual(sh.run('cleanup -r < /dev/null'), 0);
+  assert.strictEqual(sh.run('cleanup -rn < /dev/null'), 0);
   assert.ok(sh.lines.some((l) => /Memory .* in use/.test(ansi.strip(l))));
 });
 

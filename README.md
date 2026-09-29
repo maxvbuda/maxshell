@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.20.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.21.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.20.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.21.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -831,17 +831,27 @@ both show up in the palette.
 ### cleanup — free memory or CPU
 
 ```sh
-cleanup -r      # what is using the most memory
-cleanup -c      # what is keeping the CPU busy
+cleanup         # quit what isn't needed
+cleanup -r      # …then pick from what uses the most memory
+cleanup -c      # …then pick from what keeps the CPU busy
+cleanup -n      # just show what isn't needed
+cleanup --keep Slack    # never count Slack as unnecessary
 ```
 
-Memory and CPU are freed by quitting what's using them, so `cleanup` shows
-your biggest users — an app's helper processes counted together (Chrome's
-dozens become one line) — with a meter of how full things are, and asks
-which to quit (`1 3`, `2-4`, `all`, or Enter for none). Apps are asked to
-quit the normal way, so they can offer to save; other programs get a polite
-`SIGTERM`. System processes, other users' programs and your terminal are
-never offered, and nothing is quit without asking. After `-r` it shows how
+`cleanup` finds and quits, without asking, what isn't doing anything for
+you:
+
+- **apps open with no windows** — on any Space, minimised windows count as
+  open — except ones people keep windowless on purpose (Music, Spotify,
+  Mail, Messages, your terminal…, plus anything you `--keep`);
+- **helpers left behind** by an app you've already quit;
+- **suspended programs whose shell has closed**, which nothing can resume.
+
+Apps get a normal Quit, so one with unsaved work still asks. Only your own
+programs from `/Applications` are touched — never macOS itself, other users'
+programs, or the terminal you're in. With `-r` or `-c` it then lists your
+biggest remaining users (an app's helpers counted together) and asks which
+of those to quit too (`1 3`, `2-4`, `all`, or Enter for none), and shows how
 much memory came back.
 
 ### Fuzzy history search — Ctrl-R
@@ -928,7 +938,7 @@ real path still works (`j ../other` acts like `cd`).
 | `abbr` | fish-style abbreviations that expand as you type |
 | `palette`, `explain`, `dash` | the command palette, command explainer, live dashboard (see above) |
 | `snip`, `mark`, `marks`, `go` | snippets and folder bookmarks (see above) |
-| `cleanup` | `-r` free memory, `-c` free the CPU, by quitting what you pick (see above) |
+| `cleanup` | quit what isn't needed; `-r` / `-c` then free memory / CPU (see above) |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
