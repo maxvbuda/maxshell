@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mxpal-'));
+process.env.MAXSHELL_BOT_FILE = path.join(scratch, 'bot-memory');
 process.env.MAXSHELL_SNIPPETS_FILE = path.join(scratch, 'snippets');
 process.env.MAXSHELL_MARKS_FILE = path.join(scratch, 'marks');
 process.env.MAXSHELL_DIRS_FILE = path.join(scratch, 'dirs');
@@ -373,6 +374,81 @@ test('bot games keep score and end cleanly', () => {
   assert.strictEqual(mem.game, null);
 });
 
+test('bot scores every intent and picks the best, not the first', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = {};
+  reply('tell me a joke about git', sh, mem);
+  assert.strictEqual(mem.last.name, 'joke', 'a joke request beats the git topic');
+  assert.ok(mem.scores[0].startsWith('joke'));
+  reply('can i undo', sh, mem);
+  assert.strictEqual(mem.last.name, 'topic', 'maxshell help beats the 8-ball');
+  reply('what is love', sh, mem);
+  assert.strictEqual(mem.last.name, 'love', 'the song beats “what is <command>”');
+  reply('i want a pun', sh, mem);
+  assert.strictEqual(mem.last.name, 'joke', 'keywords alone can reach a rule');
+  reply('is it going to snow', sh, mem);
+  assert.strictEqual(mem.last.name, 'weather');
+});
+
+test('bot answers maxshell questions from the README', () => {
+  const { reply } = require('../src/bot');
+  const { retrieve } = require('../src/botmodel');
+  const sh = shellIn(repo);
+  assert.strictEqual(retrieve('how do I change themes').title, 'Themes');
+  assert.strictEqual(retrieve('can i suspend vim').title, 'Jobs');
+  assert.match(retrieve('how do snippets work').title, /Snippets/);
+  const r = reply('how do pipelines stream in maxshell', sh, {});
+  assert.match(r, /README|docs/);
+  assert.match(r, /stream/);
+});
+
+test('bot rambles with its word-chain when nothing fits, and says so', () => {
+  const { reply } = require('../src/bot');
+  const { ramble, wellFormed, loadModel } = require('../src/botmodel');
+  const sh = shellIn(repo);
+  assert.ok(loadModel().sentences.size > 200, 'trained on the bundled corpus and the README');
+  for (const q of ['the ocean is so big', 'tell me about robots', 'why is the sky blue']) {
+    const text = ramble(q);
+    assert.ok(text && wellFormed(text.split(/(?<=[.!?]) /)[0]), `well-formed: ${text}`);
+    assert.ok(text.split(/\s+/).length <= 45);
+  }
+  const r = reply('the moon and the stars tonight', sh, {});
+  assert.match(r, /^💭 /);
+  assert.match(r, /made that up|generated|rambling|statistics/, 'labelled as generated');
+});
+
+test('word-chain output is filtered: length, end punctuation, no repeats', () => {
+  const { wellFormed } = require('../src/botmodel');
+  assert.ok(wellFormed('Space is big, dark and full of wonders.'));
+  assert.ok(!wellFormed('Too short.'));
+  assert.ok(!wellFormed('This one never ends properly and just keeps going on'));
+  assert.ok(!wellFormed('the best of the best of the best of the best.'));
+});
+
+test('bot remembers you between chats, in ~/.maxshell_bot', () => {
+  const bot = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = bot.loadMemory();
+  bot.reply('my name is Grace', sh, mem);
+  bot.reply('i like chess', sh, mem);
+  bot.saveMemory(mem);
+  const later = bot.loadMemory();
+  assert.strictEqual(later.name, 'Grace');
+  assert.deepStrictEqual(later.likes, ['chess']);
+  assert.match(bot.reply('what do you know about me', sh, later), /Grace.*chess/);
+  bot.reply('forget me', sh, later);
+  bot.saveMemory(later);
+  assert.strictEqual(bot.loadMemory().name, undefined);
+});
+
+test('bot uses your name now and then', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = { name: 'Lin', nameRate: 1 };
+  assert.match(reply('what time is it', sh, mem), /^Lin, it’s /);
+});
+
 test('bot fixes typos but never real words', () => {
   const { normalize } = require('../src/bot');
   assert.strictEqual(normalize('tell me a jkoe').text, 'tell me a joke');
@@ -382,6 +458,7 @@ test('bot fixes typos but never real words', () => {
 });
 
 test('bot chats until bye or the end of input, and answers one question as arguments', () => {
+  try { fs.unlinkSync(process.env.MAXSHELL_BOT_FILE); } catch { /* fresh */ }
   const sh = shellIn(repo);
   sh.run("bot <<< $'hello\\nbye\\nnever read'");
   const text = sh.lines.join('\n');

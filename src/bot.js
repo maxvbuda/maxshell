@@ -64,7 +64,7 @@ function isWord(w) {
 function fixWord(w) {
   if (w.length < 4 || VOCAB.includes(w) || /\d/.test(w) || isWord(w)) return w;
   let best = null;
-  for (const v of VOCAB) {
+  for (const v of ruleVocabulary()) {
     if (Math.abs(v.length - w.length) > 2) continue;
     const d = editDistance(w, v);
     if (d <= (w.length >= 7 ? 2 : 1) && (!best || d < best.d)) best = { v, d };
@@ -223,7 +223,7 @@ const HOWTO = [
   [/\b(palette|ctrl-?p)\b/, 'Ctrl-P opens the command palette: tools, scripts, git actions, themes, bookmarks and recent commands, all searchable.'],
   [/\b(alt-?h|explain a command)\b/, 'Type a command and press Alt-H — or run `explain \'the command\'` — to see what each part does before running it.'],
   [/\b(ram|memory|cpu|slow|clean ?up|speed up|free up)\b/, '`cleanup` quits what isn’t needed; `cleanup -r` then helps free memory and `cleanup -c` the CPU. `cleanup -n` just shows what it would do.'],
-  [/\b(theme|colou?rs?)\b/, '`theme` lists the colour themes with previews; `theme nord` (or any name) switches and remembers it.'],
+  [/\b(themes?|colou?rs?)\b/, '`theme` lists the colour themes with previews; `theme nord` (or any name) switches and remembers it.'],
   [/\b(history|ctrl-?r|old command|previous command)\b/, 'Ctrl-R searches every command you’ve run — type any words, in any order. ↑ walks back through them too.'],
   [/\b(snippets?|save .*command|alt-?s)\b/, 'Alt-S saves the line you’re typing as a snippet; `snip` brings one back.'],
   [/\b(bookmarks?|go to .*folder)\b/, '`mark` bookmarks this folder, `go` jumps back to a bookmark.'],
@@ -523,6 +523,7 @@ function rules() {
         return days === 0 ? 'It’s TODAY?! Happy birthday!!! 🎂🎉' : `Got it! That’s in ${plural(days, 'day')}. 🎂`;
       },
     },
+    { name: 'forget', test: /\b(forget (me|everything|about me|what i said)|clear (your|my) memory|delete my data)\b/, run: (m, n, mem) => { forget(mem); return 'Done — I’ve forgotten everything about you. 🧽 Fresh start!'; } },
     {
       name: 'aboutme',
       test: /\b(what do you know about me|what do i like|tell me about me|what do you remember)\b/,
@@ -618,7 +619,7 @@ function rules() {
     },
 
     // No internet.
-    { name: 'weather', test: /\b(weather|temperature outside|forecast|is it (going to )?rain|is it sunny|is it cold)\b/, run: () => 'I can’t check the weather — I don’t use the internet. Try looking out of a window. 🪟' },
+    { name: 'weather', test: /\b(weather|temperature outside|forecast|is it (going to )?(rain|snow|be sunny|be cold|be hot)|is it (raining|snowing|sunny|cold|hot))\b/, run: () => 'I can’t check the weather — I don’t use the internet. Try looking out of a window. 🪟' },
     { name: 'web', test: /\b(news|google|search the web|look up|search for|wikipedia|who won)\b/, run: () => 'No internet for me — I only know what my rules know. 📴' },
 
     // Maths and conversions.
@@ -692,7 +693,7 @@ function rules() {
     { name: 'spell', test: /^(how do you spell|spell) (.+)$/, run: (m) => m[2].toUpperCase().split('').join('-') },
 
     // About bot.
-    { name: 'realai', test: /\b(are you (an? )?(real )?(ai|robot|bot|human|person|alive|sentient|conscious)|are you real|are you (chat)?gpt|are you claude|do you (use|call) (an )?ai|how do you work|are you smart|do you think)\b/, run: () => pick(['Honestly? No. I’m a big set of if/else rules in src/bot.js — no AI, no internet. Fake on purpose. 🤖', 'Nope, not real AI! Just a lot of carefully arranged if-statements. 🧥🤖', 'I’m about as intelligent as a very organised flowchart. But a charming one. 😄']) },
+    { name: 'realai', test: /\b(are you (an? )?(real )?(ai|robot|bot|human|person|alive|sentient|conscious)|are you real|are you (chat)?gpt|are you claude|do you (use|call) (an )?ai|how do you work|are you smart|do you think)\b/, run: () => pick(['Honestly? No. I’m a big set of if/else rules plus a little word-statistics model — no neural network, no internet. Fake on purpose. 🤖', 'Nope! I score your message against a list of rules, and when none fits I string words together from a small text file (a Markov chain). No real AI. 🤖', 'Nope, not real AI! Just a lot of carefully arranged if-statements. 🧥🤖', 'I’m about as intelligent as a very organised flowchart. But a charming one. 😄']) },
     { name: 'whoareyou', test: /\b(who are you|what are you|your name|tell me about yourself|introduce yourself)\b/, run: () => 'I’m bot, maxshell’s chat buddy. I know jokes, facts, games, maths, dates, and how maxshell works — all from rules, no AI. 🤖' },
     { name: 'maker', test: /\bwho (made|built|created|wrote|programmed) (you|maxshell|this)\b/, run: () => 'maxshell — and me — were built by Max, from scratch, in Node.js. 🛠️' },
     { name: 'age', test: /\b(how old are you|your age|when were you (born|made))\b/, run: () => 'I was born in 2026, in a file called src/bot.js. So… young. 👶' },
@@ -712,7 +713,7 @@ function rules() {
     { name: 'sorry', test: /^(sorry|my bad|oops|i am sorry)\b/, run: () => pick(['No worries! 😊', 'All good!', 'Don’t worry about it.']) },
 
     // The computer and maxshell.
-    { name: 'howto', test: /\b(how (do|can|would) i|how to|where (is|do i find)|what is the (key|shortcut)|is there a way to)\b/, run: (m, n) => { const hit = HOWTO.find(([re]) => re.test(n.text)); return hit ? hit[1] : 'I don’t have a “how to” for that. Ask me about undo, jobs, the palette, cleanup, themes, snippets, bookmarks, git or the editor.'; } },
+    { name: 'howto', test: /\b(how (do|can|would) i|how to|where (is|do i find)|what is the (key|shortcut)|is there a way to)\b/, run: (m, n) => { const hit = HOWTO.find(([re]) => re.test(n.text)); if (hit) return hit[1]; const r = require('./botmodel').retrieve(n.text); return r && r.score >= 1.5 ? `From the README — ${r.title}:\n“${r.excerpt}”` : 'I don’t have a “how to” for that. Ask me about undo, jobs, the palette, cleanup, themes, snippets, bookmarks, git or the editor.'; } },
     {
       name: 'command',
       test: /^(what is|what are|what does|tell me about) (a |an |the )?([a-z][\w.+-]*)( command| do| program)?$/,
@@ -761,10 +762,30 @@ function rules() {
     },
     { name: 'macos', test: /\b(what (mac ?os|macos|os|operating system)|which (mac ?os|macos) version|my mac version)\b/, run: () => { const v = run('sw_vers', ['-productVersion']).trim(); return v ? `You’re on macOS ${v}. 🍎` : `You’re on ${os.type()} ${os.release()}.`; } },
     { name: 'version', test: /\b(maxshell version|what version|your version)\b/, run: () => `This is maxshell ${require('../package.json').version}.` },
+    {
+      name: 'readme',
+      test: (n) => {
+        if (!/\b(maxshell|shell|how|what|where|can|does|do|is|command|key|feature|work)\b/.test(n.text)) return null;
+        const r = require('./botmodel').retrieve(n.text);
+        return r && r.score >= 2 ? r : null;
+      },
+      run: (r) => `${pick(['From the README', 'Here’s what the README says', 'The docs say'])} — ${r.title}:\n“${r.excerpt}”`,
+    },
     { name: 'topic', test: (n) => HOWTO.find(([re]) => re.test(n.text)), run: (hit) => hit[1] },
     { name: 'folder', test: /\b(what is in (this|the) folder|what files|list (the )?files|where am i|what folder)\b/, run: (m, n, mem, shell) => folderSummary(shell) },
     { name: 'git', test: /\b(git status|what (is|has) changed|which branch|what branch)\b/, run: (m, n, mem, shell) => gitSummary(shell) },
-    { name: 'explain', test: /^(explain|what does) [`'"]?(.+?)[`'"]?( do| mean)?$/, run: (m, n, mem, shell) => explainLine(n.raw.replace(/^(explain|what does)\s+/i, '').replace(/\s+(do|mean)\??$/i, '').replace(/^[`'"]|[`'"]$/g, ''), shell) },
+    {
+      name: 'explain',
+      test: /^(explain|what does) [`'"]?(.+?)[`'"]?( do| mean)?$/,
+      run: (m, n, mem, shell) => {
+        const line = n.raw.replace(/^(explain|what does)\s+/i, '').replace(/\s+(do|mean)\??$/i, '').replace(/^[`'"]|[`'"]$/g, '');
+        // Only real commands; "what does autocd do" is a question for the README.
+        const first = line.split(/\s+/)[0];
+        const { BUILTINS, findInPath } = require('./builtins');
+        if (!BUILTINS[first] && !findInPath(first, shell) && !shell.funcs.has(first)) return null;
+        return explainLine(line, shell);
+      },
+    },
     {
       name: 'eightball',
       test: /^(should|will|can|could|would|is|am|are|do|does|did) (i|we|it|he|she|they|my)\b.+$|\b(magic 8|8 ball|eight ball)\b/,
@@ -791,10 +812,78 @@ const HELP = `Here’s what I can do:
    maxshell  how do I undo · what is grep · explain tar -xzf a.tgz · which branch · what is in this folder
 Type bye to leave.`;
 
+// Weighted keywords: a message that doesn't match a rule's pattern can
+// still reach it on keywords alone (only rules that don't need a pattern
+// match have them). Priorities break ties between patterns: reactions to
+// what was just said beat everything; catch-alls like the 8-ball lose.
+const KEYWORDS = {
+  joke: { joke: 5, jokes: 5, pun: 4, puns: 4, laugh: 2, hilarious: 1 },
+  fact: { fact: 5, facts: 5, interesting: 2, trivia: 1, science: 2 },
+  quote: { quote: 5, quotes: 5, inspiring: 3, inspire: 3, motivation: 4, wisdom: 3 },
+  advice: { advice: 5, tip: 3, tips: 4, suggestion: 3 },
+  compliment: { compliment: 5, nice: 1, encourage: 3 },
+  riddle: { riddle: 5, riddles: 5, puzzle: 4 },
+  trivia: { quiz: 5, trivia: 5 },
+  rps: { rps: 5, scissors: 3, rock: 2, paper: 2 },
+  play: { game: 4, games: 4, play: 3, bored: 4, boring: 3, fun: 1 },
+  time: { time: 3, clock: 4, hour: 2, oclock: 4 },
+  date: { date: 4, today: 2, calendar: 3, weekday: 3 },
+  weather: { weather: 5, rain: 4, raining: 4, sunny: 4, snow: 4, snowing: 4, temperature: 3, forecast: 5 },
+  web: { news: 4, google: 4, internet: 3, website: 3, wikipedia: 5 },
+  password: { password: 5, passphrase: 5 },
+  coin: { coin: 5, heads: 3, tails: 3 },
+  dice: { dice: 5, die: 3 },
+  realai: { ai: 3, gpt: 4, chatgpt: 4, neural: 4, intelligent: 3, conscious: 4, sentient: 4, real: 1, smart: 2 },
+  maker: { creator: 4, made: 2, built: 2, author: 3, developer: 2 },
+  thanks: { thanks: 5, thank: 4, grateful: 4 },
+  memory: { ram: 4, memory: 3 },
+  cpu: { cpu: 5, processor: 4, cores: 3 },
+  battery: { battery: 5, charge: 2, charging: 3 },
+  disk: { disk: 4, storage: 4, space: 1 },
+  folder: { folder: 3, files: 3, directory: 3 },
+  git: { branch: 3, git: 3, commit: 2, repo: 3, repository: 3 },
+  help: { help: 5, commands: 3, options: 2 },
+  macos: { macos: 5, os: 2, version: 1 },
+};
+
+const PRIORITY = {
+  laugh: 6, booJoke: 6, again: 6, repeat: 6, why: 6,
+  setname: 2, getname: 2, aboutme: 2,
+  opinion: -1, command: -1, help: -1, favourite: -1,
+  topic: -3, readme: -4, eightball: -6, ack: -4, yes: -4, no: -4,
+};
+
 let RULES = null;
 function ruleByName(name) {
   if (!RULES) RULES = rules();
   return RULES.find((r) => r.name === name);
+}
+
+// Every word the rules care about, for the typo fixer.
+function ruleVocabulary() {
+  return [...new Set([...VOCAB, ...Object.values(KEYWORDS).flatMap((k) => Object.keys(k))])];
+}
+
+// How strongly a message calls for a rule: a pattern match scores 10 plus
+// how much of the message it covers; keywords alone score their weights.
+function scoreRule(rule, n, mem) {
+  let m = null;
+  let score = 0;
+  if (rule.test instanceof RegExp) {
+    m = rule.test.exec(n.text);
+    if (m) score = 10 + 4 * (m[0].length / Math.max(1, n.text.length));
+  } else {
+    const v = rule.test(n, mem);
+    if (v !== null && v !== undefined && v !== false) { m = v; score = 12; }
+  }
+  let kwOnly = false;
+  if (!m && KEYWORDS[rule.name]) {
+    let k = 0;
+    for (const w of n.words) k += KEYWORDS[rule.name][w] || 0;
+    if (k >= 4) { score = k; kwOnly = true; }
+  }
+  if (!score) return null;
+  return { rule, m, kwOnly, score: score + (PRIORITY[rule.name] || 0) };
 }
 
 function feelingReply(feeling, mem) {
@@ -866,6 +955,10 @@ function fallback(n, mem) {
   ];
   const hint = hints.find(([re]) => re.test(n.text));
   if (hint) return `Hmm, I’m not sure what you mean. ${hint[1]}`;
+  // Nothing matched: ramble with the word-chain, seeded with the message's
+  // words, and say that's what it is.
+  const text = require('./botmodel').ramble(n.text);
+  if (text) return `💭 ${text}\n   (${pick(['my word-chain made that up', 'generated, not understood', 'rambling from my training text', 'statistics, not thoughts'])})`;
   if (n.question) {
     const topic = n.words.filter((w) => !/^(what|who|where|when|why|how|is|are|the|a|an|do|does|can|you|i|of|to|in|it|that|this|about)$/.test(w)).slice(0, 3).join(' ');
     return topic ? `Good question about “${topic}” — but I don’t have a rule for it. I’m not a real AI. 🤷 Try “help” to see what I know.` : 'Good question! I don’t have a rule for that one. 🤷';
@@ -876,6 +969,47 @@ function fallback(n, mem) {
     'That’s beyond my if-statements. 😅 Ask me for a joke, a riddle, or the time?',
     'I’m going to pretend I understood that. 👍 (I didn’t.)',
   ]).item;
+}
+
+// Now and then, use the person's name.
+const NAMEABLE = new Set(['time', 'date', 'fact', 'advice', 'thanks', 'weather', 'readme', 'memory', 'battery', 'cpu', 'disk', 'folder', 'git', 'quote']);
+function personalise(name, text, mem) {
+  if (!mem.name || !NAMEABLE.has(name) || text.includes('\n') || Math.random() > (mem.nameRate ?? 0.25)) return text;
+  if (!/^[A-Z][a-z’']/.test(text) || /^I[\s’']/.test(text)) return text;
+  return `${mem.name}, ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
+
+// --- long-term memory -----------------------------------------------------------
+
+const REMEMBERED = ['name', 'likes', 'dislikes', 'favourites', 'birthday'];
+
+function memoryFile() {
+  return process.env.MAXSHELL_BOT_FILE || path.join(os.homedir(), '.maxshell_bot');
+}
+
+function loadMemory() {
+  const mem = {};
+  try {
+    const saved = JSON.parse(fs.readFileSync(memoryFile(), 'utf8'));
+    for (const k of REMEMBERED) if (saved[k] !== undefined) mem[k] = saved[k];
+  } catch { /* first chat */ }
+  return mem;
+}
+
+function saveMemory(mem) {
+  const keep = {};
+  for (const k of REMEMBERED) if (mem[k] !== undefined) keep[k] = mem[k];
+  const text = `${JSON.stringify(keep, null, 2)}\n`;
+  try {
+    if (fs.existsSync(memoryFile()) && fs.readFileSync(memoryFile(), 'utf8') === text) return;
+    if (!Object.keys(keep).length && !fs.existsSync(memoryFile())) return;
+    fs.writeFileSync(memoryFile(), text);
+  } catch { /* can't save; it still works for this chat */ }
+}
+
+// "forget me" wipes it.
+function forget(mem) {
+  for (const k of REMEMBERED) delete mem[k];
 }
 
 // The reply to one message.
@@ -898,19 +1032,20 @@ function reply(input, shell, memory = {}) {
   }
 
   if (!RULES) RULES = rules();
-  for (const rule of RULES) {
-    let m = null;
-    if (rule.test instanceof RegExp) m = rule.test.exec(n.text);
-    else {
-      const v = rule.test(n, mem);
-      if (v !== null && v !== undefined && v !== false) m = v;
-    }
-    if (!m) continue;
-    const text = rule.run(m, n, mem, shell);
+  // Score every rule and answer with the best (ties go to the earlier rule).
+  const candidates = [];
+  RULES.forEach((rule, order) => {
+    const c = scoreRule(rule, n, mem);
+    if (c) candidates.push({ ...c, order });
+  });
+  candidates.sort((a, b) => b.score - a.score || a.order - b.order);
+  mem.scores = candidates.slice(0, 3).map((c) => `${c.rule.name}:${c.score.toFixed(1)}`);
+  for (const c of candidates) {
+    const text = c.rule.run(c.m, n, mem, shell);
     if (text === null || text === undefined) continue;
     // "Another" after a follow-up keeps repeating the original kind.
-    const name = rule.name === 'again' ? mem.last.name : rule.name;
-    return record(name, text);
+    const name = c.rule.name === 'again' ? mem.last.name : c.rule.name;
+    return record(name, personalise(name, text, mem));
   }
   return record('fallback', fallback(n, mem));
 }
@@ -923,12 +1058,26 @@ function runBot(args, io, shell) {
   const R = ansi.reset();
   const botTag = `${ansi.fg(t.ui.accent)}${ansi.bold()}🤖 bot ❯${R}`;
   const youTag = `${ansi.fg(t.ui.accent2)}${ansi.bold()}you ❯${R} `;
-  const say = (text) => shell.writeTo(io.stdout, `${botTag} ${text.split('\n').join('\n        ')}\n`);
-  const memory = {};
+  // Long replies wrap under the text, not under the tag.
+  const width = Math.max(30, (process.stdout.columns || 80) - 10);
+  const wrap = (line) => {
+    const out = [];
+    let cur = '';
+    for (const word of line.split(' ')) {
+      if (cur && require('./tui').textWidth(`${cur} ${word}`) > width) { out.push(cur); cur = word; } else cur = cur ? `${cur} ${word}` : word;
+    }
+    out.push(cur);
+    return out;
+  };
+  const say = (text) => {
+    const lines = text.split('\n').flatMap((l) => (l.startsWith('   ') ? [l] : wrap(l)));
+    shell.writeTo(io.stdout, `${botTag} ${lines.join('\n        ')}\n`);
+  };
+  const memory = loadMemory();
 
-  if (args.length) { say(reply(args.join(' '), shell, memory)); return 0; }
+  if (args.length) { say(reply(args.join(' '), shell, memory)); saveMemory(memory); return 0; }
 
-  say('Hi! I’m bot. 👋 Ask me things, play a game, or say “help”. Type bye to leave.');
+  say(memory.name ? `Welcome back, ${memory.name}! 👋 What shall we do? (say “help” for ideas, bye to leave)` : 'Hi! I’m bot. 👋 Ask me things, play a game, or say “help”. Type bye to leave.');
   for (;;) {
     shell.writeTo(io.stdout, youTag);
     const line = shell.readLine(io.stdin);
@@ -938,7 +1087,10 @@ function runBot(args, io, shell) {
       return 0;
     }
     say(reply(line, shell, memory));
+    saveMemory(memory);
   }
 }
 
-module.exports = { runBot, reply, rules, tryMaths, normalize, convert, parseDay, daysUntil };
+module.exports = {
+  runBot, reply, rules, tryMaths, normalize, convert, parseDay, daysUntil, scoreRule, loadMemory, saveMemory, memoryFile,
+};

@@ -57,7 +57,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.26.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.27.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -67,7 +67,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.26.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.27.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -877,30 +877,37 @@ much memory came back.
 
 ### bot
 
-`bot` opens a chat with maxshell's "AI" — which is really a big set of
-if/else rules, no AI and no internet (ask it, and it admits it). It answers
-at a `🤖 bot ❯` line while you type at `you ❯`, and it keeps track of the
-conversation:
+`bot` opens a chat with maxshell's "AI". It isn't one: it's a big set of
+rules plus a little word statistics, fully offline — no AI API, no network,
+no neural network (ask it, and it admits it). It answers at a `🤖 bot ❯` line
+while you type at `you ❯`.
 
-- **it knows what it just said** — "that's funny" after a joke gets a thank
-  you and "want another?", "lame" gets an apology; "another", "again",
-  "why?" and "say that again" refer to the last thing, and yes/no answer
-  its questions;
-- **it remembers you** — your name, what you like, your favourites and your
-  birthday ("what do you know about me", "days until my birthday");
-- **games** — trivia with a score, riddles, rock paper scissors, guess the
-  number;
-- **it knows things** — jokes (never the same twice in a row), fun facts,
-  quotes, advice; maths, percentages, square roots, averages and unit
-  conversions (`100 f to c`, `5 miles in km`, `2 gb in mb`); the time, dates,
-  "days until Christmas", "what day is July 4"; dice, coins, "pick pizza or
-  tacos", a magic 8-ball, passwords; reverse, spell and count words;
-- **your Mac and maxshell** — battery, memory, CPU, disk; "what is grep",
-  `explain tar -xzf a.tgz`, "how do I undo", what's in this folder, which
-  git branch.
+- **It scores what you said against every intent** — patterns and weighted
+  keywords — and answers with the best fit, after expanding contractions
+  and fixing small typos (only in words that aren't real words).
+- **It follows the conversation.** "That's funny" after a joke gets a thank
+  you and "want another?"; "lame" gets an apology; "another", "again",
+  "why?" and "say that again" refer to the last thing; yes/no answer its
+  questions; games keep going until you stop.
+- **It remembers you, between chats** — your name, what you like, your
+  favourites and your birthday, in `~/.maxshell_bot` ("what do you know
+  about me", "days until my birthday", "forget me").
+- **It knows things** — jokes, facts and quotes that don't repeat until
+  they've all been used; maths, percentages, roots, averages and unit
+  conversions (`100 f to c`, `5 miles in km`); dates ("days until
+  Christmas", "what day is July 4"); dice, coins, "pick pizza or tacos", a
+  magic 8-ball, passwords; reverse, spell and count; trivia, riddles, rock
+  paper scissors and guess the number; your Mac's battery, memory, CPU and
+  disk; "what is grep" (from its manual) and `explain tar -xzf a.tgz`.
+- **It answers maxshell questions from this README**, finding the section
+  whose words best match yours (TF-IDF) and quoting it.
+- **When nothing fits, it rambles.** A word-trigram Markov chain, trained
+  on `src/botcorpus.txt` and this README, strings together a sentence or
+  two seeded with your words — GPT-2-flavoured nonsense, filtered to be
+  well formed and marked 💭 so you know it's generated.
 
-It shrugs off small typos. `bye`, `exit`, `quit` or Ctrl-D leave; `bot what
-time is it` answers one question and returns.
+`bye`, `exit`, `quit` or Ctrl-D leave; `bot what time is it` answers one
+question and returns.
 
 ### 6-7
 
@@ -1048,6 +1055,8 @@ src/cleanup.js      cleanup: the biggest memory and CPU users, and quitting them
 src/brainrot.js     6-7
 src/bot.js          bot: a chat made of if/else rules, with conversation state
 src/botdata.js      bot's jokes, facts, riddles, trivia and quotes
+src/botmodel.js     bot's word-trigram Markov chain and README retrieval
+src/botcorpus.txt   the text the Markov chain learns from
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks

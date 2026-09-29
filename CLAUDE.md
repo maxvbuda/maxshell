@@ -96,7 +96,7 @@ GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
   flags get the real `ls`. Colour is off for `-c` and scripts.
 - **Env overrides keep tests off real files:** `MAXSHELL_TRASH`,
   `MAXSHELL_SNIPPETS_FILE`, `MAXSHELL_MARKS_FILE`, `MAXSHELL_CACHE`,
-  `MAXSHELL_STATE_FILE`, `MAXSHELL_WRAPPER`, and **`MAXSHELL_SETUP=0` in every
+  `MAXSHELL_STATE_FILE`, `MAXSHELL_WRAPPER`, `MAXSHELL_BOT_FILE`, and **`MAXSHELL_SETUP=0` in every
   pty run** (else the one-time "make maxshell your default shell?" offer
   appears and is marked as answered on the user's machine),
   `MAXSHELL_HISTORY_FILE`, `MAXSHELL_DIRS_FILE`, `MAXSHELL_THEME_FILE`,
@@ -144,7 +144,8 @@ is lost. Use a temp dir for all scratch output, and when removing one, write
 
 - A built-in AI helper (`?`, `why`) was proposed and **declined**: this Mac
   has no Anthropic API key, and the user chose to skip it. `bot` is not
-  that: it's deliberately fake, pure if/else rules, no API or network.
+  that: it's deliberately fake — scored rules, README retrieval and a
+  trigram Markov chain over bundled text — no API, network or dependencies.
 - `view` and `top` deliberately shadow the system commands inside maxshell;
   `command view` / `command top` reach the originals.
 - Command position completes commands only (like zsh/fish); files complete
