@@ -287,4 +287,4 @@ function completions(line, cursor, shell) {
   return finish();
 }
 
-module.exports = { completions, commonPrefix, wordAtCursor, quoteFor, SUBCOMMANDS, BUILTIN_DESC };
+module.exports = { completions, commonPrefix, wordAtCursor, quoteFor, SUBCOMMANDS, BUILTIN_DESC, COMMAND_DESC };

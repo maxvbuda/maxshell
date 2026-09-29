@@ -298,22 +298,87 @@ test('cleanup explains its options, and -rn lists the biggest users without quit
 
 // --- bot -----------------------------------------------------------------------
 
-test('bot answers from its rules, first match wins', () => {
+test('bot answers from its rules', () => {
   const { reply } = require('../src/bot');
   const sh = shellIn(repo);
   const mem = {};
   assert.match(reply('what is 12 * 7 + 1', sh, mem), /85/);
   assert.match(reply('6-7', sh, mem), /6️⃣7️⃣/, 'not treated as maths');
-  assert.match(reply('my name is ada', sh, mem), /Ada/);
-  assert.match(reply('what is my name?', sh, mem), /You’re Ada/);
-  assert.match(reply("i'm fine", sh, mem), /.*/);
-  assert.strictEqual(mem.name, 'Ada', '“i’m fine” is not a name');
-  assert.match(reply('are you real ai?', sh, mem), /if\/else rules/);
+  assert.match(reply('whats 15% of 80', sh, mem), /is 12\b/);
+  assert.match(reply('100 f to c', sh, mem), /37\.78°C/);
+  assert.match(reply('5 miles in km', sh, mem), /8\.0467 km/);
+  assert.match(reply('are you real ai?', sh, mem), /if\/else rules|if-statements|flowchart/);
   assert.match(reply('how do I undo', sh, mem), /Ctrl-Z/);
   assert.match(reply('what is the weather', sh, mem), /internet/);
   assert.match(reply('which branch', sh, mem), /You’re on /);
+  assert.match(reply('what is grep', sh, mem), /`grep` is a program/);
   assert.match(reply('explain ls -la', sh, mem), /-a/);
+  assert.match(reply('how many letters in banana', sh, mem), /6 letters/);
+  assert.match(reply('reverse Hello', sh, mem), /^olleH/);
   assert.ok(reply('qwertyuiop', sh, mem).length > 0, 'always says something');
+});
+
+test('bot understands reactions: “that’s funny” after a joke is not a request for another', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = {};
+  const joke = reply('tell me a joke', sh, mem);
+  const reaction = reply("that's funny", sh, mem);
+  assert.notStrictEqual(reaction, joke);
+  assert.match(reaction, /another/i, 'it offers another instead');
+  const second = reply('yes', sh, mem);
+  assert.notStrictEqual(second, joke, 'yes gets a new joke, never the same one twice in a row');
+  assert.match(reply('that was lame', sh, mem), /another|chance|better/i);
+  assert.match(reply('why?', sh, mem), /funny|humour|rules/i);
+  assert.match(reply('say that again', sh, mem), /^I said: /);
+});
+
+test('bot remembers you', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = {};
+  assert.match(reply('hello', sh, mem), /name/);
+  assert.match(reply('ada', sh, mem), /Ada/, 'answering its question sets the name');
+  reply("i'm fine", sh, mem);
+  assert.strictEqual(mem.name, 'Ada', '“I’m fine” is not a name');
+  reply('my favorite color is green', sh, mem);
+  reply('i like cats', sh, mem);
+  reply('my birthday is march 3', sh, mem);
+  const about = reply('what do you know about me', sh, mem);
+  assert.match(about, /Ada/);
+  assert.match(about, /cats/);
+  assert.match(about, /green/);
+  assert.match(about, /March 3/);
+  assert.match(reply('days until my birthday', sh, mem), /days? until your birthday|is today/);
+});
+
+test('bot games keep score and end cleanly', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = {};
+  assert.match(reply('trivia', sh, mem), /Question 1 of 5/);
+  assert.match(reply('b', sh, mem), /Question 2 of 5/);
+  assert.match(reply('stop', sh, mem), /you got [01] of 1/);
+  assert.strictEqual(mem.game, null);
+  reply('rock paper scissors', sh, mem);
+  assert.match(reply('rock', sh, mem), /you \d : me \d/);
+  assert.match(reply('stop', sh, mem), /Final score/);
+  reply('guess the number', sh, mem);
+  const target = mem.game.n;
+  assert.match(reply(String(target - 1 || 1), sh, mem), /Higher|Yes/);
+  assert.match(reply(String(target), sh, mem), /🎯/);
+  reply('riddle', sh, mem);
+  assert.ok(mem.game && mem.game.type === 'riddle');
+  assert.match(reply('what time is it', sh, mem), /⏰/, 'a clear new request leaves the game');
+  assert.strictEqual(mem.game, null);
+});
+
+test('bot fixes typos but never real words', () => {
+  const { normalize } = require('../src/bot');
+  assert.strictEqual(normalize('tell me a jkoe').text, 'tell me a joke');
+  assert.strictEqual(normalize("what's the wieather?").text, 'what is the weather');
+  assert.strictEqual(normalize('play a game').text, 'play a game', '“game” is not “name”');
+  assert.ok(normalize('Is it true?').question);
 });
 
 test('bot chats until bye or the end of input, and answers one question as arguments', () => {

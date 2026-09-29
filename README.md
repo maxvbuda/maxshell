@@ -57,7 +57,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.25.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.26.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -67,7 +67,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.25.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.26.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -877,14 +877,30 @@ much memory came back.
 
 ### bot
 
-`bot` opens a chat with maxshell's "AI" — which is really a long list of
+`bot` opens a chat with maxshell's "AI" — which is really a big set of
 if/else rules, no AI and no internet (ask it, and it admits it). It answers
-at a `🤖 bot ❯` line while you type at `you ❯`: small talk (and your name, if
-you tell it), the time and date, maths (`what is 12 * 7`), jokes, dice and
-coins, "pick pizza or tacos", what's in this folder, how git looks, `explain
-tar -xzf a.tgz`, and "how do I …" for maxshell itself (undo, jobs, the
-palette, cleanup, themes…). `bye`, `exit`, `quit` or Ctrl-D leave;
-`bot what time is it` answers one question and returns.
+at a `🤖 bot ❯` line while you type at `you ❯`, and it keeps track of the
+conversation:
+
+- **it knows what it just said** — "that's funny" after a joke gets a thank
+  you and "want another?", "lame" gets an apology; "another", "again",
+  "why?" and "say that again" refer to the last thing, and yes/no answer
+  its questions;
+- **it remembers you** — your name, what you like, your favourites and your
+  birthday ("what do you know about me", "days until my birthday");
+- **games** — trivia with a score, riddles, rock paper scissors, guess the
+  number;
+- **it knows things** — jokes (never the same twice in a row), fun facts,
+  quotes, advice; maths, percentages, square roots, averages and unit
+  conversions (`100 f to c`, `5 miles in km`, `2 gb in mb`); the time, dates,
+  "days until Christmas", "what day is July 4"; dice, coins, "pick pizza or
+  tacos", a magic 8-ball, passwords; reverse, spell and count words;
+- **your Mac and maxshell** — battery, memory, CPU, disk; "what is grep",
+  `explain tar -xzf a.tgz`, "how do I undo", what's in this folder, which
+  git branch.
+
+It shrugs off small typos. `bye`, `exit`, `quit` or Ctrl-D leave; `bot what
+time is it` answers one question and returns.
 
 ### 6-7
 
@@ -1030,7 +1046,8 @@ src/dash.js         The live dashboard
 src/snippets.js     Snippet and bookmark storage
 src/cleanup.js      cleanup: the biggest memory and CPU users, and quitting them
 src/brainrot.js     6-7
-src/bot.js          bot: a chat made of if/else rules
+src/bot.js          bot: a chat made of if/else rules, with conversation state
+src/botdata.js      bot's jokes, facts, riddles, trivia and quotes
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks
