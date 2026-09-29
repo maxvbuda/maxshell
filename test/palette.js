@@ -296,6 +296,40 @@ test('cleanup explains its options, and -rn lists the biggest users without quit
   assert.ok(sh.lines.some((l) => /Memory .* in use/.test(ansi.strip(l))));
 });
 
+// --- bot -----------------------------------------------------------------------
+
+test('bot answers from its rules, first match wins', () => {
+  const { reply } = require('../src/bot');
+  const sh = shellIn(repo);
+  const mem = {};
+  assert.match(reply('what is 12 * 7 + 1', sh, mem), /85/);
+  assert.match(reply('6-7', sh, mem), /6️⃣7️⃣/, 'not treated as maths');
+  assert.match(reply('my name is ada', sh, mem), /Ada/);
+  assert.match(reply('what is my name?', sh, mem), /You’re Ada/);
+  assert.match(reply("i'm fine", sh, mem), /.*/);
+  assert.strictEqual(mem.name, 'Ada', '“i’m fine” is not a name');
+  assert.match(reply('are you real ai?', sh, mem), /if\/else rules/);
+  assert.match(reply('how do I undo', sh, mem), /Ctrl-Z/);
+  assert.match(reply('what is the weather', sh, mem), /internet/);
+  assert.match(reply('which branch', sh, mem), /You’re on /);
+  assert.match(reply('explain ls -la', sh, mem), /-a/);
+  assert.ok(reply('qwertyuiop', sh, mem).length > 0, 'always says something');
+});
+
+test('bot chats until bye or the end of input, and answers one question as arguments', () => {
+  const sh = shellIn(repo);
+  sh.run("bot <<< $'hello\\nbye\\nnever read'");
+  const text = sh.lines.join('\n');
+  assert.match(text, /🤖 bot ❯ Hi!/);
+  assert.ok(!/never read/.test(text));
+  sh.lines.length = 0;
+  sh.run('bot what is 2 + 2');
+  assert.deepStrictEqual(sh.lines, ['🤖 bot ❯ That’s 4. 🧮']);
+  sh.lines.length = 0;
+  sh.run('bot < /dev/null');
+  assert.match(sh.lines[sh.lines.length - 1], /Bye/);
+});
+
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* fine */ }
 
 if (failures) {

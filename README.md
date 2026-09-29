@@ -57,7 +57,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.24.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.25.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -67,7 +67,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.24.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.25.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -875,6 +875,17 @@ biggest remaining users (an app's helpers counted together) and asks which
 of those to quit too (`1 3`, `2-4`, `all`, or Enter for none), and shows how
 much memory came back.
 
+### bot
+
+`bot` opens a chat with maxshell's "AI" — which is really a long list of
+if/else rules, no AI and no internet (ask it, and it admits it). It answers
+at a `🤖 bot ❯` line while you type at `you ❯`: small talk (and your name, if
+you tell it), the time and date, maths (`what is 12 * 7`), jokes, dice and
+coins, "pick pizza or tacos", what's in this folder, how git looks, `explain
+tar -xzf a.tgz`, and "how do I …" for maxshell itself (undo, jobs, the
+palette, cleanup, themes…). `bye`, `exit`, `quit` or Ctrl-D leave;
+`bot what time is it` answers one question and returns.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
@@ -969,6 +980,7 @@ real path still works (`j ../other` acts like `cd`).
 | `snip`, `mark`, `marks`, `go` | snippets and folder bookmarks (see above) |
 | `cleanup` | quit what isn't needed; `-r` / `-c` then free memory / CPU (see above) |
 | `6-7` | brainrot mode (see above) |
+| `bot` | chat with a rules-only "AI" bot (see above) |
 | `ls` | icons, colours, git status, `-l` and `--tree` at the prompt; the real `ls` elsewhere |
 | `gitui` | the built-in git browser (see above) |
 
@@ -1018,6 +1030,7 @@ src/dash.js         The live dashboard
 src/snippets.js     Snippet and bookmark storage
 src/cleanup.js      cleanup: the biggest memory and CPU users, and quitting them
 src/brainrot.js     6-7
+src/bot.js          bot: a chat made of if/else rules
 src/gitui.js        git browser: status, staging, diffs, commit
 src/git.js          git plumbing and porcelain v2 status parsing
 src/github.js       GitHub through gh: repo, pull requests, issues, runs, checks

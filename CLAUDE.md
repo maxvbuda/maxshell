@@ -143,7 +143,8 @@ is lost. Use a temp dir for all scratch output, and when removing one, write
 ## Decided already
 
 - A built-in AI helper (`?`, `why`) was proposed and **declined**: this Mac
-  has no Anthropic API key, and the user chose to skip it.
+  has no Anthropic API key, and the user chose to skip it. `bot` is not
+  that: it's deliberately fake, pure if/else rules, no API or network.
 - `view` and `top` deliberately shadow the system commands inside maxshell;
   `command view` / `command top` reach the originals.
 - Command position completes commands only (like zsh/fish); files complete
