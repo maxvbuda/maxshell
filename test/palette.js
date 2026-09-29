@@ -222,7 +222,7 @@ test('cleanup groups an app’s helpers, skips the system and other users, and r
   assert.strictEqual(byCpu[0].cpu, 40);
 });
 
-test('cleanup finds windowless apps, leftover helpers and orphaned stopped processes', () => {
+test('cleanup finds apps you can’t see, leftover helpers, stray dev servers and orphaned stopped processes', () => {
   const { unnecessary } = require('../src/cleanup');
   const MB = 1024 * 1024;
   const P = (pid, name, command, extra = {}) => ({ pid, ppid: 100, name, user: 'me', rss: 100 * MB, cpu: 1, command, ...extra });
@@ -238,19 +238,28 @@ test('cleanup finds windowless apps, leftover helpers and orphaned stopped proce
     P(60, 'vim', 'vim notes.txt', { ppid: 1 }),
     P(70, 'vim', 'vim other.txt'),
     P(80, 'Terminal', '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'),
+    P(90, 'Preview', '/System/Applications/Preview.app/Contents/MacOS/Preview'),
+    P(91, 'Calendar', '/System/Applications/Calendar.app/Contents/MacOS/Calendar'),
+    P(92, 'node', 'node /Users/me/site/server.js', { ppid: 1 }),
+    P(93, 'node', 'node /opt/homebrew/Cellar/x/bin/daemon', { ppid: 1 }),
+    P(94, 'python3', 'python3 app.py', { ppid: 1 }),
   ];
   const found = unnecessary(procs, {
     user: 'me',
-    apps: [{ name: 'Slack', pid: 10 }, { name: 'Notes', pid: 20 }, { name: 'Music', pid: 30 }, { name: 'Terminal', pid: 80 }],
-    windows: { 20: 2 },
-    states: [{ pid: 60, ppid: 1, stopped: true }, { pid: 70, ppid: 100, stopped: true }],
+    apps: [{ name: 'Slack', pid: 10 }, { name: 'Notes', pid: 20 }, { name: 'Music', pid: 30 }, { name: 'Terminal', pid: 80 },
+      { name: 'Preview', pid: 90 }, { name: 'Calendar', pid: 91, frontmost: true }],
+    windows: { 20: { all: 2, onscreen: 1 }, 90: { all: 1, onscreen: 0 } },
+    states: [{ pid: 60, ppid: 1, stopped: true }, { pid: 70, ppid: 100, stopped: true },
+      { pid: 92, ppid: 1, tty: false }, { pid: 93, ppid: 1, tty: false }, { pid: 94, ppid: 1, tty: true }],
     exclude: new Set([80]),
     keep: new Set(['Music']),
   });
   const names = found.map((g) => `${g.name}: ${g.reason}`);
   assert.deepStrictEqual(names, [
     'Slack: open with no windows',
+    'Preview: not on screen (hidden, minimised or on another Space)',
     'Google Chrome helpers: Google Chrome isn\'t running',
+    'node /Users/me/site/server.js: left running with no terminal',
     'vim: suspended, and its shell has closed',
   ]);
   assert.deepStrictEqual(found[0].pids, [10, 11], 'the app goes with its helpers');

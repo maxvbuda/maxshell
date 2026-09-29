@@ -8,7 +8,8 @@ const theme = require('./theme');
 const { humanBytes, meter, fit } = require('./tui');
 const { readProcesses } = require('./top');
 
-// `cleanup` quits what isn't needed — apps left open with no windows,
+// `cleanup` quits what isn't needed — apps you can't see (no window on
+// screen), dev servers left running with no terminal,
 // helpers whose app has quit, suspended programs nothing can resume — and
 // with -r (memory) or -c (CPU) then lists the biggest remaining users to
 // choose from. Only your own programs, never the system's or this shell's
@@ -95,14 +96,17 @@ function keepList() {
 // The regular (Dock) apps that are running: [{ name, pid }].
 function runningApps() {
   if (process.platform !== 'darwin') return [];
-  const r = spawnSync('osascript', ['-e', 'tell application "System Events" to get {name, unix id} of (every application process whose background only is false)'], { encoding: 'utf8', timeout: 5000 });
+  const r = spawnSync('osascript', ['-e', 'tell application "System Events" to get {name, unix id, frontmost} of (every application process whose background only is false)'], { encoding: 'utf8', timeout: 5000 });
   const parts = (r.stdout || '').trim().split(', ');
-  const half = parts.length / 2;
-  if (!Number.isInteger(half)) return [];
-  return parts.slice(0, half).map((name, i) => ({ name, pid: Number(parts[half + i]) })).filter((a) => a.pid > 0);
+  const third = parts.length / 3;
+  if (!Number.isInteger(third)) return [];
+  return parts.slice(0, third)
+    .map((name, i) => ({ name, pid: Number(parts[third + i]), frontmost: parts[2 * third + i] === 'true' }))
+    .filter((a) => a.pid > 0);
 }
 
-// Real windows per process id — on any Space, minimised or not. Menu-bar
+// Real windows per process id: { all, onscreen } — onscreen means visible
+// right now (not hidden, minimised, or on another Space). Menu-bar
 // strips, placeholders and tiny helper windows don't count. Read from the
 // window server, which needs no special permission.
 function windowCounts() {
@@ -114,19 +118,25 @@ function windowCounts() {
       if (w.kCGWindowLayer !== 0 || !w.kCGWindowBounds) continue;
       const b = w.kCGWindowBounds;
       if (b.Width < 200 || b.Height < 150 || (b.Width === 500 && b.Height === 500)) continue;
-      count[w.kCGWindowOwnerPID] = (count[w.kCGWindowOwnerPID] || 0) + 1;
+      const c = count[w.kCGWindowOwnerPID] || (count[w.kCGWindowOwnerPID] = { all: 0, onscreen: 0 });
+      c.all++;
+      if (w.kCGWindowIsOnscreen) c.onscreen++;
     }
     JSON.stringify(count)`;
   const r = spawnSync('osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 5000 });
   try { return JSON.parse(r.stdout); } catch { return null; }
 }
 
-// Stopped processes and their parents: [{ pid, ppid, stopped }].
+// Every process's parent, whether it's stopped, and whether it has a
+// terminal: [{ pid, ppid, stopped, tty }].
 function processStates() {
-  const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,stat='], { encoding: 'utf8', timeout: 5000 });
-  return (r.stdout || '').split('\n').map((l) => l.trim().split(/\s+/)).filter((f) => f.length === 3)
-    .map(([pid, ppid, stat]) => ({ pid: Number(pid), ppid: Number(ppid), stopped: stat.startsWith('T') }));
+  const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,stat=,tty='], { encoding: 'utf8', timeout: 5000 });
+  return (r.stdout || '').split('\n').map((l) => l.trim().split(/\s+/)).filter((f) => f.length === 4)
+    .map(([pid, ppid, stat, tty]) => ({ pid: Number(pid), ppid: Number(ppid), stopped: stat.startsWith('T'), tty: tty !== '??' }));
 }
+
+// Interpreters and runtimes a dev server or script runs under.
+const RUNTIMES = new Set(['node', 'python', 'python3', 'Python', 'ruby', 'perl', 'php', 'java', 'deno', 'bun', 'npm', 'npx', 'yarn', 'pnpm', 'vite', 'next-server', 'webpack', 'esbuild', 'tsc', 'nodemon', 'flask', 'uvicorn', 'gunicorn', 'jupyter-lab', 'jupyter-notebook', 'rails', 'puma', 'hugo', 'jekyll']);
 
 // Finds what isn't needed: windowless apps, helpers whose app has quit, and
 // stopped processes nothing can resume. Returns groups with a reason.
@@ -136,11 +146,15 @@ function unnecessary(procs, { apps = [], windows = null, states = [], user = os.
   const mine = procs.filter((p) => p.user === user && !exclude.has(p.pid) && !PROTECTED.has(p.name));
   const excludedApps = new Set(procs.filter((p) => exclude.has(p.pid)).map((p) => appOf(p.command)).filter(Boolean));
 
-  // 1. Apps that are open but have no windows.
+  // 1. Apps you can't see: no window on screen (none at all, or all of
+  //    them hidden, minimised or on another Space), and not the one in use.
   if (windows) {
     for (const app of apps) {
       if (keep.has(app.name) || PROTECTED.has(app.name) || excludedApps.has(app.name) || exclude.has(app.pid)) continue;
-      if (windows[app.pid]) continue;
+      if (app.frontmost) continue;
+      const w = windows[app.pid];
+      const count = typeof w === 'number' ? { all: w, onscreen: w } : w || { all: 0, onscreen: 0 };
+      if (count.onscreen) continue;
       const main = procs.find((p) => p.pid === app.pid);
       if (!main || main.user !== user) continue;
       const bundle = appOf(main.command);
@@ -149,7 +163,7 @@ function unnecessary(procs, { apps = [], windows = null, states = [], user = os.
       found.push({
         name: app.name, app: app.name, pids: members.map((p) => p.pid),
         rss: members.reduce((a, p) => a + p.rss, 0), cpu: members.reduce((a, p) => a + p.cpu, 0),
-        reason: 'open with no windows',
+        reason: count.all ? 'not on screen (hidden, minimised or on another Space)' : 'open with no windows',
       });
     }
   }
@@ -172,6 +186,18 @@ function unnecessary(procs, { apps = [], windows = null, states = [], user = os.
     taken.add(p.pid);
   }
   found.push(...leftovers.values());
+
+  // 3b. Dev servers and scripts left running with no terminal: a runtime
+  //     (node, python…) whose shell has gone, not started by an app or a
+  //     service manager.
+  for (const st of states) {
+    if (st.ppid !== 1 || st.tty || st.stopped || taken.has(st.pid)) continue;
+    const p = mine.find((x) => x.pid === st.pid);
+    if (!p || !RUNTIMES.has(p.name)) continue;
+    if (/\.app\/|\/Library\/|\/Cellar\/|\/homebrew\/opt\/|LaunchAgents|\bbrew\b/.test(p.command)) continue;
+    taken.add(p.pid);
+    found.push({ name: `${p.name} ${p.command.split(/\s+/).slice(1).join(' ')}`.trim().slice(0, 40), app: null, pids: [p.pid], rss: p.rss, cpu: p.cpu, reason: 'left running with no terminal' });
+  }
 
   // 3. Stopped processes whose shell is gone, so nothing can resume them.
   for (const st of states) {

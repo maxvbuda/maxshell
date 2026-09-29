@@ -40,7 +40,7 @@ maxshell greets you with its logo painted in the current theme's gradient,
 plus a tip about something it can do:
 
 ```
-  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.21.0 · theme maxshell
+  █▀▄▀█ ▄▀█ ▀▄▀ █▀ █ █ █▀▀ █   █      maxshell 0.22.0 · theme maxshell
   █ ▀ █ █▀█ █ █ ▄█ █▀█ ██▄ █▄▄ █▄▄    tip: j cook jumps to the folder you use most
 ```
 
@@ -50,7 +50,7 @@ The default prompt is one line: the folder you're in and its git state, then
 a `❯` that turns the theme's error colour when the last command failed.
 
 ```
-~/maxshell · main !? ❯ git status                 📦 v0.21.0 · ⬢ 25.1.0 · 12:04
+~/maxshell · main !? ❯ git status                 📦 v0.22.0 · ⬢ 25.1.0 · 12:04
 ```
 
 maxshell also tells the terminal where you are, so the window or tab title
@@ -841,9 +841,13 @@ cleanup --keep Slack    # never count Slack as unnecessary
 `cleanup` finds and quits, without asking, what isn't doing anything for
 you:
 
-- **apps open with no windows** — on any Space, minimised windows count as
-  open — except ones people keep windowless on purpose (Music, Spotify,
+- **apps you can't see** — no window on screen: none open, or all of them
+  hidden (⌘H), minimised or on another Space — other than the app you're
+  using and ones people keep in the background on purpose (Music, Spotify,
   Mail, Messages, your terminal…, plus anything you `--keep`);
+- **dev servers and scripts left running with no terminal** — `node`,
+  `python`, `ruby` and friends whose window was closed (services started by
+  Homebrew or an app are left alone);
 - **helpers left behind** by an app you've already quit;
 - **suspended programs whose shell has closed**, which nothing can resume.
 
