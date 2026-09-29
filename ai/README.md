@@ -18,7 +18,7 @@ you ❯ how do I pause a program?
 | Dataset | `make-dataset.js` — ~138k conversations (~8M tokens) generated on this Mac: bot's rule engine used as a teacher across thousands of phrasings (including multi-turn: a joke, "that's funny", "yes"), maxshell's README, every command's one-line description from the Mac's manual index (`apropos`), hand-written small talk, identity, general knowledge and arithmetic, and honest "I don't know" answers. Each conversation starts with a context line (date, time, your name) that the model learns to read. |
 | Tokenizer | Byte-level BPE, 2,048 tokens (1,787 merges + 256 bytes + 5 specials: `<\|doc\|>` `<\|sys\|>` `<\|user\|>` `<\|ai\|>` `<\|end\|>`). |
 | Model | GPT: 8 layers, 384 wide, 6 heads, 256-token context, learned positions, pre-LayerNorm, GELU MLP, output tied to the token embedding — **15M parameters**. |
-| Training | `train.py` — PyTorch on the Apple GPU (MPS): AdamW, warmup + cosine, loss only on the AI's words, batches of 32 × 256 tokens. The shipped model is the step-3,000 checkpoint (validation loss 0.17) of a planned 5,000-step run on an M3. |
+| Training | `train.py` — PyTorch on the Apple GPU (MPS): AdamW, warmup + cosine, loss only on the AI's words, batches of 32 × 256 tokens. The shipped model: 3,000 steps on the first dataset, then 2,000 more on the how-to dataset (validation loss 0.087). `node ai/eval.js` scores it by skill (98% of 110 checks). |
 | On device | `models/mx.bin` — int8 weights with a scale per row (15 MB) — run by `src/ai.js` in plain JavaScript (no dependencies) with a key/value cache, ~10 ms per token, streaming. |
 
 For scale: GPT-2 small has 124M parameters and was trained on 40 GB of web
