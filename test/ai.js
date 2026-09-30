@@ -99,6 +99,32 @@ test('streamed pieces add up to the reply', () => {
   assert.strictEqual(streamed.trim(), text);
 });
 
+test('training status notices a pause for sleep, and the resume after it', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-status-'));
+  const log = path.join(dir, 'train.log');
+  const steps = 'run: --steps 7500 --batch 8x4 --lr 0.0006\nmodel: 42.70M parameters\nstep     50  loss 6.100  lr 6.00e-05  1.0 min  (~20.0 h left)\n';
+  fs.writeFileSync(log, `${steps}  ⏸ Mac going to sleep — saving and pausing (22:10)\n  saved at step 52\n    progress saved (22:10)\n`);
+  let st = ai.trainingStatus(log);
+  assert.strictEqual(st.total, 7500);
+  assert.ok(st.asleep, 'paused while asleep');
+  assert.strictEqual(st.sleeps, 1);
+  fs.appendFileSync(log, '  ▶ Mac awake — training resumed (07:30)\nstep    100  loss 5.200  lr 1.20e-04  3.0 min  (~19.0 h left)\n');
+  st = ai.trainingStatus(log);
+  assert.ok(!st.asleep, 'running again after wake');
+  assert.match(st.lastEvent, /awake .* at 07:30/);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('the training service restarts on failure and starts at login', () => {
+  const plist = ai.servicePlist('/x/maxshell');
+  assert.match(plist, /<string>\/x\/maxshell\/ai\/mx2\/run-training.sh<\/string>/);
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.match(plist, /<key>SuccessfulExit<\/key><false\/>/);
+});
+
 if (failures) {
   console.error(`\n${failures} ai test(s) failed`);
   process.exit(1);

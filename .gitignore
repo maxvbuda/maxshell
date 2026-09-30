@@ -2,3 +2,5 @@ node_modules/
 *.log
 .DS_Store
 ai/data/
+ai/mx2/data/
+__pycache__/

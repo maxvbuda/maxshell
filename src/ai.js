@@ -348,7 +348,13 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
 // --- training progress -------------------------------------------------------------------
 
 // Reads ai/data/train.log: steps, losses, validation checks, samples.
-function trainingStatus(logFile = path.join(__dirname, '..', 'ai', 'data', 'train.log')) {
+// The newest run's log: mx2's when there is one, else the original mx.
+function trainingLog() {
+  const mx2 = path.join(__dirname, '..', 'ai', 'mx2', 'data', 'train.log');
+  return fs.existsSync(mx2) ? mx2 : path.join(__dirname, '..', 'ai', 'data', 'train.log');
+}
+
+function trainingStatus(logFile = trainingLog()) {
   let text;
   try { text = fs.readFileSync(logFile, 'utf8'); } catch { return null; }
   const steps = [...text.matchAll(/^step\s+(\d+)\s+loss ([\d.]+)\s+lr ([\d.e+-]+)\s+([\d.]+) min/gm)]
@@ -362,13 +368,20 @@ function trainingStatus(logFile = path.join(__dirname, '..', 'ai', 'data', 'trai
   if (lastBlock >= 0) {
     for (const m of text.slice(lastBlock).matchAll(/^\s+'(.*?)'\s+→ '(.*)'$/gm)) samples.push([m[1], m[2]]);
   }
-  const done = /exported [\d.]+ MB/.test(text);
-  return { steps, vals, total, params, tokens, samples, done, mtime: fs.statSync(logFile).mtimeMs };
+  const done = /exported [\d.]+ MB|^done — exported/m.test(text);
+  // Sleep and wake, from sleepwatch: paused if the last event is a sleep with
+  // no training output after it.
+  const events = [...text.matchAll(/^\s+([⏸▶]) (.*?) \((\d\d:\d\d)\)$/gm)];
+  const lastEvent = events.length ? events[events.length - 1] : null;
+  const asleep = !!lastEvent && lastEvent[1] === '⏸' && !/^step\s/m.test(text.slice(lastEvent.index));
+  const sleeps = events.filter((e) => e[1] === '⏸').length;
+  return { steps, vals, total, params, tokens, samples, done, asleep, sleeps, lastEvent: lastEvent && `${lastEvent[1]} ${lastEvent[2]} at ${lastEvent[3]}`,
+    service: serviceRunning(), mtime: fs.statSync(logFile).mtimeMs };
 }
 
 function showStatus(write, t, ansi) {
   const st = trainingStatus();
-  if (!st || !st.steps.length) { write('No training run found (ai/data/train.log). Start one with: python3 ai/train.py\n'); return 1; }
+  if (!st || !st.steps.length) { write('No training run found yet. Start one with: ai --train start\n'); return 1; }
   const R = ansi.reset();
   const mu = (s) => `${ansi.fg(t.ui.muted)}${s}${R}`;
   const last = st.steps[st.steps.length - 1];
@@ -387,7 +400,11 @@ function showStatus(write, t, ansi) {
   const rate = rates.length ? rates[Math.floor(rates.length / 2)] : null;
   const left = rate ? Math.round((st.total - last.step) * rate) : null;
   const stale = Date.now() - st.mtime > 5 * 60 * 1000;
-  write(`${ansi.bold()}mx training${R}  ${st.done ? `${ansi.fg(t.ui.ok)}finished${R}` : stale ? `${ansi.fg(t.ui.warn)}paused or stopped (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}` : `${ansi.fg(t.ui.ok)}running${R}`}\n`);
+  const state = st.done ? `${ansi.fg(t.ui.ok)}finished${R}`
+    : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
+      : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
+        : `${ansi.fg(t.ui.ok)}running${R}`;
+  write(`${ansi.bold()}${/mx2/.test(trainingLog()) ? 'mx2' : 'mx'} training${R}  ${state}\n`);
   write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  ~${left} min to go`) : ''}\n`);
   if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
   const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
@@ -397,11 +414,76 @@ function showStatus(write, t, ansi) {
   write(`  loss      ${last.loss.toFixed(3)} now  ${mu(trend.map((v) => bars[Math.round(((v - lo) / (hi - lo || 1)) * 7)]).join(''))}  ${mu(`started at ${st.steps[0].loss.toFixed(2)}`)}\n`);
   if (st.vals.length) write(`  held out  ${st.vals[st.vals.length - 1].toFixed(3)} validation loss ${mu(`(${st.vals.map((v) => v.toFixed(2)).join(' → ')})`)}\n`);
   write(`  lr        ${last.lr.toExponential(2)}\n`);
+  if (st.lastEvent) write(`  sleep     ${st.sleeps} pause${st.sleeps === 1 ? '' : 's'} so far ${mu(`(last: ${st.lastEvent})`)}\n`);
+  if (!st.done) write(mu(`  ${st.service ? 'runs as a background service: survives sleep and restarts; stop with ai --train stop' : 'not running as a service — start with ai --train start'}\n`));
   if (st.samples.length) {
     write(`  ${mu('latest samples:')}\n`);
     for (const [q, a] of st.samples) write(`    ${q.padEnd(30)} ${mu('→')} ${a}\n`);
   }
   return 0;
+}
+
+// --- training as a background service -----------------------------------------------------
+//
+// A LaunchAgent runs ai/mx2/run-training.sh: it starts at login, restarts
+// if training stops for any reason, and the script makes training save and
+// pause around sleep. Everything resumes from the last checkpoint.
+
+const SERVICE = 'com.maxshell.mx2-train';
+const agentFile = () => path.join(process.env.MAXSHELL_LAUNCH_AGENTS || path.join(os.homedir(), 'Library', 'LaunchAgents'), `${SERVICE}.plist`);
+
+function servicePlist(root = path.join(__dirname, '..')) {
+  const esc = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${SERVICE}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>${esc(path.join(root, 'ai', 'mx2', 'run-training.sh'))}</string></array>
+  <key>WorkingDirectory</key><string>${esc(root)}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>${esc(path.join(root, 'ai', 'mx2', 'data', 'service.err'))}</string>
+</dict>
+</plist>
+`;
+}
+
+function serviceRunning() {
+  if (!fs.existsSync(agentFile())) return false;
+  const r = require('child_process').spawnSync('launchctl', ['print', `gui/${process.getuid()}/${SERVICE}`], { encoding: 'utf8' });
+  return r.status === 0 && /state = running/.test(r.stdout);
+}
+
+function trainService(action, write, err) {
+  const { spawnSync } = require('child_process');
+  const domain = `gui/${process.getuid()}`;
+  const file = agentFile();
+  if (action === 'start') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, servicePlist());
+    spawnSync('launchctl', ['bootout', `${domain}/${SERVICE}`], { stdio: 'ignore' });
+    const r = spawnSync('launchctl', ['bootstrap', domain, file], { encoding: 'utf8' });
+    if (r.status !== 0) { err(`ai: couldn't start the training service: ${(r.stderr || '').trim()}\n`); return 1; }
+    write('mx2 training is running in the background.\n'
+      + '  • Closing the lid or sleeping saves progress and pauses; it continues when the Mac wakes.\n'
+      + '  • If the Mac restarts or training stops, it starts again and picks up where it left off.\n'
+      + '  • Watch it with ai --status; stop it for good with ai --train stop.\n');
+    return 0;
+  }
+  if (action === 'stop') {
+    // bootout sends SIGTERM: the trainer saves a checkpoint before it exits.
+    spawnSync('launchctl', ['bootout', `${domain}/${SERVICE}`], { stdio: 'ignore' });
+    try { fs.unlinkSync(file); } catch { /* wasn't installed */ }
+    write('mx2 training stopped (progress is saved). Start again with ai --train start.\n');
+    return 0;
+  }
+  err('usage: ai --train start|stop\n');
+  return 2;
 }
 
 // --- the `ai` command ---------------------------------------------------------------------
@@ -414,6 +496,7 @@ function runAi(args, io, shell) {
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
   if (args[0] === '--status' || args[0] === '--training') return showStatus(write, t, ansi);
+  if (args[0] === '--train') return trainService(args[1], write, err);
   if (args[0] === '--info') {
     if (!available()) { err('ai: no model yet — train one with: python3 ai/train.py\n'); return 1; }
     const { model } = load();
@@ -471,5 +554,5 @@ function runAi(args, io, shell) {
 
 module.exports = {
   Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, nameFrom, guardName, reply, runAi, available,
-  load, trainingStatus,
+  load, trainingStatus, servicePlist,
 };

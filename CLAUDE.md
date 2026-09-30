@@ -58,6 +58,11 @@ holds how it's made (`make-dataset.js` → `ai/data/dataset.jsonl`,
 cache, sampling). After changing the architecture or export format, check
 `python3 ai/train.py --parity` against the JS logits. Python/PyTorch are
 training-time only; `ai/data/` is gitignored, `models/` is committed.
+mx2 (`ai/mx2/`): hand-written data (`code/`, validated by `validate.js`;
+`sitegen.js`; `knowledge/*.md`) → `make-corpus.js` → `train.py` (RMSNorm,
+RoPE, SwiGLU; 512-token phase then 2048). `ai --train start` installs the
+LaunchAgent `com.maxshell.mx2-train` running `run-training.sh`, which starts
+`sleepwatch` (IOKit: SIGUSR1 → save before sleep) and `caffeinate`.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

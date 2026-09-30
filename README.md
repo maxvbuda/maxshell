@@ -934,6 +934,23 @@ eighth the size of GPT-2 small — so it can be confidently wrong about things
 outside that; it'll tell you so if you ask. `ai --info` describes the model.
 `bot` is the rule-based chat; `ai` is the trained one.
 
+**mx2**, its bigger successor (43M parameters, Llama-style, trained to code
+— websites especially — and to answer general questions), trains in the
+background for most of a day:
+
+| Command | What it does |
+|---|---|
+| `ai --train start` | start training as a macOS background service |
+| `ai --status` | progress, loss, time left, samples, sleep pauses |
+| `ai --train stop` | save and stop for good |
+
+Training is sleep-safe. Before the Mac sleeps (lid closed, Sleep, idle) a
+small helper tells it to save a checkpoint, and holds off sleep until the
+save is done; on wake it just carries on. While it runs, the Mac won't
+idle-sleep, but closing the lid still sleeps it. If the Mac restarts or
+training stops for any reason, it starts again at login and picks up from
+the last checkpoint.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
