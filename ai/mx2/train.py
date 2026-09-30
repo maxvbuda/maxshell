@@ -30,7 +30,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DATA = os.path.join(HERE, 'data')
-MODELS = os.path.join(ROOT, 'models')
+MODELS = os.environ.get('MX2_EXPORT_DIR') or os.path.join(ROOT, 'models')
 sys.path.insert(0, os.path.dirname(HERE))
 from train import BPE, SPECIALS  # noqa: E402  (mx's tokenizer code, reused)
 

@@ -215,15 +215,22 @@ function sampleToken(logits, { temperature = 0.7, topK = 40, rand = Math.random,
 
 let loaded = null;
 
-function available() {
-  return fs.existsSync(path.join(MODELS, 'mx.bin')) && fs.existsSync(path.join(MODELS, 'mx-tokenizer.json'));
+// mx2 when it's been trained and exported, else the original mx.
+function modelName() {
+  const has = (n) => fs.existsSync(path.join(MODELS, `${n}.bin`)) && fs.existsSync(path.join(MODELS, `${n}-tokenizer.json`));
+  if (process.env.MAXSHELL_AI !== 'mx' && has('mx2')) return 'mx2';
+  return has('mx') ? 'mx' : null;
 }
+
+function available() { return modelName() !== null; }
 
 function load() {
   if (loaded) return loaded;
-  const tok = new Tokenizer(JSON.parse(fs.readFileSync(path.join(MODELS, 'mx-tokenizer.json'), 'utf8')));
-  const model = new Model(loadWeights(path.join(MODELS, 'mx.bin')));
-  loaded = { tok, model };
+  const name = modelName();
+  const tok = new Tokenizer(JSON.parse(fs.readFileSync(path.join(MODELS, `${name}-tokenizer.json`), 'utf8')));
+  const file = path.join(MODELS, `${name}.bin`);
+  const model = name === 'mx2' ? new (require('./mx2').Model2)(file) : new Model(loadWeights(file));
+  loaded = { tok, model, name };
   return loaded;
 }
 
@@ -302,16 +309,21 @@ function guardName(text, name) {
 
 // Generates the reply to a conversation. `onText` receives text as it's
 // produced (whole UTF-8 characters only).
-function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = 120, rand = Math.random, onText = null } = {}) {
+// mx2 can answer at length (whole programs and websites), so it gets most
+// of its context for the reply; `stop()` is polled to cut an answer short.
+function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = null, rand = Math.random, onText = null, stop = null } = {}) {
   const { tok, model } = load();
   const S = tok.special;
   const ctx = model.config.ctx;
+  const big = !!model.feed;
+  if (maxTokens === null) maxTokens = big ? ctx : 120;
   const last = turns.length ? turns[turns.length - 1][1] : '';
   name = nameFrom(turns) || name;
-  const prompt = promptTokens(tok, contextLine(now, name, calculate(last)), turns, ctx - Math.min(maxTokens, 96));
+  const prompt = promptTokens(tok, contextLine(now, name, calculate(last)), turns, ctx - (big ? Math.min(maxTokens, 1024) : Math.min(maxTokens, 96)));
   model.reset();
   let logits;
-  for (const t of prompt) logits = model.step(t);
+  if (big) logits = model.feed(prompt);
+  else for (const t of prompt) logits = model.step(t);
   // Special tokens other than <|end|> never belong in a reply.
   const banned = new Set(Object.entries(S).filter(([k]) => k !== '<|end|>').map(([, v]) => v));
   const out = [];
@@ -333,6 +345,7 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
     if (piece) { text += piece; if (onText) onText(piece); }
   };
   for (let i = 0; i < maxTokens && model.pos < ctx; i++) {
+    if (stop && i % 4 === 0 && stop()) break;
     const next = sampleToken(logits, { temperature, topK, rand, banned });
     if (next === S['<|end|>']) break;
     out.push(next);
@@ -486,6 +499,36 @@ function trainService(action, write, err) {
   return 2;
 }
 
+// Ctrl-C or Esc while an answer is being written: the terminal goes raw
+// and a non-blocking /dev/tty is polled between tokens.
+function interruptWatch() {
+  const none = { hit: () => false, done() {} };
+  if (!process.stdin.isTTY) return none;
+  let fd;
+  try {
+    fd = fs.openSync('/dev/tty', fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    process.stdin.setRawMode(true);
+  } catch { if (fd !== undefined) fs.closeSync(fd); return none; }
+  const buf = Buffer.alloc(64);
+  let stopped = false;
+  return {
+    hit() {
+      if (stopped || fd === null) return stopped;
+      try {
+        const n = fs.readSync(fd, buf, 0, buf.length, null);
+        if (n > 0 && (buf.subarray(0, n).includes(3) || buf[0] === 0x1b)) stopped = true;
+      } catch { /* EAGAIN: nothing typed */ }
+      return stopped;
+    },
+    done() {
+      if (fd === null) return;
+      try { process.stdin.setRawMode(false); } catch { /* not a tty any more */ }
+      fs.closeSync(fd);
+      fd = null;
+    },
+  };
+}
+
 // --- the `ai` command ---------------------------------------------------------------------
 
 function runAi(args, io, shell) {
@@ -501,7 +544,7 @@ function runAi(args, io, shell) {
     if (!available()) { err('ai: no model yet — train one with: python3 ai/train.py\n'); return 1; }
     const { model } = load();
     const m = model.meta;
-    write(`mx — ${((m.params || 0) / 1e6).toFixed(1)}M parameters, ${model.config.layers} layers × ${model.config.d} wide, `
+    write(`${load().name} — ${((m.params || 0) / 1e6).toFixed(1)}M parameters, ${model.config.layers} layers × ${model.config.d} wide, `
       + `${model.config.ctx}-token context, trained ${m.trained || '?'} on ${m.device || '?'} (${m.steps || '?'} steps, validation loss ${m.val_loss ?? '?'})\n`);
     return 0;
   }
@@ -530,8 +573,48 @@ function runAi(args, io, shell) {
       } catch { /* can't save; still used for this chat */ }
     }
     write(`${tag}${ansi.fg(t.ui.muted)}…${R}`);
-    const text = reply(turns, { name });
-    write(`\r\x1b[K${tag}${text}\n`);
+    if (!load().model.feed) {
+      const text = reply(turns, { name });
+      write(`\r\x1b[K${tag}${text}\n`);
+      return text;
+    }
+    // mx2 answers can be long, so they stream. The opening is held back
+    // until its first line is done so the name guard can check it; code
+    // blocks are coloured; Ctrl-C or Esc stops the answer.
+    const code = theme.style(t.syntax.code);
+    let started = false;
+    let head = '';
+    let inCode = false;
+    let line = '';
+    const show = (piece) => {
+      for (const ch of piece) {
+        if (ch === '\n') {
+          write(`${R}\n`);
+          if (/^\s*```/.test(line)) inCode = !inCode;
+          line = '';
+          continue;
+        }
+        if (!line && inCode) write(code);
+        line += ch;
+        write(ch);
+      }
+    };
+    const onText = (piece) => {
+      if (!started) {
+        head += piece;
+        if (!head.includes('\n') && head.length < 120) return;
+        started = true;
+        write(`\r\x1b[K${tag}`);
+        show(guardName(head.replace(/^\s+/, ''), name));
+        return;
+      }
+      show(piece);
+    };
+    const keys = interruptWatch();
+    let text;
+    try { text = reply(turns, { name, onText, stop: keys.hit }); } finally { keys.done(); }
+    if (!started) write(`\r\x1b[K${tag}${text}`);
+    write(`${R}${keys.hit() ? `${ansi.fg(t.ui.muted)} (stopped)${R}` : ''}\n`);
     return text;
   };
 
@@ -539,7 +622,8 @@ function runAi(args, io, shell) {
     answer([['user', args.join(' ')]]);
     return 0;
   }
-  write(`${ansi.fg(t.ui.muted)}mx, a small AI running on this Mac. It can be wrong — double-check anything important. bye to leave.${R}\n`);
+  const intro = load().name === 'mx2' ? 'mx2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' : 'mx, a small AI running on this Mac.';
+  write(`${ansi.fg(t.ui.muted)}${intro} It can be wrong — double-check anything important. bye to leave.${R}\n`);
   const turns = [];
   for (;;) {
     write(youTag);

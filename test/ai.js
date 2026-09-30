@@ -125,6 +125,128 @@ test('the training service restarts on failure and starts at login', () => {
   assert.match(plist, /<key>SuccessfulExit<\/key><false\/>/);
 });
 
+// A tiny random mx2 in the export format, and a plain reference forward
+// pass to check the WebAssembly runtime against.
+function tinyMx2(dir) {
+  const fs = require('fs');
+  const path = require('path');
+  const cfg = { arch: 'mx2', vocab: 300, ctx: 300, d: 64, layers: 2, heads: 4, hidden: 192 };
+  const r = seeded(11);
+  const tensors = [];
+  const blobs = [];
+  let offset = 0;
+  const add = (name, arr, dtype, shape) => {
+    const b = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+    tensors.push({ name, dtype, shape, offset });
+    blobs.push(b);
+    offset += b.length;
+    const pad = (4 - (offset % 4)) % 4;
+    if (pad) { blobs.push(Buffer.alloc(pad)); offset += pad; }
+  };
+  const ref = {};
+  const mat = (name, rows, cols) => {
+    const q = Int8Array.from({ length: rows * cols }, () => Math.round((r() * 2 - 1) * 127));
+    const sc = Float32Array.from({ length: rows }, () => 0.02 / 127 * (1 + r()) * 8);
+    add(name, q, 'i8', [rows, cols]);
+    add(`${name}.scale`, sc, 'f32', [rows]);
+    ref[name] = (i, j) => q[i * cols + j] * sc[i];
+  };
+  const vec = (name, n) => { const f = Float32Array.from({ length: n }, () => 0.5 + r()); add(name, f, 'f32', [n]); ref[name] = f; };
+  const { vocab, d, layers, hidden } = cfg;
+  mat('emb.weight', vocab, d);
+  for (let l = 0; l < layers; l++) {
+    const p = `blocks.${l}.`;
+    vec(`${p}norm1.weight`, d);
+    for (const w of ['wq', 'wk', 'wv', 'wo']) mat(`${p}${w}.weight`, d, d);
+    vec(`${p}norm2.weight`, d);
+    mat(`${p}w1.weight`, hidden, d);
+    mat(`${p}w3.weight`, hidden, d);
+    mat(`${p}w2.weight`, d, hidden);
+  }
+  vec('norm.weight', d);
+  const header = Buffer.from(JSON.stringify({ config: cfg, tensors, meta: {} }));
+  const pad = Buffer.alloc((4 - ((8 + header.length) % 4)) % 4);
+  const len = Buffer.alloc(4);
+  len.writeUInt32LE(header.length);
+  const file = path.join(dir, 'mx2.bin');
+  fs.writeFileSync(file, Buffer.concat([Buffer.from('MXAI'), len, header, pad, ...blobs]));
+  return { file, cfg, ref };
+}
+
+function referenceLogits({ cfg, ref }, tokens) {
+  const { d, layers, heads, hidden, vocab } = cfg;
+  const hd = d / heads;
+  const mv = (w, x, rows) => Array.from({ length: rows }, (_, i) => x.reduce((s, v, j) => s + ref[w](i, j) * v, 0));
+  const norm = (x, g) => { const ms = x.reduce((s, v) => s + v * v, 0) / x.length; return x.map((v, i) => (v / Math.sqrt(ms + 1e-5)) * g[i]); };
+  const rope = (v, pos) => {
+    const out = v.slice();
+    for (let h = 0; h < heads; h++) {
+      for (let i = 0; i < hd / 2; i++) {
+        const a = pos / 10000 ** ((2 * i) / hd);
+        const j = h * hd + 2 * i;
+        out[j] = v[j] * Math.cos(a) - v[j + 1] * Math.sin(a);
+        out[j + 1] = v[j] * Math.sin(a) + v[j + 1] * Math.cos(a);
+      }
+    }
+    return out;
+  };
+  const K = Array.from({ length: layers }, () => []);
+  const V = Array.from({ length: layers }, () => []);
+  let x;
+  tokens.forEach((tok, pos) => {
+    x = Array.from({ length: d }, (_, i) => ref['emb.weight'](tok, i));
+    for (let l = 0; l < layers; l++) {
+      const p = `blocks.${l}.`;
+      const h = norm(x, ref[`${p}norm1.weight`]);
+      const q = rope(mv(`${p}wq.weight`, h, d), pos);
+      K[l].push(rope(mv(`${p}wk.weight`, h, d), pos));
+      V[l].push(mv(`${p}wv.weight`, h, d));
+      const att = new Array(d).fill(0);
+      for (let hh = 0; hh < heads; hh++) {
+        const sc = K[l].map((k) => { let s = 0; for (let i = 0; i < hd; i++) s += q[hh * hd + i] * k[hh * hd + i]; return s / Math.sqrt(hd); });
+        const mx = Math.max(...sc);
+        const e = sc.map((v) => Math.exp(v - mx));
+        const sum = e.reduce((a, b) => a + b, 0);
+        e.forEach((w, t) => { for (let i = 0; i < hd; i++) att[hh * hd + i] += (w / sum) * V[l][t][hh * hd + i]; });
+      }
+      mv(`${p}wo.weight`, att, d).forEach((v, i) => { x[i] += v; });
+      const h2 = norm(x, ref[`${p}norm2.weight`]);
+      const g = mv(`${p}w1.weight`, h2, hidden);
+      const u = mv(`${p}w3.weight`, h2, hidden);
+      mv(`${p}w2.weight`, g.map((a, i) => (a / (1 + Math.exp(-a))) * u[i]), d).forEach((v, i) => { x[i] += v; });
+    }
+  });
+  return mv('emb.weight', norm(x, ref['norm.weight']), vocab);
+}
+
+test('mx2 runtime matches a plain reference, in chunks, one token at a time, and on threads', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { Model2 } = require('../src/mx2');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mx2-'));
+  const tiny = tinyMx2(dir);
+  const tokens = Array.from({ length: 140 }, (_, i) => (i * 37 + 5) % 300); // more than one 128-token chunk
+  const want = referenceLogits(tiny, tokens);
+  const close = (got, label) => {
+    let worst = 0;
+    want.forEach((v, i) => { worst = Math.max(worst, Math.abs(v - got[i])); });
+    assert.ok(worst < 1e-3, `${label}: off by ${worst}`);
+  };
+  const solo = new Model2(tiny.file, { threads: 0 });
+  close(solo.feed(tokens), 'whole prompt');
+  solo.reset();
+  let last;
+  for (const t of tokens) last = solo.step(t);
+  close(last, 'token by token');
+  const pool = new Model2(tiny.file, { threads: 2 });
+  assert.strictEqual(pool.workers.length, 2, 'workers started');
+  pool.feed(tokens.slice(0, 70));
+  close(pool.feed(tokens.slice(70)), 'on worker threads');
+  pool.close();
+  fs.rmSync(dir, { recursive: true });
+});
+
 if (failures) {
   console.error(`\n${failures} ai test(s) failed`);
   process.exit(1);

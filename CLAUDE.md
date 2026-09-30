@@ -62,7 +62,10 @@ mx2 (`ai/mx2/`): hand-written data (`code/`, validated by `validate.js`;
 `sitegen.js`; `knowledge/*.md`) → `make-corpus.js` → `train.py` (RMSNorm,
 RoPE, SwiGLU; 512-token phase then 2048). `ai --train start` installs the
 LaunchAgent `com.maxshell.mx2-train` running `run-training.sh`, which starts
-`sleepwatch` (IOKit: SIGUSR1 → save before sleep) and `caffeinate`.
+`sleepwatch` (IOKit: SIGUSR1 → save before sleep) and `caffeinate`. The
+runtime is `src/mx2.js` (worker threads + `src/mx2kernels.wasm`, built from
+`mx2kernels.c` with the clang command at its top — commit both); check it
+with `ai/mx2/parity.py`. `ai` prefers `models/mx2.bin` when it exists.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

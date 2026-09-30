@@ -944,6 +944,13 @@ background for most of a day:
 | `ai --status` | progress, loss, time left, samples, sleep pauses |
 | `ai --train stop` | save and stop for good |
 
+When training finishes it writes `models/mx2.bin`, and `ai` switches to it
+by itself (`MAXSHELL_AI=mx` keeps the old one). mx2 runs on-device too: its
+matrix maths is WebAssembly SIMD spread over several CPU cores, so it writes
+about 100 tokens a second — a whole website in half a minute. Long answers
+stream as they're written, code blocks are coloured, and **Ctrl-C** or
+**Esc** stops an answer.
+
 Training is sleep-safe. Before the Mac sleeps (lid closed, Sleep, idle) a
 small helper tells it to save a checkpoint, and holds off sleep until the
 save is done; on wake it just carries on. While it runs, the Mac won't
