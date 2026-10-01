@@ -125,6 +125,23 @@ test('the training service restarts on failure and starts at login', () => {
   assert.match(plist, /<key>SuccessfulExit<\/key><false\/>/);
 });
 
+test('relevance: the words that matter, and answers keyed without names or numbers', () => {
+  assert.deepStrictEqual(ai.contentWords('How do I take a screenshot?'), ['take', 'screenshot']);
+  assert.deepStrictEqual(ai.contentWords('whats up'), ['whats', 'up'], 'small talk keeps every word');
+  assert.strictEqual(ai.answerKey('Nice to meet you, Max! It’s 7:05 PM.', 'Max'), ai.answerKey('Nice to meet you, NAME! It’s 9:41 PM.'));
+});
+
+test('ai shows a checked reply: fitting answers, and no made-up ones', () => {
+  if (!have) return;
+  const intro = ai.checkedReply([['user', 'hi'], ['ai', 'Hi! 👋 I’m mx. What’s your name?'], ['user', 'Max']], { rand: seeded(1) });
+  assert.match(intro.text, /Max/);
+  const shot = ai.checkedReply([['user', 'how do i take a screenshot']], { rand: seeded(1) });
+  assert.match(shot.text, /⌘⇧3|⌘⇧4|⌘⇧5/);
+  // Words it was never taught: an honest answer, not a memorized one for something else.
+  const odd = ai.checkedReply([['user', 'explain the quorblex flux capacitance']], { rand: seeded(1) });
+  assert.strictEqual(odd.source, 'honest', odd.text);
+});
+
 // A tiny random mx2 in the export format, and a plain reference forward
 // pass to check the WebAssembly runtime against.
 function tinyMx2(dir) {

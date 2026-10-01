@@ -934,6 +934,17 @@ eighth the size of GPT-2 small — so it can be confidently wrong about things
 outside that; it'll tell you so if you ask. `ai --info` describes the model.
 `bot` is the rule-based chat; `ai` is the trained one.
 
+Every reply is checked before you see it, so `ai` doesn't just say random
+things. A small model's typical mistake is answering with something it
+learned for a *different* question, so `ai` looks its answer up in an index
+of what it was trained on (`models/mx-index.json`, made by
+`ai/make-index.js`) and checks that those questions are about what you
+asked. Each word's confidence counts too. If an answer doesn't fit, it tries
+again. If nothing fits, `bot`'s rules can answer (when one really matches),
+and otherwise it says honestly that it didn't follow rather than make
+something up. `node ai/eval.js` scores what `ai` shows, including questions
+it was never taught; `--raw` scores the model alone.
+
 **mx2**, its bigger successor (43M parameters, Llama-style, trained to code
 — websites especially — and to answer general questions), trains in the
 background for most of a day:

@@ -307,11 +307,71 @@ function guardName(text, name) {
     .replace(new RegExp(`^${other}(,| —)`), (m, n, sep) => (/^(Sure|Here|Good|Easy|Yes|No|Okay|Great|Nice|Press|Run|Open|Type|Hmm|Well|Oh|Ah)$/.test(n) ? m : `${name}${sep}`));
 }
 
+// --- is the answer about the question? -------------------------------------------------
+// A small model sometimes answers with something it memorized for a
+// different question. models/<model>-index.json (ai/make-index.js) maps each
+// training answer, by its opening, to the words of the questions it
+// answered; a reply whose questions share nothing with yours is a mix-up.
+
+const STOP = new Set(('a an the and or but if then so to of in on at by for with from up down out over into about as is are was were be been '
+  + 'am do does did doing have has had i me my mine you your yours we us our they them their he him his she her it its this that these those '
+  + 'what which who whom whose when where why how can could would should will shall may might must just very really too also not no yes '
+  + 'please pls plz hey hi hello ok okay oh um uh like get got make made want need know tell say said give let lets some any all much many more '
+  + 'thing things something anything one there here than now well good whats hows im dont u ur wanna gonna sup yo lol haha hmm yeah yep nah cool nice wow omg idk r').split(' '));
+
+function stem(w) {
+  if (w.length > 5 && w.endsWith('ing')) return w.slice(0, -3);
+  if (w.length > 4 && w.endsWith('ed')) return w.slice(0, -2);
+  if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+  return w;
+}
+
+// The words that carry the meaning; for a message with none ("whats up",
+// "how are you") every word counts.
+function contentWords(text) {
+  const all = (text.toLowerCase().replace(/[’']s\b/g, '').match(/[a-z0-9]+/g) || []);
+  const some = all.filter((w) => !STOP.has(w) && w.length > 1).map(stem);
+  return [...new Set(some.length ? some : all.filter((w) => !/^(a|an|the)$/.test(w)))];
+}
+
+// An answer's opening, with numbers and the person's name taken out.
+function answerKey(text, name = null) {
+  let t = text;
+  if (name) t = t.split(name).join('NAME');
+  return t.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+let indexCache;
+function answerIndex() {
+  if (indexCache !== undefined) return indexCache;
+  indexCache = null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(MODELS, `${load().name}-index.json`), 'utf8'));
+    indexCache = new Map(Object.entries(raw.answers).map(([k, ids]) => [k, new Set(ids.map((i) => raw.words[i]))]));
+  } catch { /* no index: confidence alone decides */ }
+  return indexCache;
+}
+
+// How well a reply fits the message: 'fits', 'mismatch' (a memorized answer
+// to other questions) or 'unknown' (not a memorized answer).
+function relevance(message, text, name = null) {
+  const index = answerIndex();
+  if (!index) return 'unknown';
+  // The model sometimes puts its own opener ("Sure! ") on a memorized answer.
+  const bare = text.replace(/^(sure|okay|ok|yes|good question|here’s how|no problem|of course)[!.:,]?\s+/i, '');
+  const words = index.get(answerKey(text, name)) || index.get(answerKey(bare, name));
+  if (!words) return 'unknown';
+  const mine = contentWords(message);
+  if (!mine.length) return 'fits';
+  const shared = mine.filter((w) => words.has(w)).length;
+  return shared >= Math.min(3, Math.ceil(mine.length * 0.6)) ? 'fits' : 'mismatch';
+}
+
 // Generates the reply to a conversation. `onText` receives text as it's
 // produced (whole UTF-8 characters only).
 // mx2 can answer at length (whole programs and websites), so it gets most
 // of its context for the reply; `stop()` is polled to cut an answer short.
-function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = null, rand = Math.random, onText = null, stop = null } = {}) {
+function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = null, rand = Math.random, onText = null, stop = null, info = null } = {}) {
   const { tok, model } = load();
   const S = tok.special;
   const ctx = model.config.ctx;
@@ -347,6 +407,14 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
   for (let i = 0; i < maxTokens && model.pos < ctx; i++) {
     if (stop && i % 4 === 0 && stop()) break;
     const next = sampleToken(logits, { temperature, topK, rand, banned });
+    if (info) {
+      // How sure the model was of each token it wrote (log-probability).
+      let max = -Infinity;
+      for (let k = 0; k < logits.length; k++) if (logits[k] > max) max = logits[k];
+      let sum = 0;
+      for (let k = 0; k < logits.length; k++) sum += Math.exp(logits[k] - max);
+      (info.logprobs = info.logprobs || []).push(logits[next] - max - Math.log(sum));
+    }
     if (next === S['<|end|>']) break;
     out.push(next);
     pending.push(...tok.tokenBytes(next));
@@ -356,6 +424,61 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
   }
   flush(true);
   return guardName(text.trim(), name);
+}
+
+// --- a reply worth showing --------------------------------------------------------------
+// The most likely answer first, then a few sampled ones; the first that fits
+// the message wins. If none does, bot's rules get a go (when one really
+// matches), and otherwise mx says it didn't follow rather than make
+// something up.
+
+const HONEST = [
+  (topic) => `I’m not sure I understood${topic ? ` “${topic}”` : ' that'} — I’m a small model and only know some things well. Could you put it another way?`,
+  (topic) => `Hmm, I don’t really know about${topic ? ` “${topic}”` : ' that'}, and I’d rather not make something up. 🤷`,
+  (topic) => `I didn’t quite follow${topic ? ` “${topic}”` : ''}. I’m good at how-tos on your Mac, maxshell and its commands, simple facts and maths, the time, and a chat.`,
+];
+
+function meanLogprob(info) {
+  const lp = info.logprobs || [];
+  return lp.length ? lp.reduce((a, b) => a + b, 0) / lp.length : 0;
+}
+
+function checkedReply(turns, opts = {}) {
+  const { shell = null, rand = Math.random } = opts;
+  const name = nameFrom(turns) || opts.name || null;
+  // A name isn't a topic: "Max" (answering "what's your name?") is small talk.
+  let message = turns.length ? turns[turns.length - 1][1] : '';
+  if (name && nameFrom(turns.slice(0, -1)) !== name) message = ''; // they just introduced themselves
+  else if (name) message = message.replace(new RegExp(`\\b${name}\\b`, 'gi'), ' ');
+  const big = !!load().model.feed;
+  const tries = big ? [0, 0.5] : [0, 0.6, 0.8, 0.8];
+  const why = [];
+  for (const temperature of tries) {
+    const info = {};
+    const text = reply(turns, { ...opts, temperature, info });
+    const fit = relevance(message, text, name);
+    const conf = meanLogprob(info);
+    why.push(`${fit} ${conf.toFixed(2)}`);
+    // New text (code, sums, things mx2 composes) is fine when it's confident.
+    if (text && conf > -0.6 && (fit === 'fits' || (fit === 'unknown' && big && conf > -0.25))) return { text, source: 'model', why };
+  }
+  try {
+    const bot = require('./bot');
+    const mem = { name };
+    const text = bot.reply(message, shell, mem);
+    // bot's own identity and games aren't mx's.
+    if (mem.last && !/^(fallback|expected|game|identity|name|help)$/.test(mem.last.name) && !text.includes('\n') && !/\bbot\b|💭/i.test(text)) return { text, source: 'bot', why };
+  } catch { /* bot's rules need things we don't have here */ }
+  // Small talk with no topic ("whats up") gets small talk back.
+  const meaningful = (message.toLowerCase().replace(/[’']s\b/g, '').match(/[a-z0-9]+/g) || []).filter((w) => !STOP.has(w) && w.length > 1);
+  if (!meaningful.length) {
+    const chat = ['Not much — just here in your terminal. 😊 What’s up with you?', 'I’m here! Ask me a how-to, a command, a fact, or just chat. 🙂', 'All good on my side! What can I do for you?'];
+    return { text: chat[Math.floor(rand() * chat.length)], source: 'chat', why };
+  }
+  // Name the topic when it's a few plain words ("albert einstein").
+  const words = (message.toLowerCase().replace(/[’']s\b/g, '').match(/[a-z0-9]+/g) || []).filter((w) => !STOP.has(w) && !/^(write|explain|fix|show|help|was|tell|old|best)$/.test(w));
+  const topic = words.length && words.length <= 3 && !/[`"(){};=<>]/.test(message) ? words.join(' ') : '';
+  return { text: HONEST[Math.floor(rand() * HONEST.length)](topic), source: 'honest', why };
 }
 
 // --- training progress -------------------------------------------------------------------
@@ -574,7 +697,7 @@ function runAi(args, io, shell) {
     }
     write(`${tag}${ansi.fg(t.ui.muted)}…${R}`);
     if (!load().model.feed) {
-      const text = reply(turns, { name });
+      const { text } = checkedReply(turns, { name, shell });
       write(`\r\x1b[K${tag}${text}\n`);
       return text;
     }
@@ -638,5 +761,5 @@ function runAi(args, io, shell) {
 
 module.exports = {
   Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, nameFrom, guardName, reply, runAi, available,
-  load, trainingStatus, servicePlist,
+  load, trainingStatus, servicePlist, contentWords, answerKey, relevance, checkedReply,
 };

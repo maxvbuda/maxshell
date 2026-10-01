@@ -96,6 +96,28 @@ add('limits', [['user', 'what is the price of bitcoin']], (a) => /not sure|don�
 add('follows a joke', [['user', 'tell me a joke'], ['ai', 'Why was the math book sad? It had too many problems.'], ['user', 'haha that is funny']], (a) => /another|glad|thank|here all week|nailed/i.test(a));
 add('follows a joke', [['user', 'tell me a joke'], ['ai', 'What do you call a fake noodle? An impasta. 🍝'], ['user', 'that was lame']], (a) => /another|tough|sorry|better|okay|rude/i.test(a));
 
+// Off-script: things it was never taught, in words it never saw. A right
+// answer or an honest "I don't know" passes; anything else is it making
+// things up.
+const HONEST = /not sure|don’t (really )?know|didn’t (quite )?follow|rather not make|put it another way|no idea|beyond/i;
+for (const [q, re] of [
+  ['what is html', /markup|web page|HTML is/i],
+  ['what should i eat for dinner', /dinner|eat|food|cook|meal/i],
+  ['what is the meaning of life', /42|meaning/i],
+  ['write a poem', /poem|\n.*\n/i],
+  ['what is a variable', /store|value|name/i],
+  ['whats up', /not much|hey|hi|hello|good|well/i],
+  ['can we be friends', /friend|of course|yes/i],
+  ['i like turtles', /turtle/i],
+  ['what is the best programming language', /python|javascript|depends/i],
+  ['how old are you', /born|young|old|trained|2026/i],
+  ['explain recursion', /itself|calls/i],
+  ['fix this: print("hi"', /\)|bracket|parenthes/i],
+  ['who invented the lightbulb', /edison/i],
+  ['how do i bake a cake', /oven|flour|bake/i],
+  ['what is your favourite movie', /movie|film|favourite|favorite|Matrix/i],
+]) add('off-script', [['user', q]], (a) => re.test(a) || HONEST.test(a));
+
 // --- run ---------------------------------------------------------------------------
 
 const groups = new Map();
@@ -103,7 +125,9 @@ let clean = 0;
 const t0 = Date.now();
 let tokens = 0;
 for (const c of cases) {
-  const a = ai.reply(c.turns, { name: c.opts.name || null, now: c.opts.now || new Date(2026, 8, 29, 10, 15), rand, temperature: 0.5, onText: () => { tokens++; } });
+  const opts = { name: c.opts.name || null, now: c.opts.now || new Date(2026, 8, 29, 10, 15), rand, temperature: 0.5, onText: () => { tokens++; } };
+  // --raw scores the model alone; by default, what `ai` shows (checked replies).
+  const a = process.argv.includes('--raw') ? ai.reply(c.turns, opts) : ai.checkedReply(c.turns, opts).text;
   const ok = !!c.check(a);
   if (!/<\|/.test(a) && !a.includes('�') && a.length) clean++;
   const g = groups.get(c.group) || { ok: 0, n: 0 };
