@@ -376,14 +376,16 @@ def main():
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
         opt.zero_grad(set_to_none=True)
-        total = 0.0
+        # Kept on the GPU: reading it every micro-batch made the CPU wait for
+        # the GPU each time (about 10% slower). It's read when it's printed.
+        total = torch.zeros((), device=device)
         ctx, n, accum = phase(step)
         if step == args.phase1:
             print(f'phase 2: {ctx}-token context', flush=True)
         for _ in range(accum):
             loss = loss_of(*batch(train_ids, train_mask, train_starts, n, ctx)) / accum
             loss.backward()
-            total += loss.item()
+            total += loss.detach()
             if save_now['flag']:
                 break
         if save_now['flag']:
@@ -405,7 +407,7 @@ def main():
         if step % 50 == 0 or step == 1:
             el = (time.time() - t0) / 60
             rate = el / max(1, step - start_step)
-            print(f'step {step:6d}  loss {total:.3f}  lr {lr_at(step):.2e}  {el:.1f} min  (~{rate * (args.steps - step) / 60:.1f} h left)', flush=True)
+            print(f'step {step:6d}  loss {total.item():.3f}  lr {lr_at(step):.2e}  {el:.1f} min  (~{rate * (args.steps - step) / 60:.1f} h left)', flush=True)
             if step % 500 == 0:
                 open(os.path.join(DATA, 'progress.json'), 'w').write(json.dumps({'step': step, 'steps': args.steps, 'phase1': args.phase1}))
         if step % 1000 == 0 or step == args.steps:
