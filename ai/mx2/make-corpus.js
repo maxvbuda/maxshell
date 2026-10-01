@@ -149,6 +149,11 @@ function knowledgeChats() {
 
 // --- go ------------------------------------------------------------------------------------
 
+// ai/mx3/make-corpus.js reuses the builders; they push into `out`.
+module.exports = { out, codeChats, siteChats, knowledgeChats, vary, rand, pick, chance };
+if (require.main === module) main();
+
+function main() {
 const steps = [
   ['code', () => codeChats(argOf('--repeat', 30))],
   ['websites', () => siteChats(argOf('--sites', 20000))],
@@ -165,3 +170,4 @@ fs.mkdirSync(OUT, { recursive: true });
 const file = path.join(OUT, 'chat.jsonl');
 fs.writeFileSync(file, `${out.map((c) => JSON.stringify(c)).join('\n')}\n`);
 process.stderr.write(`wrote ${out.length} conversations, ${(fs.statSync(file).size / 1e6).toFixed(1)} MB → ${path.relative(path.join(HERE, '..', '..'), file)}\n`);
+}

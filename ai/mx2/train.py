@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Trains mx2, maxshell's larger on-device model, on this Mac.
+"""Trains maxshell's larger on-device models (mx2, mx3) on this Mac.
 
-    python3 ai/mx2/train.py --bench            # measure speed for a few sizes
-    caffeinate -i python3 ai/mx2/train.py      # train (resumes automatically)
-    python3 ai/mx2/train.py --export           # write models/mx2.bin from the latest checkpoint
+    python3 ai/mx2/train.py --bench                 # measure speed for a few sizes
+    python3 ai/mx2/train.py --name mx3 --init CKPT  # train (resumes automatically)
+    python3 ai/mx2/train.py --name mx3 --export     # write models/mx3.bin from the latest checkpoint
+
+Each model's data lives in ai/<name>/data (chat.jsonl, tokenizer.json,
+checkpoints, train.log). Conversation turns are [who, text] with who
+user/ai/sys; an ai turn with a third element false is context only (not
+trained) — that's how mx3's self-check examples show a wrong answer and
+train only the "no".
 
 Architecture (same building blocks as Llama/Gemma, much smaller): token
 embedding tied to the output, pre-norm transformer blocks with RMSNorm,
@@ -30,6 +36,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DATA = os.path.join(HERE, 'data')
+NAME = 'mx2'
 MODELS = os.environ.get('MX2_EXPORT_DIR') or os.path.join(ROOT, 'models')
 sys.path.insert(0, os.path.dirname(HERE))
 from train import BPE, SPECIALS  # noqa: E402  (mx's tokenizer code, reused)
@@ -48,7 +55,7 @@ def get_tokenizer(convs, vocab):
         return BPE(t['merges'], t['vocab_size'])
     t0 = time.time()
     sample = random.Random(1).sample(convs, min(len(convs), 60000))
-    texts = [x for c in sample for _, x in c['turns']] + [c['sys'] for c in sample[:2000]]
+    texts = [t[1] for c in sample for t in c['turns']] + [c['sys'] for c in sample[:2000]]
     tok = BPE.train(texts, vocab)
     json.dump({'merges': tok.merges, 'vocab_size': tok.vocab_size}, open(path, 'w'))
     print(f'tokenizer: {vocab} tokens, trained in {time.time() - t0:.0f}s', flush=True)
@@ -64,10 +71,12 @@ def encode_all(tok, convs, ctx):
     for c in convs:
         ids = [S['<|doc|>'], S['<|sys|>']] + tok.encode(c['sys']) + [S['<|end|>']]
         mask = [0] * len(ids)
-        for who, text in c['turns']:
+        for turn in c['turns']:
+            who, text = turn[0], turn[1]
+            learn = who == 'ai' and (len(turn) < 3 or turn[2])
             body = tok.encode(text) + [S['<|end|>']]
-            ids += [S['<|user|>'] if who == 'user' else S['<|ai|>']] + body
-            mask += [0] + ([1] * len(body) if who == 'ai' else [0] * len(body))
+            ids += [S['<|user|>'] if who == 'user' else S['<|sys|>'] if who == 'sys' else S['<|ai|>']] + body
+            mask += [0] + ([1] * len(body) if learn else [0] * len(body))
         if len(ids) > ctx + 1:
             dropped += 1
             continue
@@ -184,7 +193,7 @@ def export(model, tok, meta):
         else:
             add(name, t.numpy().astype('float32').tobytes(), 'f32', t.shape)
     header = json.dumps({'config': model.config, 'tensors': tensors, 'meta': meta}).encode()
-    path = os.path.join(MODELS, 'mx2.bin')
+    path = os.path.join(MODELS, f'{NAME}.bin')
     with open(path, 'wb') as f:
         f.write(b'MXAI')
         f.write(struct.pack('<I', len(header)))
@@ -194,8 +203,8 @@ def export(model, tok, meta):
             f.write(b)
     from train import SPLIT
     json.dump({'merges': tok.merges, 'vocab_size': tok.vocab_size, 'specials': tok.special, 'split': SPLIT.pattern},
-              open(os.path.join(MODELS, 'mx2-tokenizer.json'), 'w'))
-    print(f'exported {os.path.getsize(path) / 1e6:.1f} MB → models/mx2.bin', flush=True)
+              open(os.path.join(MODELS, f'{NAME}-tokenizer.json'), 'w'))
+    print(f'exported {os.path.getsize(path) / 1e6:.1f} MB → models/{NAME}.bin', flush=True)
 
 
 # --- training ----------------------------------------------------------------------------
@@ -216,7 +225,13 @@ def main():
     ap.add_argument('--warmup', type=int, default=500)
     ap.add_argument('--bench', action='store_true')
     ap.add_argument('--export', action='store_true')
+    ap.add_argument('--name', default='mx2', help='which model: data in ai/<name>/data, exported as models/<name>.bin')
+    ap.add_argument('--init', help='start from this checkpoint\'s weights (fresh optimizer and schedule)')
     args = ap.parse_args()
+    global DATA, NAME
+    NAME = args.name
+    if NAME != 'mx2':
+        DATA = os.path.join(os.path.dirname(HERE), NAME, 'data')
 
     device = 'mps' if torch.backends.mps.is_available() else 'cpu'
     torch.manual_seed(67)
@@ -281,6 +296,9 @@ def main():
         opt.load_state_dict(ck['opt'])
         step = ck['step']
         print(f'resumed from step {step}', flush=True)
+    elif args.init:
+        model.load_state_dict(torch.load(args.init, map_location=device)['model'])
+        print(f'starting from the weights in {os.path.relpath(args.init, ROOT)}', flush=True)
 
     def lr_at(s):
         if s < args.warmup:
@@ -405,7 +423,7 @@ def main():
     export(model, tok, {'params': n_params, 'steps': step, 'val_loss': round(v, 4), 'trained': time.strftime('%Y-%m-%d'),
                         'device': device, 'tokens': len(train_ids)})
     open(os.path.join(DATA, 'done'), 'w').write(time.strftime('%Y-%m-%d %H:%M'))
-    print('done — exported models/mx2.bin', flush=True)
+    print(f'done — exported models/{NAME}.bin', flush=True)
 
 
 if __name__ == '__main__':

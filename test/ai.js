@@ -118,6 +118,14 @@ test('training status notices a pause for sleep, and the resume after it', () =>
   fs.rmSync(dir, { recursive: true });
 });
 
+test('time left reads in hours, days and weeks', () => {
+  assert.strictEqual(ai.duration(514), '8 hours 34 minutes');
+  assert.strictEqual(ai.duration(60), '1 hour');
+  assert.strictEqual(ai.duration(3000), '2 days 2 hours');
+  assert.strictEqual(ai.duration(12000), '1 week 1 day');
+  assert.strictEqual(ai.duration(45), '45 minutes');
+});
+
 test('the training service restarts on failure and starts at login', () => {
   const plist = ai.servicePlist('/x/maxshell');
   assert.match(plist, /<string>\/x\/maxshell\/ai\/mx2\/run-training.sh<\/string>/);

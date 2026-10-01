@@ -945,14 +945,24 @@ and otherwise it says honestly that it didn't follow rather than make
 something up. `node ai/eval.js` scores what `ai` shows, including questions
 it was never taught; `--raw` scores the model alone.
 
+**mx3** is the newest: the same 43M-parameter design as mx2, trained on a
+balanced mix of hand-written data — conversation in many phrasings, about
+330 coding exercises and programs (every one run before training), a
+programming glossary and 190 knowledge articles, poems and stories, and
+websites. It also learned to **check its own answers**: given a question
+and an answer, it says whether the answer fits, and `ai` asks it about the
+opening of every reply before showing it, so a reply that starts off wrong
+is dropped and rewritten. `node ai/mx3/eval.js` runs the code it writes and
+scores the checker.
+
 **mx2**, its bigger successor (43M parameters, Llama-style, trained to code
 — websites especially — and to answer general questions), trains in the
 background for most of a day:
 
 | Command | What it does |
 |---|---|
-| `ai --train start` | start training as a macOS background service |
-| `ai --status` | progress, loss, time left, samples, sleep pauses |
+| `ai --train start [mx3]` | start training as a macOS background service |
+| `ai --status` | progress, loss, time left (in minutes, hours, days or weeks), samples, sleep pauses |
 | `ai --train stop` | save and stop for good |
 
 When training finishes it writes `models/mx2.bin`, and `ai` switches to it

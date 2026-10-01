@@ -1,0 +1,1 @@
+--init ai/mx2/data/run1-ckpt.pt --lr 3e-4 --warmup 200 --steps 3600 --phase1 3000

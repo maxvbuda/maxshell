@@ -215,11 +215,13 @@ function sampleToken(logits, { temperature = 0.7, topK = 40, rand = Math.random,
 
 let loaded = null;
 
-// mx2 when it's been trained and exported, else the original mx.
+// The newest model that's been trained and exported (mx3, mx2, then the
+// original mx); MAXSHELL_AI picks one.
 function modelName() {
   const has = (n) => fs.existsSync(path.join(MODELS, `${n}.bin`)) && fs.existsSync(path.join(MODELS, `${n}-tokenizer.json`));
-  if (process.env.MAXSHELL_AI !== 'mx' && has('mx2')) return 'mx2';
-  return has('mx') ? 'mx' : null;
+  const want = process.env.MAXSHELL_AI;
+  if (want && has(want)) return want;
+  return ['mx3', 'mx2', 'mx'].find(has) || null;
 }
 
 function available() { return modelName() !== null; }
@@ -229,7 +231,7 @@ function load() {
   const name = modelName();
   const tok = new Tokenizer(JSON.parse(fs.readFileSync(path.join(MODELS, `${name}-tokenizer.json`), 'utf8')));
   const file = path.join(MODELS, `${name}.bin`);
-  const model = name === 'mx2' ? new (require('./mx2').Model2)(file) : new Model(loadWeights(file));
+  const model = name === 'mx' ? new Model(loadWeights(file)) : new (require('./mx2').Model2)(file);
   loaded = { tok, model, name };
   return loaded;
 }
@@ -369,9 +371,34 @@ function relevance(message, text, name = null) {
 
 // Generates the reply to a conversation. `onText` receives text as it's
 // produced (whole UTF-8 characters only).
-// mx2 can answer at length (whole programs and websites), so it gets most
-// of its context for the reply; `stop()` is polled to cut an answer short.
-function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = null, rand = Math.random, onText = null, stop = null, info = null } = {}) {
+// mx3 was also trained to judge answers: after a question and an answer it
+// reads "check: does the answer fit?" and says yes or no.
+const CHECK = 'check: does the answer fit?';
+const hasChecker = () => load().name === 'mx3' || !!load().model.meta.checker;
+
+// The model's own verdict on the answer it has written so far: the
+// probability of "yes". The check is fed after the answer and then rewound
+// (positions past `pos` are simply overwritten), so writing can continue.
+function selfCheck(tok, model, logits) {
+  const S = tok.special;
+  const seq = [S['<|end|>'], S['<|sys|>'], ...tok.encode(CHECK), S['<|end|>'], S['<|ai|>']];
+  const at = model.pos;
+  if (at + seq.length > model.config.ctx) return 1;
+  const saved = Float32Array.from(logits);
+  const l = model.feed(seq);
+  const yes = l[tok.encode('yes')[0]];
+  const no = l[tok.encode('no')[0]];
+  model.pos = at;
+  logits.set(saved);
+  return 1 / (1 + Math.exp(no - yes));
+}
+
+// mx2 and mx3 can answer at length (whole programs and websites), so they get
+// most of the context for the reply; `stop()` is polled to cut an answer
+// short. With `check: n` (mx3), the answer is judged after n tokens and at
+// the end, and nothing reaches `onText` until it has passed; a failed check
+// stops writing and sets info.rejected.
+function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK = 40, maxTokens = null, rand = Math.random, onText = null, stop = null, info = null, check = 0 } = {}) {
   const { tok, model } = load();
   const S = tok.special;
   const ctx = model.config.ctx;
@@ -389,6 +416,23 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
   const out = [];
   let pending = [];
   let text = '';
+  // Until the answer passes its check, what's written is held back.
+  let approved = !check;
+  let held = '';
+  const emit = (piece) => {
+    if (!onText) return;
+    if (approved) onText(piece);
+    else held += piece;
+  };
+  const judge = () => {
+    const p = selfCheck(tok, model, logits);
+    if (info) info.check = Math.min(info.check ?? 1, p);
+    if (p < 0.5) { if (info) info.rejected = true; return false; }
+    approved = true;
+    if (held && onText) onText(held);
+    held = '';
+    return true;
+  };
   const flush = (final) => {
     const bytes = Buffer.from(pending);
     // Hold back an incomplete UTF-8 sequence at the end.
@@ -402,7 +446,7 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
     }
     const piece = bytes.subarray(0, cut).toString('utf8');
     pending = [...bytes.subarray(cut)];
-    if (piece) { text += piece; if (onText) onText(piece); }
+    if (piece) { text += piece; emit(piece); }
   };
   for (let i = 0; i < maxTokens && model.pos < ctx; i++) {
     if (stop && i % 4 === 0 && stop()) break;
@@ -421,8 +465,10 @@ function reply(turns, { name = null, now = new Date(), temperature = 0.7, topK =
     flush(false);
     if (model.pos >= ctx) break;
     logits = model.step(next);
+    if (!approved && out.length === check && !judge()) return guardName(text.trim(), name);
   }
   flush(true);
+  if (!approved && !judge()) return guardName(text.trim(), name);
   return guardName(text.trim(), name);
 }
 
@@ -451,8 +497,21 @@ function checkedReply(turns, opts = {}) {
   if (name && nameFrom(turns.slice(0, -1)) !== name) message = ''; // they just introduced themselves
   else if (name) message = message.replace(new RegExp(`\\b${name}\\b`, 'gi'), ' ');
   const big = !!load().model.feed;
-  const tries = big ? [0, 0.5] : [0, 0.6, 0.8, 0.8];
   const why = [];
+  if (hasChecker()) {
+    // mx3 judges its own answers (the opening first, so a long answer that
+    // starts wrong is dropped early and nothing of it is shown).
+    for (const temperature of [0, 0.6, 0.8]) {
+      const info = {};
+      const text = reply(turns, { ...opts, temperature, info, check: 40 });
+      const conf = meanLogprob(info);
+      why.push(`check ${(info.check ?? 1).toFixed(2)} ${conf.toFixed(2)}`);
+      if (!info.rejected && text && conf > -1.5) return { text, source: 'model', why };
+      if (opts.stop && opts.stop()) return { text, source: 'model', why };
+    }
+    return fallbackReply(message, name, shell, rand, why);
+  }
+  const tries = big ? [0, 0.5] : [0, 0.6, 0.8, 0.8];
   for (const temperature of tries) {
     const info = {};
     const text = reply(turns, { ...opts, temperature, info });
@@ -462,6 +521,12 @@ function checkedReply(turns, opts = {}) {
     // New text (code, sums, things mx2 composes) is fine when it's confident.
     if (text && conf > -0.6 && (fit === 'fits' || (fit === 'unknown' && big && conf > -0.25))) return { text, source: 'model', why };
   }
+  return fallbackReply(message, name, shell, rand, why);
+}
+
+// No answer passed: bot's rules (when one really matches), small talk, or an
+// honest "I didn't follow".
+function fallbackReply(message, name, shell, rand, why) {
   try {
     const bot = require('./bot');
     const mem = { name };
@@ -483,11 +548,12 @@ function checkedReply(turns, opts = {}) {
 
 // --- training progress -------------------------------------------------------------------
 
-// Reads ai/data/train.log: steps, losses, validation checks, samples.
-// The newest run's log: mx2's when there is one, else the original mx.
+// Reads a train.log: steps, losses, validation checks, samples. The newest
+// run's log is used (mx3, mx2 or the original mx).
 function trainingLog() {
-  const mx2 = path.join(__dirname, '..', 'ai', 'mx2', 'data', 'train.log');
-  return fs.existsSync(mx2) ? mx2 : path.join(__dirname, '..', 'ai', 'data', 'train.log');
+  const logs = ['mx3', 'mx2', '.'].map((n) => path.join(__dirname, '..', 'ai', n, 'data', 'train.log')).filter((f) => fs.existsSync(f));
+  logs.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return logs[0] || path.join(__dirname, '..', 'ai', 'data', 'train.log');
 }
 
 function trainingStatus(logFile = trainingLog()) {
@@ -515,6 +581,22 @@ function trainingStatus(logFile = trainingLog()) {
     service: serviceRunning(), mtime: fs.statSync(logFile).mtimeMs };
 }
 
+// 514 → "8 hours 34 minutes"; 3000 → "2 days 2 hours"; 12000 → "1 week 1 day".
+function duration(minutes) {
+  const units = [['week', 7 * 24 * 60], ['day', 24 * 60], ['hour', 60], ['minute', 1]];
+  if (minutes < 1) return 'less than a minute';
+  const parts = [];
+  let rest = Math.round(minutes);
+  for (const [name, size] of units) {
+    const n = Math.floor(rest / size);
+    if (!n) continue;
+    parts.push(`${n} ${name}${n === 1 ? '' : 's'}`);
+    rest -= n * size;
+    if (parts.length === 2) break;
+  }
+  return parts.join(' ');
+}
+
 function showStatus(write, t, ansi) {
   const st = trainingStatus();
   if (!st || !st.steps.length) { write('No training run found yet. Start one with: ai --train start\n'); return 1; }
@@ -534,14 +616,23 @@ function showStatus(write, t, ansi) {
   }
   rates.sort((a, b) => a - b);
   const rate = rates.length ? rates[Math.floor(rates.length / 2)] : null;
-  const left = rate ? Math.round((st.total - last.step) * rate) : null;
+  // The last stage (full-length examples) takes about twice as long a step.
+  let phase1 = st.total;
+  try {
+    const name = (/ai\/(mx\d)\//.exec(trainingLog()) || [])[1];
+    phase1 = Number((/--phase1 (\d+)/.exec(fs.readFileSync(path.join(__dirname, '..', 'ai', name, 'train.args'), 'utf8')) || [])[1]) || st.total;
+  } catch { /* no schedule file: one pace throughout */ }
+  const longSteps = Math.max(0, st.total - Math.max(phase1, last.step));
+  const shortSteps = Math.max(0, Math.min(phase1, st.total) - last.step);
+  const longRate = last.step >= phase1 ? 1 : 2;
+  const left = rate ? Math.round(shortSteps * rate + longSteps * rate * longRate) : null;
   const stale = Date.now() - st.mtime > 5 * 60 * 1000;
   const state = st.done ? `${ansi.fg(t.ui.ok)}finished${R}`
     : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
       : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
         : `${ansi.fg(t.ui.ok)}running${R}`;
-  write(`${ansi.bold()}${/mx2/.test(trainingLog()) ? 'mx2' : 'mx'} training${R}  ${state}\n`);
-  write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  ~${left} min to go`) : ''}\n`);
+  write(`${ansi.bold()}${(/ai\/(mx\d)\//.exec(trainingLog()) || [, 'mx'])[1]} training${R}  ${state}\n`);
+  write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  about ${duration(left)} to go`) : ''}\n`);
   if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
   const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
   const bars = '▁▂▃▄▅▆▇█';
@@ -568,7 +659,7 @@ function showStatus(write, t, ansi) {
 const SERVICE = 'com.maxshell.mx2-train';
 const agentFile = () => path.join(process.env.MAXSHELL_LAUNCH_AGENTS || path.join(os.homedir(), 'Library', 'LaunchAgents'), `${SERVICE}.plist`);
 
-function servicePlist(root = path.join(__dirname, '..')) {
+function servicePlist(root = path.join(__dirname, '..'), name = 'mx3') {
   const esc = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -576,14 +667,14 @@ function servicePlist(root = path.join(__dirname, '..')) {
 <dict>
   <key>Label</key><string>${SERVICE}</string>
   <key>ProgramArguments</key>
-  <array><string>/bin/sh</string><string>${esc(path.join(root, 'ai', 'mx2', 'run-training.sh'))}</string></array>
+  <array><string>/bin/sh</string><string>${esc(path.join(root, 'ai', 'mx2', 'run-training.sh'))}</string><string>${name}</string></array>
   <key>WorkingDirectory</key><string>${esc(root)}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>60</integer>
   <key>ProcessType</key><string>Background</string>
   <key>StandardOutPath</key><string>/dev/null</string>
-  <key>StandardErrorPath</key><string>${esc(path.join(root, 'ai', 'mx2', 'data', 'service.err'))}</string>
+  <key>StandardErrorPath</key><string>${esc(path.join(root, 'ai', name, 'data', 'service.err'))}</string>
 </dict>
 </plist>
 `;
@@ -595,17 +686,21 @@ function serviceRunning() {
   return r.status === 0 && /state = running/.test(r.stdout);
 }
 
-function trainService(action, write, err) {
+function trainService(action, write, err, name = 'mx3') {
   const { spawnSync } = require('child_process');
   const domain = `gui/${process.getuid()}`;
   const file = agentFile();
   if (action === 'start') {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, servicePlist());
+    if (!/^mx\d$/.test(name) || !fs.existsSync(path.join(__dirname, '..', 'ai', name, 'data', 'chat.jsonl'))) {
+      err(`ai: no training data for ${name} (build it with node ai/${name}/make-corpus.js)\n`);
+      return 1;
+    }
+    fs.writeFileSync(file, servicePlist(undefined, name));
     spawnSync('launchctl', ['bootout', `${domain}/${SERVICE}`], { stdio: 'ignore' });
     const r = spawnSync('launchctl', ['bootstrap', domain, file], { encoding: 'utf8' });
     if (r.status !== 0) { err(`ai: couldn't start the training service: ${(r.stderr || '').trim()}\n`); return 1; }
-    write('mx2 training is running in the background.\n'
+    write(`${name} training is running in the background.\n`
       + '  • Closing the lid or sleeping saves progress and pauses; it continues when the Mac wakes.\n'
       + '  • If the Mac restarts or training stops, it starts again and picks up where it left off.\n'
       + '  • Watch it with ai --status; stop it for good with ai --train stop.\n');
@@ -615,10 +710,10 @@ function trainService(action, write, err) {
     // bootout sends SIGTERM: the trainer saves a checkpoint before it exits.
     spawnSync('launchctl', ['bootout', `${domain}/${SERVICE}`], { stdio: 'ignore' });
     try { fs.unlinkSync(file); } catch { /* wasn't installed */ }
-    write('mx2 training stopped (progress is saved). Start again with ai --train start.\n');
+    write('Training stopped (progress is saved). Start again with ai --train start.\n');
     return 0;
   }
-  err('usage: ai --train start|stop\n');
+  err('usage: ai --train start [mx2|mx3] | stop\n');
   return 2;
 }
 
@@ -662,7 +757,7 @@ function runAi(args, io, shell) {
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
   if (args[0] === '--status' || args[0] === '--training') return showStatus(write, t, ansi);
-  if (args[0] === '--train') return trainService(args[1], write, err);
+  if (args[0] === '--train') return trainService(args[1], write, err, args[2]);
   if (args[0] === '--info') {
     if (!available()) { err('ai: no model yet — train one with: python3 ai/train.py\n'); return 1; }
     const { model } = load();
@@ -735,7 +830,7 @@ function runAi(args, io, shell) {
     };
     const keys = interruptWatch();
     let text;
-    try { text = reply(turns, { name, onText, stop: keys.hit }); } finally { keys.done(); }
+    try { text = checkedReply(turns, { name, shell, onText, stop: keys.hit }).text; } finally { keys.done(); }
     if (!started) write(`\r\x1b[K${tag}${text}`);
     write(`${R}${keys.hit() ? `${ansi.fg(t.ui.muted)} (stopped)${R}` : ''}\n`);
     return text;
@@ -745,7 +840,7 @@ function runAi(args, io, shell) {
     answer([['user', args.join(' ')]]);
     return 0;
   }
-  const intro = load().name === 'mx2' ? 'mx2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' : 'mx, a small AI running on this Mac.';
+  const intro = { mx3: 'mx3, an AI running on this Mac — good at code, websites and explaining things. Ctrl-C stops an answer.', mx2: 'mx2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' }[load().name] || 'mx, a small AI running on this Mac.';
   write(`${ansi.fg(t.ui.muted)}${intro} It can be wrong — double-check anything important. bye to leave.${R}\n`);
   const turns = [];
   for (;;) {
@@ -761,5 +856,5 @@ function runAi(args, io, shell) {
 
 module.exports = {
   Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, nameFrom, guardName, reply, runAi, available,
-  load, trainingStatus, servicePlist, contentWords, answerKey, relevance, checkedReply,
+  load, trainingStatus, servicePlist, duration, contentWords, answerKey, relevance, checkedReply,
 };
