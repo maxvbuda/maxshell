@@ -62,6 +62,9 @@ def get_tokenizer(convs, vocab):
     return tok
 
 
+CHECK_WEIGHT = 10
+
+
 def encode_all(tok, convs, ctx):
     """Every conversation as (ids, mask). Ones longer than the context are
     left out, so the model only ever learns complete answers (whole sites)."""
@@ -71,12 +74,18 @@ def encode_all(tok, convs, ctx):
     for c in convs:
         ids = [S['<|doc|>'], S['<|sys|>']] + tok.encode(c['sys']) + [S['<|end|>']]
         mask = [0] * len(ids)
+        prev = None
         for turn in c['turns']:
             who, text = turn[0], turn[1]
             learn = who == 'ai' and (len(turn) < 3 or turn[2])
+            # A verdict after a check (sys turn) is one word, so it counts
+            # CHECK_WEIGHT times — otherwise the self-check is under 1% of
+            # the loss and barely learned.
+            weight = CHECK_WEIGHT if prev == 'sys' else 1
             body = tok.encode(text) + [S['<|end|>']]
             ids += [S['<|user|>'] if who == 'user' else S['<|sys|>'] if who == 'sys' else S['<|ai|>']] + body
-            mask += [0] + ([1] * len(body) if learn else [0] * len(body))
+            mask += [0] + ([weight] * len(body) if learn else [0] * len(body))
+            prev = who
         if len(ids) > ctx + 1:
             dropped += 1
             continue
@@ -280,7 +289,7 @@ def main():
     val_ids, val_mask, val_starts = encode_all(tok, convs[:n_val], args.ctx)
     print(f'run: --steps {args.steps} --batch {args.batch}x{args.accum} --lr {args.lr}', flush=True)
     print(f'{len(train_ids) / 1e6:.1f}M training tokens ({time.time() - t0:.0f}s to encode), '
-          f'{train_mask.float().mean().item() * 100:.0f}% of them answers', flush=True)
+          f'{(train_mask > 0).float().mean().item() * 100:.0f}% of them answers', flush=True)
 
     model = MX2(args.vocab, args.ctx, args.d, args.layers, args.heads).to(device)
     n_params = sum(p.numel() for p in model.parameters())
