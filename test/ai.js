@@ -115,6 +115,8 @@ test('training status notices a pause for sleep, and the resume after it', () =>
   st = ai.trainingStatus(log);
   assert.ok(!st.asleep, 'running again after wake');
   assert.match(st.lastEvent, /awake .* at 07:30/);
+  fs.appendFileSync(log, 'run: --steps 9000 --batch 8x4 --lr 0.0003\nresumed from step 100\n');
+  assert.strictEqual(ai.trainingStatus(log).total, 9000, 'an extended schedule counts');
   fs.rmSync(dir, { recursive: true });
 });
 

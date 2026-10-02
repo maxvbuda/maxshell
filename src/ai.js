@@ -562,7 +562,8 @@ function trainingStatus(logFile = trainingLog()) {
   const steps = [...text.matchAll(/^step\s+(\d+)\s+loss ([\d.]+)\s+lr ([\d.e+-]+)\s+([\d.]+) min/gm)]
     .map((m) => ({ step: +m[1], loss: +m[2], lr: +m[3], min: +m[4] }));
   const vals = [...text.matchAll(/validation loss ([\d.]+)/g)].map((m) => +m[1]);
-  const total = Number((/--steps (\d+)/.exec(text) || [])[1]) || 5000;
+  // The latest run line: a schedule extended mid-run logs a new one.
+  const total = Number(([...text.matchAll(/--steps (\d+)/g)].pop() || [])[1]) || 5000;
   const params = (/model: ([\d.]+)M parameters/.exec(text) || [])[1];
   const tokens = (/([\d.]+)M training tokens/.exec(text) || [])[1];
   const samples = [];
