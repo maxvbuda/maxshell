@@ -698,6 +698,10 @@ function trainService(action, write, err, name = 'mx3') {
     }
     fs.writeFileSync(file, servicePlist(undefined, name));
     spawnSync('launchctl', ['bootout', `${domain}/${SERVICE}`], { stdio: 'ignore' });
+    // A run that's still saving keeps the service registered for a few
+    // seconds; starting before it's gone fails with an I/O error.
+    const gone = () => spawnSync('launchctl', ['print', `${domain}/${SERVICE}`], { stdio: 'ignore' }).status !== 0;
+    for (let i = 0; i < 60 && !gone(); i++) spawnSync('sleep', ['1']);
     const r = spawnSync('launchctl', ['bootstrap', domain, file], { encoding: 'utf8' });
     if (r.status !== 0) { err(`ai: couldn't start the training service: ${(r.stderr || '').trim()}\n`); return 1; }
     write(`${name} training is running in the background.\n`

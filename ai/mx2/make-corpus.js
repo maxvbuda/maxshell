@@ -70,7 +70,9 @@ function codeChats(repeat) {
       const langs = Object.keys(e.impls);
       for (const lang of langs) {
         const impl = e.impls[lang];
-        let ask = pick(e.asks);
+        // Half the time, a generic wording made from the task, so every task
+        // is asked for in many ways (not just its hand-written ones).
+        let ask = chance(0.5) ? pick(require('./exercise-kit').asksFor(e.task)) : pick(e.asks);
         if (ask.includes('{lang}')) ask = ask.replace('{lang}', LANG_NAMES[lang].toLowerCase());
         else if (langs.length > 1 || chance(0.3)) ask += pick([` in ${LANG_NAMES[lang]}`, ` using ${LANG_NAMES[lang]}`, ` (${LANG_NAMES[lang].toLowerCase()})`]);
         if (impl.broken) {

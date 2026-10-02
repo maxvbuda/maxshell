@@ -160,8 +160,8 @@ function main() {
     const n = fn();
     counts.push(`  ${label.padEnd(12)} ${typeof n === 'number' ? n : out.length - before}`);
   };
-  step('mx chats', () => mxChats(60));
-  step('code', () => kit.codeChats(14));
+  step('mx chats', () => mxChats(25));
+  step('code', () => kit.codeChats(45));
   step('websites', () => kit.siteChats(1500));
   step('knowledge', () => { for (let i = 0; i < 2; i++) kit.knowledgeChats(); });
   step('talk', () => { for (const t of talkChats(rand, { repeat: 40 })) out.push({ sys: SYS, turns: t }); });

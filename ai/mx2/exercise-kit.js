@@ -29,6 +29,15 @@ function asksFor(task) {
     `help me ${task} with {lang}`,
     `can you code something that ${does}?`,
     `how can i ${task} using {lang}?`,
+    `write me a {lang} function to ${task}`,
+    `give me {lang} code to ${task}`,
+    `{lang}: ${task}`,
+    `i want {lang} code that ${does}`,
+    `how to ${task} in {lang}`,
+    `what's the code to ${task} in {lang}?`,
+    `can you show me {lang} code that ${does}`,
+    `please write a function to ${task}`,
+    `quick {lang} snippet to ${task}`,
   ];
 }
 
