@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const kit = require('../mx2/make-corpus');
 const { talkChats } = require('./talk');
-const { answerKey, contentWords } = require('../../src/ai');
+const { answerKey, contentWords, contextLine } = require('../../src/ai');
 
 const { out, rand, pick, chance, vary } = kit;
 const OUT = path.join(__dirname, 'data');
@@ -165,6 +165,16 @@ function main() {
   step('websites', () => kit.siteChats(1500));
   step('knowledge', () => { for (let i = 0; i < 2; i++) kit.knowledgeChats(); });
   step('talk', () => { for (const t of talkChats(rand, { repeat: 40 })) out.push({ sys: SYS, turns: t }); });
+  // Every conversation gets a real-looking date and time (and sometimes a
+  // name). The written data all had one fixed date, and the model learned
+  // "good code only happens on Tuesday at 10:15" — with the real date, it
+  // and the checker turned against its own code.
+  const NAMES = ['Max', 'Ada', 'Sam', 'Priya', 'Leo', 'Zoe', 'Omar', 'Mia', 'Kofi', 'Lucas'];
+  for (const c of out) {
+    if (c.sys !== SYS) continue;
+    const when = new Date(2025 + Math.floor(rand() * 3), Math.floor(rand() * 12), 1 + Math.floor(rand() * 28), Math.floor(rand() * 24), Math.floor(rand() * 60));
+    c.sys = contextLine(when, chance(0.25) ? pick(NAMES) : null);
+  }
   // mx3 talks about itself as mx3 everywhere.
   for (const c of out) c.turns = c.turns.map((t) => (t[0] === 'ai' ? [t[0], t[1].replace(/\bI’m mx2\b/g, 'I’m mx3')] : t));
   step('self-check', () => checkChats(70000));

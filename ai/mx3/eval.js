@@ -114,7 +114,8 @@ function main() {
   let right = 0;
   for (const [q, a, fits] of CHECKS) {
     const S = tok.special;
-    const ids = ai.promptTokens(tok, ai.contextLine(new Date(2026, 8, 29, 10, 15)), [['user', q]], model.config.ctx - 64);
+    // The real time, like ai uses (a fixed date once hid a shortcut).
+    const ids = ai.promptTokens(tok, ai.contextLine(new Date()), [['user', q]], model.config.ctx - 64);
     model.reset();
     model.feed([...ids, ...tok.encode(a)]);
     const l = model.feed([S['<|end|>'], S['<|sys|>'], ...tok.encode('check: does the answer fit?'), S['<|end|>'], S['<|ai|>']]);
