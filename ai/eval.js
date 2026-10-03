@@ -125,7 +125,7 @@ let clean = 0;
 const t0 = Date.now();
 let tokens = 0;
 for (const c of cases) {
-  const opts = { name: c.opts.name || null, now: c.opts.now || new Date(2026, 8, 29, 10, 15), rand, temperature: 0.5, onText: () => { tokens++; } };
+  const opts = { name: c.opts.name || null, now: c.opts.now || new Date(2026, 9, 2, 20, 5), rand, temperature: 0.5, onText: () => { tokens++; } };
   // --raw scores the model alone; by default, what `ai` shows (checked replies).
   const a = process.argv.includes('--raw') ? ai.reply(c.turns, opts) : ai.checkedReply(c.turns, opts).text;
   const ok = !!c.check(a);

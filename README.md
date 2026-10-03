@@ -953,7 +953,10 @@ websites. It also learned to **check its own answers**: given a question
 and an answer, it says whether the answer fits, and `ai` asks it about the
 opening of every reply before showing it, so a reply that starts off wrong
 is dropped and rewritten. `node ai/mx3/eval.js` runs the code it writes and
-scores the checker.
+scores the checker. `ai` uses mx3 when `models/mx3.bin` is there; it writes
+working code for tasks it trained on (12/12, run and checked) and half of
+brand-new ones, and scores 87% on the everyday exam (mx: 99%) — it's weaker
+at reading the clock. `MAXSHELL_AI=mx ai` uses the original.
 
 **mx2**, its bigger successor (43M parameters, Llama-style, trained to code
 — websites especially — and to answer general questions), trains in the

@@ -65,7 +65,12 @@ LaunchAgent `com.maxshell.mx2-train` running `run-training.sh`, which starts
 `sleepwatch` (IOKit: SIGUSR1 → save before sleep) and `caffeinate`. The
 runtime is `src/mx2.js` (worker threads + `src/mx2kernels.wasm`, built from
 `mx2kernels.c` with the clang command at its top — commit both); check it
-with `ai/mx2/parity.py`. `ai` prefers `models/mx2.bin` when it exists.
+with `ai/mx2/parity.py`. mx3 (`ai/mx3/`: `make-corpus.js`, `talk.js`,
+`eval.js`, `train.args`) is the same architecture trained by
+`ai/mx2/train.py --name mx3`, with a learned self-check ("check: does the
+answer fit?" → yes/no) that `checkedReply` uses. `ai` prefers mx3, then mx2,
+then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
+29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

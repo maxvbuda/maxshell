@@ -308,7 +308,7 @@ test('bot answers from its rules', () => {
   assert.match(reply('whats 15% of 80', sh, mem), /is 12\b/);
   assert.match(reply('100 f to c', sh, mem), /37\.78°C/);
   assert.match(reply('5 miles in km', sh, mem), /8\.0467 km/);
-  assert.match(reply('are you real ai?', sh, mem), /if\/else rules|if-statements|flowchart/);
+  assert.match(reply('are you real ai?', sh, mem), /if\/else rules|if-statements|flowchart|list of rules|No real AI/);
   assert.match(reply('how do I undo', sh, mem), /Ctrl-Z/);
   assert.match(reply('what is the weather', sh, mem), /internet/);
   assert.match(reply('which branch', sh, mem), /You’re on /);

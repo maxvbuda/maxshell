@@ -361,8 +361,25 @@ function relevance(message, text, name = null) {
   if (!index) return 'unknown';
   // The model sometimes puts its own opener ("Sure! ") on a memorized answer.
   const bare = text.replace(/^(sure|okay|ok|yes|good question|here’s how|no problem|of course)[!.:,]?\s+/i, '');
-  const words = index.get(answerKey(text, name)) || index.get(answerKey(bare, name));
-  if (!words) return 'unknown';
+  let words = index.get(answerKey(text, name)) || index.get(answerKey(bare, name));
+  if (!words) {
+    // Not a known answer — but maybe a known opening with an invented
+    // ending ("It’s a command on your Mac: <made-up>"). Judge it by the
+    // questions that opening answered.
+    const head = answerKey(text, name).slice(0, 26);
+    if (head.length < 26) return 'unknown';
+    if (!indexCache.heads) {
+      indexCache.heads = new Map();
+      for (const [k, ws] of indexCache) {
+        const h = k.slice(0, 26);
+        if (!indexCache.heads.has(h)) indexCache.heads.set(h, new Set());
+        const set = indexCache.heads.get(h);
+        if (set.size < 3000) for (const w of ws) set.add(w);
+      }
+    }
+    words = indexCache.heads.get(head);
+    if (!words) return 'unknown';
+  }
   const mine = contentWords(message);
   if (!mine.length) return 'fits';
   const shared = mine.filter((w) => words.has(w)).length;
@@ -506,7 +523,13 @@ function checkedReply(turns, opts = {}) {
       const text = reply(turns, { ...opts, temperature, info, check: 40 });
       const conf = meanLogprob(info);
       why.push(`check ${(info.check ?? 1).toFixed(2)} ${conf.toFixed(2)}`);
-      if (!info.rejected && text && conf > -1.5) return { text, source: 'model', why };
+      // The word-match index too: mx3's checker can pass a memorized answer
+      // to a different question (a made-up word → a command's man summary).
+      // (Code answers are left to the checker: their openings are shared
+      // by many tasks, so the word match misjudges them.)
+      const fit = text.includes('```') ? 'code' : relevance(message, text, name);
+      why[why.length - 1] += ` ${fit}`;
+      if (!info.rejected && text && conf > -1.5 && fit !== 'mismatch') return { text, source: 'model', why };
       if (opts.stop && opts.stop()) return { text, source: 'model', why };
     }
     return fallbackReply(message, name, shell, rand, why);
