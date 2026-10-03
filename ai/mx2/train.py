@@ -25,6 +25,7 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
 import time
@@ -44,8 +45,41 @@ from train import BPE, SPECIALS  # noqa: E402  (mx's tokenizer code, reused)
 
 # --- data --------------------------------------------------------------------------
 
-def load_convs():
-    return [json.loads(l) for l in open(os.path.join(DATA, 'chat.jsonl'))]
+def load_convs(files=None, replay=0.0):
+    """Conversations ({sys, turns}) and plain documents ({text}: real code
+    and docs, learned whole). `replay` mixes in that fraction of documents
+    from pretrain.jsonl, so a chat stage doesn't forget them."""
+    files = files or [os.path.join(DATA, 'chat.jsonl')]
+    # A lone half of an emoji (from text cut in the wrong place) can't be
+    # encoded; such characters are dropped.
+    fix = lambda x: x.encode('utf-16', 'surrogatepass').decode('utf-16', 'ignore')
+
+    def clean(c):
+        if 'text' in c:
+            c['text'] = fix(c['text'])
+        else:
+            c['sys'] = fix(c.get('sys', ''))
+            c['turns'] = [[t[0], fix(t[1]), *t[2:]] for t in c['turns']]
+        return c
+
+    convs = [clean(json.loads(l)) for f in files for l in open(f)]
+    if replay:
+        docs = [json.loads(l) for l in open(os.path.join(DATA, 'pretrain.jsonl'))]
+        size = lambda c: len(c['text']) if 'text' in c else sum(len(t[1]) for t in c['turns'])
+        want = replay / (1 - replay) * sum(size(c) for c in convs)
+        random.Random(5).shuffle(docs)
+        got = 0
+        for d in docs:
+            if got >= want:
+                break
+            convs.append(d)
+            got += len(d['text'])
+        print(f'replaying {got / 1e6:.1f}M chars of documents', flush=True)
+    return convs
+
+
+def text_of(c):
+    return [c['text']] if 'text' in c else [t[1] for t in c['turns']]
 
 
 def get_tokenizer(convs, vocab):
@@ -55,7 +89,7 @@ def get_tokenizer(convs, vocab):
         return BPE(t['merges'], t['vocab_size'])
     t0 = time.time()
     sample = random.Random(1).sample(convs, min(len(convs), 60000))
-    texts = [t[1] for c in sample for t in c['turns']] + [c['sys'] for c in sample[:2000]]
+    texts = [x for c in sample for x in text_of(c)] + [c['sys'] for c in sample[:2000] if 'sys' in c]
     tok = BPE.train(texts, vocab)
     json.dump({'merges': tok.merges, 'vocab_size': tok.vocab_size}, open(path, 'w'))
     print(f'tokenizer: {vocab} tokens, trained in {time.time() - t0:.0f}s', flush=True)
@@ -72,6 +106,17 @@ def encode_all(tok, convs, ctx):
     ids_all, mask_all, starts = [], [], []
     dropped = 0
     for c in convs:
+        if 'text' in c:
+            # A document: learned whole, cut into windows that fit.
+            ids = [S['<|doc|>']] + tok.encode(c['text']) + [S['<|end|>']]
+            for at in range(0, len(ids) - 1, ctx):
+                piece = ids[at:at + ctx + 1]
+                if len(piece) < 32:
+                    break
+                starts.append(len(ids_all))
+                ids_all += piece
+                mask_all += [0] + [1] * (len(piece) - 1)
+            continue
         ids = [S['<|doc|>'], S['<|sys|>']] + tok.encode(c['sys']) + [S['<|end|>']]
         mask = [0] * len(ids)
         prev = None
@@ -235,6 +280,9 @@ def main():
     ap.add_argument('--bench', action='store_true')
     ap.add_argument('--export', action='store_true')
     ap.add_argument('--name', default='mx2', help='which model: data in ai/<name>/data, exported as models/<name>.bin')
+    ap.add_argument('--keep-every', type=int, default=0, help='also keep the weights every N steps (keep-<step>.pt), to pick the best by a held-out exam')
+    ap.add_argument('--data', action='append', help='training file(s) in ai/<name>/data (default chat.jsonl)')
+    ap.add_argument('--replay', type=float, default=0.0, help='fraction of the tokens to take from pretrain.jsonl')
     ap.add_argument('--init', help='start from this checkpoint\'s weights (fresh optimizer and schedule)')
     args = ap.parse_args()
     global DATA, NAME
@@ -269,12 +317,12 @@ def main():
             torch.mps.empty_cache()
         return
 
-    convs = load_convs()
+    convs = load_convs([os.path.join(DATA, f) for f in args.data] if args.data else None, args.replay)
     tok = get_tokenizer(convs, args.vocab)
     ckpt_path = os.path.join(DATA, 'ckpt.pt')
 
     if args.export:
-        ck = torch.load(ckpt_path, map_location='cpu')
+        ck = torch.load(os.environ.get('MX_EXPORT_FROM') or ckpt_path, map_location='cpu')
         c = ck['config']
         model = MX2(c['vocab'], c['ctx'], c['d'], c['layers'], c['heads'])
         model.load_state_dict(ck['model'])
@@ -426,7 +474,9 @@ def main():
                 print(f'    {p!r:36} → {sample(p)!r}', flush=True)
             save(v)
             last_save = time.time()
-        elif time.time() - last_save > 15 * 60:
+        if args.keep_every and step % args.keep_every == 0:
+            torch.save({'model': model.state_dict(), 'step': step, 'config': model.config}, os.path.join(DATA, f'keep-{step}.pt'))
+        if time.time() - last_save > 15 * 60:
             save()
             last_save = time.time()
     v = evaluate()

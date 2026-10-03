@@ -19,6 +19,15 @@ LOG=$DATA/train.log
 CACHE=${MAXSHELL_CACHE:-$HOME/.cache/maxshell}
 PY=${MX2_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.13/bin/python3}
 
+# A second stage (ai/<name>/train2.args) starts from the first's weights
+# once it's done.
+if [ -f "$DATA/done" ] && [ -f "ai/$NAME/train2.args" ] && [ ! -f "$DATA/stage2" ]; then
+  mv "$DATA/ckpt.pt" "$DATA/stage1.pt"
+  rm -f "$DATA/done"
+  touch "$DATA/stage2"
+  echo "=== stage 1 finished; starting stage 2 $(date '+%Y-%m-%d %H:%M') ===" >> "$DATA/train.log"
+fi
+[ -f "$DATA/stage2" ] && ARGS=$(cat "ai/$NAME/train2.args")
 [ -f "$DATA/done" ] && exit 0
 mkdir -p "$CACHE"
 touch "$LOG"
@@ -38,5 +47,10 @@ trap 'kill -TERM $TRAIN 2>/dev/null; wait $TRAIN; exit 0' TERM INT HUP
 
 wait $TRAIN
 status=$?
+# Stage 1 done and a stage 2 waiting: exit non-zero, so launchd starts
+# this script again, which begins stage 2 (see the top).
+if [ -f "$DATA/done" ] && [ -f "ai/$NAME/train2.args" ] && [ ! -f "$DATA/stage2" ]; then
+  exit 75
+fi
 [ -f "$DATA/done" ] && exit 0
 exit $status

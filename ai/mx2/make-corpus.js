@@ -61,10 +61,11 @@ function answerFor(lang, impl, task) {
 
 // --- code entries -------------------------------------------------------------
 
-function codeChats(repeat) {
+function codeChats(repeat, skip = new Set()) {
   const dir = path.join(HERE, 'code');
   let entries = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) entries = entries.concat(require(path.join(dir, f)));
+  entries = entries.filter((e) => !skip.has(e.task)); // held out for an exam
   for (let r = 0; r < repeat; r++) {
     for (const e of entries) {
       const langs = Object.keys(e.impls);

@@ -1,0 +1,1 @@
+--init ai/mx4/data/stage1.pt --data chat.jsonl --replay 0.15 --d 768 --layers 12 --heads 12 --vocab 16384 --ctx 2048 --short 1024 --batch 4 --accum 8 --lr 3e-4 --warmup 100 --steps 2300 --phase1 1900 --keep-every 300
