@@ -36,6 +36,22 @@ with `chsh`. Your current `PATH` is saved in `~/.maxshell_profile`, which a
 login maxshell loads, so Homebrew and your other tools stay on hand. To go
 back: `chsh -s /bin/zsh`.
 
+**Without admin rights** (no `sudo`): install Node with
+[nvm](https://github.com/nvm-sh/nvm), download the ZIP into `~/maxshell`,
+and make the command yourself:
+
+```sh
+cd ~ && curl -L https://github.com/maxvbuda/maxshell/archive/refs/heads/main.zip -o maxshell.zip \
+  && unzip -q maxshell.zip && mv maxshell-main maxshell && rm maxshell.zip
+mkdir -p ~/bin && printf '#!/bin/sh\nexec node "$HOME/maxshell/bin/maxshell.js" "$@"\n' > ~/bin/maxshell
+chmod +x ~/bin/maxshell && echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+```
+
+**Updating:** `maxshell --update` downloads the newest version, checks it,
+moves the old folder to the Trash and puts the new one in its place (same
+path, so everything pointing at it keeps working). A git checkout is
+updated with `git pull` instead and never replaced.
+
 ## Usage
 
 ```sh
@@ -44,6 +60,7 @@ maxshell script.mxsh a b c    # run a script with arguments
 maxshell -c 'echo hello'      # run one command
 maxshell -l                   # a login shell (also -lc, -i, as zsh accepts)
 maxshell --make-default       # make it your login shell
+maxshell --update             # get the newest version from GitHub
 maxshell --version
 ```
 

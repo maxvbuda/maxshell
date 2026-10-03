@@ -370,8 +370,14 @@ function main() {
       'usage: maxshell [script [args...]]\n'
       + '       maxshell -c "command"\n'
       + '       maxshell               start an interactive shell\n'
-      + '       maxshell --make-default   make maxshell your login shell\n',
+      + '       maxshell --make-default   make maxshell your login shell\n'
+      + '       maxshell --update         get the newest version from GitHub\n',
     );
+    return;
+  }
+
+  if (argv[0] === '--update') {
+    process.exitCode = require('../src/update').update();
     return;
   }
 

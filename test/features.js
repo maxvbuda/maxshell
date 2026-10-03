@@ -359,6 +359,40 @@ test('the fix is shown dimmed with a hint', () => {
   ansi.setEnabled(false);
 });
 
+test('maxshell --update swaps in the downloaded copy and trashes the old one; a git checkout is only pulled', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  const { update } = require('../src/update');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxup-'));
+  const root = path.join(dir, 'maxshell');
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), '{"version":"1.0.0"}');
+  fs.writeFileSync(path.join(root, 'old.txt'), 'old');
+  const src = path.join(dir, 'src', 'maxshell-main');
+  fs.mkdirSync(path.join(src, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'package.json'), '{"version":"2.0.0"}');
+  fs.writeFileSync(path.join(src, 'bin', 'maxshell.js'), '// new');
+  spawnSync('zip', ['-qr', path.join(dir, 'main.zip'), 'maxshell-main'], { cwd: path.join(dir, 'src') });
+  process.env.MAXSHELL_TRASH = path.join(dir, 'Trash');
+  let said = '';
+  assert.strictEqual(update({ root, url: `file://${path.join(dir, 'main.zip')}`, say: (t) => { said += t; } }), 0, said);
+  assert.ok(fs.existsSync(path.join(root, 'bin', 'maxshell.js')), 'new copy in place');
+  assert.ok(!fs.existsSync(path.join(root, 'old.txt')), 'old files gone from the folder');
+  const trashed = fs.readdirSync(path.join(dir, 'Trash'));
+  assert.ok(trashed.length === 1 && fs.existsSync(path.join(dir, 'Trash', trashed[0], 'old.txt')), 'old folder in the Trash');
+  // A failed download changes nothing.
+  assert.strictEqual(update({ root, url: `file://${path.join(dir, 'missing.zip')}`, say: () => {} }), 1);
+  assert.ok(fs.existsSync(path.join(root, 'bin', 'maxshell.js')));
+  // A git checkout (like a developer's) is never replaced.
+  fs.mkdirSync(path.join(root, '.git'));
+  assert.strictEqual(update({ root, url: `file://${path.join(dir, 'main.zip')}`, say: () => {} }), 1);
+  assert.ok(fs.existsSync(path.join(root, '.git')) && fs.readdirSync(path.join(dir, 'Trash')).length === 1, 'checkout left alone');
+  delete process.env.MAXSHELL_TRASH;
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 (async () => {
   for (const run of pending) await run();
   if (failures) {
