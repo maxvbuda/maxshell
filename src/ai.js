@@ -574,7 +574,10 @@ function fallbackReply(message, name, shell, rand, why) {
 // Reads a train.log: steps, losses, validation checks, samples. The newest
 // run's log is used (mx3, mx2 or the original mx).
 function trainingLog() {
-  const logs = ['mx3', 'mx2', '.'].map((n) => path.join(__dirname, '..', 'ai', n, 'data', 'train.log')).filter((f) => fs.existsSync(f));
+  const dir = path.join(__dirname, '..', 'ai');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => /^mx\d+$/.test(n)); } catch { /* no ai folder */ }
+  const logs = [...names, '.'].map((n) => path.join(dir, n, 'data', 'train.log')).filter((f) => fs.existsSync(f));
   logs.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   return logs[0] || path.join(__dirname, '..', 'ai', 'data', 'train.log');
 }
@@ -643,7 +646,7 @@ function showStatus(write, t, ansi) {
   // The last stage (full-length examples) takes about twice as long a step.
   let phase1 = st.total;
   try {
-    const name = (/ai\/(mx\d)\//.exec(trainingLog()) || [])[1];
+    const name = (/ai\/(mx\d+)\//.exec(trainingLog()) || [])[1];
     phase1 = Number((/--phase1 (\d+)/.exec(fs.readFileSync(path.join(__dirname, '..', 'ai', name, 'train.args'), 'utf8')) || [])[1]) || st.total;
   } catch { /* no schedule file: one pace throughout */ }
   const longSteps = Math.max(0, st.total - Math.max(phase1, last.step));
@@ -655,7 +658,7 @@ function showStatus(write, t, ansi) {
     : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
       : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
         : `${ansi.fg(t.ui.ok)}running${R}`;
-  write(`${ansi.bold()}${(/ai\/(mx\d)\//.exec(trainingLog()) || [, 'mx'])[1]} training${R}  ${state}\n`);
+  write(`${ansi.bold()}${(/ai\/(mx\d+)\//.exec(trainingLog()) || [, 'mx'])[1]} training${R}  ${state}\n`);
   write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  about ${duration(left)} to go`) : ''}\n`);
   if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
   const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
@@ -716,7 +719,7 @@ function trainService(action, write, err, name = 'mx3') {
   const file = agentFile();
   if (action === 'start') {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (!/^mx\d$/.test(name) || !fs.existsSync(path.join(__dirname, '..', 'ai', name, 'data', 'chat.jsonl'))) {
+    if (!/^mx\d+$/.test(name) || !fs.existsSync(path.join(__dirname, '..', 'ai', name, 'data', 'chat.jsonl'))) {
       err(`ai: no training data for ${name} (build it with node ai/${name}/make-corpus.js)\n`);
       return 1;
     }
