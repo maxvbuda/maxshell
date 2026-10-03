@@ -128,6 +128,15 @@ test('time left reads in hours, days and weeks', () => {
   assert.strictEqual(ai.duration(45), '45 minutes');
 });
 
+test('models are shown by version: mx3 is mx 0.0.3', () => {
+  assert.strictEqual(ai.versionName('mx3'), 'mx 0.0.3');
+  assert.strictEqual(ai.versionName('mx'), 'mx 0.0.1');
+  assert.strictEqual(ai.shortName('mx 0.0.4'), 'mx4');
+  assert.strictEqual(ai.shortName('0.0.1'), 'mx');
+  assert.strictEqual(ai.shortName('mx3'), 'mx3');
+  assert.strictEqual(ai.ownName('I’m mx3: a small language model'), 'I’m mx 0.0.3: a small language model');
+});
+
 test('the training service restarts on failure and starts at login', () => {
   const plist = ai.servicePlist('/x/maxshell');
   assert.match(plist, /<string>\/x\/maxshell\/ai\/mx2\/run-training.sh<\/string>/);

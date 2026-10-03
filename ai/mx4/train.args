@@ -1,1 +1,1 @@
---data pretrain.jsonl --d 768 --layers 12 --heads 12 --vocab 16384 --ctx 2048 --short 1024 --batch 4 --accum 8 --lr 6e-4 --warmup 300 --steps 1900 --phase1 1900
+--data pretrain.jsonl --d 768 --layers 12 --heads 12 --vocab 16384 --ctx 2048 --short 1024 --batch 2 --accum 16 --lr 6e-4 --warmup 300 --steps 1900 --phase1 1900

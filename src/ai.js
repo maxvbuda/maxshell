@@ -215,11 +215,24 @@ function sampleToken(logits, { temperature = 0.7, topK = 40, rand = Math.random,
 
 let loaded = null;
 
+// Models are shown by version: mx3 is "mx 0.0.3", the original mx "mx 0.0.1".
+// Files and folders keep the short names (models/mx3.bin, ai/mx3/).
+const versionName = (n) => (n === 'mx' ? 'mx 0.0.1' : String(n).replace(/^mx(\d+)$/, 'mx 0.0.$1'));
+// "mx 0.0.3", "0.0.3", "mx0.0.3" or "mx3" → "mx3".
+function shortName(s) {
+  if (!s) return s;
+  const m = /^\s*(?:mx\s*)?0\.0\.(\d+)\s*$/i.exec(s);
+  if (!m) return s.trim();
+  return m[1] === '1' ? 'mx' : `mx${m[1]}`;
+}
+// The model calls itself by its old name ("I'm mx3"); say the version instead.
+const ownName = (text) => text.replace(/\bmx([2-9])\b/g, 'mx 0.0.$1');
+
 // The newest model that's been trained and exported (mx3, mx2, then the
 // original mx); MAXSHELL_AI picks one.
 function modelName() {
   const has = (n) => fs.existsSync(path.join(MODELS, `${n}.bin`)) && fs.existsSync(path.join(MODELS, `${n}-tokenizer.json`));
-  const want = process.env.MAXSHELL_AI;
+  const want = shortName(process.env.MAXSHELL_AI);
   if (want && has(want)) return want;
   return ['mx3', 'mx2', 'mx'].find(has) || null;
 }
@@ -658,7 +671,7 @@ function showStatus(write, t, ansi) {
     : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
       : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
         : `${ansi.fg(t.ui.ok)}running${R}`;
-  write(`${ansi.bold()}${(/ai\/(mx\d+)\//.exec(trainingLog()) || [, 'mx'])[1]} training${R}  ${state}\n`);
+  write(`${ansi.bold()}${versionName((/ai\/(mx\d+)\//.exec(trainingLog()) || [, 'mx'])[1])} training${R}  ${state}\n`);
   write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  about ${duration(left)} to go`) : ''}\n`);
   if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
   const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
@@ -714,13 +727,14 @@ function serviceRunning() {
 }
 
 function trainService(action, write, err, name = 'mx3') {
+  name = shortName(name);
   const { spawnSync } = require('child_process');
   const domain = `gui/${process.getuid()}`;
   const file = agentFile();
   if (action === 'start') {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (!/^mx\d+$/.test(name) || !fs.existsSync(path.join(__dirname, '..', 'ai', name, 'data', 'chat.jsonl'))) {
-      err(`ai: no training data for ${name} (build it with node ai/${name}/make-corpus.js)\n`);
+      err(`ai: no training data for ${versionName(name)} (build it with node ai/${name}/make-corpus.js)\n`);
       return 1;
     }
     fs.writeFileSync(file, servicePlist(undefined, name));
@@ -731,7 +745,7 @@ function trainService(action, write, err, name = 'mx3') {
     for (let i = 0; i < 60 && !gone(); i++) spawnSync('sleep', ['1']);
     const r = spawnSync('launchctl', ['bootstrap', domain, file], { encoding: 'utf8' });
     if (r.status !== 0) { err(`ai: couldn't start the training service: ${(r.stderr || '').trim()}\n`); return 1; }
-    write(`${name} training is running in the background.\n`
+    write(`${versionName(name)} training is running in the background.\n`
       + '  • Closing the lid or sleeping saves progress and pauses; it continues when the Mac wakes.\n'
       + '  • If the Mac restarts or training stops, it starts again and picks up where it left off.\n'
       + '  • Watch it with ai --status; stop it for good with ai --train stop.\n');
@@ -744,7 +758,7 @@ function trainService(action, write, err, name = 'mx3') {
     write('Training stopped (progress is saved). Start again with ai --train start.\n');
     return 0;
   }
-  err('usage: ai --train start [mx2|mx3] | stop\n');
+  err('usage: ai --train start [0.0.3|0.0.4] | stop\n');
   return 2;
 }
 
@@ -793,7 +807,7 @@ function runAi(args, io, shell) {
     if (!available()) { err('ai: no model yet — train one with: python3 ai/train.py\n'); return 1; }
     const { model } = load();
     const m = model.meta;
-    write(`${load().name} — ${((m.params || 0) / 1e6).toFixed(1)}M parameters, ${model.config.layers} layers × ${model.config.d} wide, `
+    write(`${versionName(load().name)} — ${((m.params || 0) / 1e6).toFixed(1)}M parameters, ${model.config.layers} layers × ${model.config.d} wide, `
       + `${model.config.ctx}-token context, trained ${m.trained || '?'} on ${m.device || '?'} (${m.steps || '?'} steps, validation loss ${m.val_loss ?? '?'})\n`);
     return 0;
   }
@@ -823,7 +837,7 @@ function runAi(args, io, shell) {
     }
     write(`${tag}${ansi.fg(t.ui.muted)}…${R}`);
     if (!load().model.feed) {
-      const { text } = checkedReply(turns, { name, shell });
+      const text = ownName(checkedReply(turns, { name, shell }).text);
       write(`\r\x1b[K${tag}${text}\n`);
       return text;
     }
@@ -854,7 +868,7 @@ function runAi(args, io, shell) {
         if (!head.includes('\n') && head.length < 120) return;
         started = true;
         write(`\r\x1b[K${tag}`);
-        show(guardName(head.replace(/^\s+/, ''), name));
+        show(ownName(guardName(head.replace(/^\s+/, ''), name)));
         return;
       }
       show(piece);
@@ -862,7 +876,7 @@ function runAi(args, io, shell) {
     const keys = interruptWatch();
     let text;
     try { text = checkedReply(turns, { name, shell, onText, stop: keys.hit }).text; } finally { keys.done(); }
-    if (!started) write(`\r\x1b[K${tag}${text}`);
+    if (!started) write(`\r\x1b[K${tag}${ownName(text)}`);
     write(`${R}${keys.hit() ? `${ansi.fg(t.ui.muted)} (stopped)${R}` : ''}\n`);
     return text;
   };
@@ -871,7 +885,7 @@ function runAi(args, io, shell) {
     answer([['user', args.join(' ')]]);
     return 0;
   }
-  const intro = { mx3: 'mx3, an AI running on this Mac — good at code, websites and explaining things. Ctrl-C stops an answer.', mx2: 'mx2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' }[load().name] || 'mx, a small AI running on this Mac.';
+  const intro = { mx3: 'mx 0.0.3, an AI running on this Mac — good at code, websites and explaining things. Ctrl-C stops an answer.', mx2: 'mx 0.0.2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' }[load().name] || `${versionName(load().name)}, a small AI running on this Mac.`;
   write(`${ansi.fg(t.ui.muted)}${intro} It can be wrong — double-check anything important. bye to leave.${R}\n`);
   const turns = [];
   for (;;) {
@@ -887,5 +901,5 @@ function runAi(args, io, shell) {
 
 module.exports = {
   Tokenizer, Model, loadWeights, sampleToken, promptTokens, contextLine, calculate, nameFrom, guardName, reply, runAi, available,
-  load, trainingStatus, servicePlist, duration, contentWords, answerKey, relevance, checkedReply,
+  load, trainingStatus, servicePlist, duration, contentWords, answerKey, relevance, checkedReply, versionName, shortName, ownName,
 };

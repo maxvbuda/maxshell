@@ -31,6 +31,7 @@ import sys
 import time
 
 import torch
+import torch.utils.checkpoint
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -217,7 +218,12 @@ class MX2(nn.Module):
         x = self.emb(idx)
         cos, sin = self.cos[:T], self.sin[:T]
         for b in self.blocks:
-            x = b(x, cos, sin)
+            # For long windows, each block's activations are recomputed in the
+            # backward pass instead of kept: slower, but about half the memory.
+            if self.training and torch.is_grad_enabled() and getattr(self, 'blocks_ck', False):
+                x = torch.utils.checkpoint.checkpoint(b, x, cos, sin, use_reentrant=False)
+            else:
+                x = b(x, cos, sin)
         return self.norm(x) @ self.emb.weight.T
 
 
@@ -284,6 +290,9 @@ def main():
     ap.add_argument('--data', action='append', help='training file(s) in ai/<name>/data (default chat.jsonl)')
     ap.add_argument('--replay', type=float, default=0.0, help='fraction of the tokens to take from pretrain.jsonl')
     ap.add_argument('--init', help='start from this checkpoint\'s weights (fresh optimizer and schedule)')
+    ap.add_argument('--max-gb', type=float, default=10.0,
+                    help='GPU memory cap: the GPU\'s memory can\'t be swapped, so going past this '
+                         'stops training with an error instead of freezing the Mac')
     args = ap.parse_args()
     global DATA, NAME
     NAME = args.name
@@ -291,6 +300,8 @@ def main():
         DATA = os.path.join(os.path.dirname(HERE), NAME, 'data')
 
     device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+    if device == 'mps' and args.max_gb:
+        torch.mps.set_per_process_memory_fraction(min(1.0, args.max_gb * 1e9 / torch.mps.recommended_max_memory()))
     torch.manual_seed(67)
     random.seed(67)
 
@@ -437,6 +448,7 @@ def main():
         # the GPU each time (about 10% slower). It's read when it's printed.
         total = torch.zeros((), device=device)
         ctx, n, accum = phase(step)
+        model.blocks_ck = ctx > args.short  # full-length windows: save memory
         if step == args.phase1:
             print(f'phase 2: {ctx}-token context', flush=True)
         for _ in range(accum):

@@ -928,7 +928,9 @@ question and returns.
 
 ### ai — a small AI that runs on your Mac
 
-`ai` chats with **mx**, a 15-million-parameter GPT-style language model made
+`ai` chats with **mx**, maxshell's own language model. Versions are named
+mx 0.0.1 (the first), mx 0.0.2, mx 0.0.3 and so on; files and folders use
+the short form (`models/mx3.bin`, `ai/mx4/`). mx 0.0.1 is a 15-million-parameter GPT-style language model made
 for maxshell and trained on a Mac — its dataset, tokenizer and architecture
 included (see `ai/README.md`). It runs entirely on your computer, in plain
 JavaScript: no internet, no API, nothing you type leaves the machine.
@@ -962,7 +964,7 @@ and otherwise it says honestly that it didn't follow rather than make
 something up. `node ai/eval.js` scores what `ai` shows, including questions
 it was never taught; `--raw` scores the model alone.
 
-**mx3** is the newest: the same 43M-parameter design as mx2, trained on a
+**mx 0.0.3** is the newest: the same 43M-parameter design as mx 0.0.2, trained on a
 balanced mix of hand-written data — conversation in many phrasings, about
 330 coding exercises and programs (every one run before training), a
 programming glossary and 190 knowledge articles, poems and stories, and
@@ -970,23 +972,24 @@ websites. It also learned to **check its own answers**: given a question
 and an answer, it says whether the answer fits, and `ai` asks it about the
 opening of every reply before showing it, so a reply that starts off wrong
 is dropped and rewritten. `node ai/mx3/eval.js` runs the code it writes and
-scores the checker. `ai` uses mx3 when `models/mx3.bin` is there; it writes
+scores the checker. `ai` uses mx 0.0.3 when `models/mx3.bin` is there; it writes
 working code for tasks it trained on (12/12, run and checked) and half of
-brand-new ones, and scores 87% on the everyday exam (mx: 99%) — it's weaker
-at reading the clock. `MAXSHELL_AI=mx ai` uses the original.
+brand-new ones, and scores 87% on the everyday exam (mx 0.0.1: 99%) — it's weaker
+at reading the clock. `MAXSHELL_AI=0.0.1 ai` uses the original (`MAXSHELL_AI` takes a version
+or a short name).
 
-**mx2**, its bigger successor (43M parameters, Llama-style, trained to code
+**mx 0.0.2**, its bigger successor (43M parameters, Llama-style, trained to code
 — websites especially — and to answer general questions), trains in the
 background for most of a day:
 
 | Command | What it does |
 |---|---|
-| `ai --train start [mx3]` | start training as a macOS background service |
+| `ai --train start [0.0.4]` | start training as a macOS background service |
 | `ai --status` | progress, loss, time left (in minutes, hours, days or weeks), samples, sleep pauses |
 | `ai --train stop` | save and stop for good |
 
 When training finishes it writes `models/mx2.bin`, and `ai` switches to it
-by itself (`MAXSHELL_AI=mx` keeps the old one). mx2 runs on-device too: its
+by itself (`MAXSHELL_AI=0.0.1` keeps the old one). mx 0.0.2 runs on-device too: its
 matrix maths is WebAssembly SIMD spread over several CPU cores, so it writes
 about 100 tokens a second — a whole website in half a minute. Long answers
 stream as they're written, code blocks are coloured, and **Ctrl-C** or
@@ -998,6 +1001,12 @@ save is done; on wake it just carries on. While it runs, the Mac won't
 idle-sleep, but closing the lid still sleeps it. If the Mac restarts or
 training stops for any reason, it starts again at login and picks up from
 the last checkpoint.
+
+Training also caps its GPU memory (`--max-gb`, 10 GB by default). On a Mac
+the GPU shares RAM with everything else and its memory can't be swapped
+out, so a run that used too much froze the whole machine; past the cap it
+stops with an error instead. Full-length windows recompute activations
+rather than keep them, which roughly halves their memory.
 
 ### 6-7
 
