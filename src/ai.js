@@ -669,6 +669,7 @@ function showStatus(write, t, ansi) {
   // Steps are logged every 50, so a slow run is quiet for a while between lines.
   const stale = Date.now() - st.mtime > Math.max(5, (rate || 0) * 50 * 1.5) * 60 * 1000;
   const state = st.done ? `${ansi.fg(t.ui.ok)}finished${R}`
+    : st.asleep && /memory/.test(st.lastEvent) ? `${ansi.fg(t.ui.warn)}paused — the Mac is low on memory; progress saved, resumes when there's room${R}`
     : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
       : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
         : `${ansi.fg(t.ui.ok)}running${R}`;

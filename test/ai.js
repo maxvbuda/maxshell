@@ -117,6 +117,11 @@ test('training status notices a pause for sleep, and the resume after it', () =>
   assert.match(st.lastEvent, /awake .* at 07:30/);
   fs.appendFileSync(log, 'run: --steps 9000 --batch 8x4 --lr 0.0003\nresumed from step 100\n');
   assert.strictEqual(ai.trainingStatus(log).total, 9000, 'an extended schedule counts');
+  fs.appendFileSync(log, '  ⏸ Mac low on memory (9% free) — saved at step 100, waiting (23:40)\n');
+  st = ai.trainingStatus(log);
+  assert.ok(st.asleep && /low on memory .* at 23:40/.test(st.lastEvent), 'paused for memory');
+  fs.appendFileSync(log, '  ▶ memory free again — training resumed (23:52)\nstep    150  loss 5.000  lr 1.20e-04  5.0 min  (~18.0 h left)\n');
+  assert.ok(!ai.trainingStatus(log).asleep, 'running again once memory is free');
   fs.rmSync(dir, { recursive: true });
 });
 

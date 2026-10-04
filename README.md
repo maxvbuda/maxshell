@@ -1002,7 +1002,9 @@ idle-sleep, but closing the lid still sleeps it. If the Mac restarts or
 training stops for any reason, it starts again at login and picks up from
 the last checkpoint.
 
-Training also caps its GPU memory (`--max-gb`, 10 GB by default). On a Mac
+Training pauses (saved, its GPU memory handed back) while less than 15% of
+the Mac's memory is free (`--min-free`), and resumes when there's room. It
+also caps its GPU memory (`--max-gb`, 10 GB by default). On a Mac
 the GPU shares RAM with everything else and its memory can't be swapped
 out, so a run that used too much froze the whole machine; past the cap it
 stops with an error instead. Full-length windows recompute activations

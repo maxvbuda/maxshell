@@ -21,6 +21,7 @@ Checkpoints (model + optimizer + step + data position) are written every
 15 minutes to ai/mx2/data/ckpt.pt; a restarted run carries on from there.
 """
 import argparse
+import ctypes
 import json
 import math
 import os
@@ -227,6 +228,18 @@ class MX2(nn.Module):
         return self.norm(x) @ self.emb.weight.T
 
 
+def free_memory():
+    """Percent of the Mac's memory available (kern.memorystatus_level); 100 elsewhere."""
+    try:
+        v, size = ctypes.c_int(0), ctypes.c_size_t(4)
+        libc = ctypes.CDLL(None)
+        if libc.sysctlbyname(b'kern.memorystatus_level', ctypes.byref(v), ctypes.byref(size), None, 0) == 0:
+            return v.value
+    except (OSError, AttributeError):
+        pass
+    return 100
+
+
 # --- export (int8 per row, like mx) -----------------------------------------------------
 
 def export(model, tok, meta):
@@ -290,6 +303,8 @@ def main():
     ap.add_argument('--data', action='append', help='training file(s) in ai/<name>/data (default chat.jsonl)')
     ap.add_argument('--replay', type=float, default=0.0, help='fraction of the tokens to take from pretrain.jsonl')
     ap.add_argument('--init', help='start from this checkpoint\'s weights (fresh optimizer and schedule)')
+    ap.add_argument('--min-free', type=int, default=15,
+                    help='pause (saved, GPU memory released) while less than this %% of the Mac\'s memory is free')
     ap.add_argument('--max-gb', type=float, default=10.0,
                     help='GPU memory cap: the GPU\'s memory can\'t be swapped, so going past this '
                          'stops training with an error instead of freezing the Mac')
@@ -430,6 +445,26 @@ def main():
     def on_sleep(signum, frame):
         save_now['flag'] = True
 
+    # Other apps can fill the Mac's memory too (a Google Drive sync grew to
+    # 8 GB one night); with training's share on top, the Mac froze. When
+    # memory runs low, save, hand back the GPU's cache and wait.
+    def wait_for_memory():
+        opt.zero_grad(set_to_none=True)
+        save()
+        if device == 'mps':
+            torch.mps.empty_cache()
+        print(f'  ⏸ Mac low on memory ({free_memory()}% free) — saved at step {step}, waiting ({time.strftime("%H:%M")})', flush=True)
+        while free_memory() < args.min_free + 10:
+            if save_now['stop']:
+                print('stopped; will resume from here', flush=True)
+                return True
+            if save_now['flag']:  # the Mac is going to sleep: it's saved already
+                save_now['flag'] = False
+                open(os.path.join(DATA, 'saved.ack'), 'w').write(str(step))
+            time.sleep(30)
+        print(f'  ▶ memory free again — training resumed ({time.strftime("%H:%M")})', flush=True)
+        return False
+
     def on_stop(signum, frame):
         save_now['flag'] = True
         save_now['stop'] = True
@@ -447,6 +482,10 @@ def main():
         # Kept on the GPU: reading it every micro-batch made the CPU wait for
         # the GPU each time (about 10% slower). It's read when it's printed.
         total = torch.zeros((), device=device)
+        if free_memory() < args.min_free:
+            if wait_for_memory():
+                return
+            continue
         ctx, n, accum = phase(step)
         model.blocks_ck = ctx > args.short  # full-length windows: save memory
         if step == args.phase1:
