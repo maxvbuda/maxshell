@@ -315,6 +315,97 @@ test('aig without Gemma set up points to aig --setup', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
+// aig's replies are markdown, rendered as they stream in by src/markdown.js.
+const { MarkdownStream, renderMarkdown } = require('../src/markdown');
+const ansi = require('../src/ansi');
+const REPLY = [
+  'Sure! Here is a **quick overview** of *Python lists*, with `append()` and a [link](https://example.com).',
+  '',
+  '## Making a list',
+  '',
+  '1. Create it with `[]`.',
+  '2. Add items:',
+  '   - `append(x)` adds **one** item',
+  '   - `extend(xs)` adds many, e.g. 2 * 3 = 6, and snake_case_name stays',
+  '* A bullet with ~~old~~ text and a long tail that has to wrap around the edge of the screen',
+  '',
+  '> Note: lists are *mutable*, so be careful when sharing them between functions.',
+  '',
+  '```python',
+  'def total(xs):',
+  '    return sum(xs) + 1',
+  '```',
+  '',
+  '| Method | What it does | Cost |',
+  '|:--|:--:|--:|',
+  '| `append` | adds one item | O(1) |',
+  '| **sort** | sorts in place | O(n log n) |',
+  '',
+  '---',
+  "That's it! 🎉 *args and [1] stay as they are.",
+  '',
+].join('\n');
+
+test('markdown renders headings, emphasis, lists, quotes, code and tables', () => {
+  const out = renderMarkdown(REPLY, { width: 60 });
+  const plain = ansi.strip(out);
+  const lines = plain.split('\n');
+  assert.ok(lines.includes('Making a list'), 'heading without #');
+  assert.ok(!/\*\*|`|~~|##/.test(plain), plain);
+  assert.match(plain, /^1\. Create it with \[\]\.$/m);
+  assert.match(plain, /^ {3}◦ append\(x\) adds one item$/m);
+  assert.match(plain, /^• A bullet with old text/m);
+  assert.match(plain, /^ {2}\S/m, 'a wrapped item lines up under its text');
+  assert.match(plain, /^│ Note: lists are mutable/m);
+  assert.match(plain, /^python\ndef total\(xs\):\n {4}return sum\(xs\) \+ 1$/m);
+  assert.match(plain, /^Method │  What it does  │ {7}Cost$/m);
+  assert.match(plain, /^─{7}┼─{16}┼─{11}$/m);
+  assert.match(plain, /^sort   │/m);
+  assert.match(plain, /link \(https:\/\/example\.com\)/);
+  assert.match(plain, /2 \* 3 = 6,\s+and\s+snake_case_name\s+stays/);
+  assert.match(plain, /🎉 \*args and \[1\] stay as they are\.$/);
+  assert.ok(!plain.endsWith('\n'), 'trailing blank lines are dropped');
+  assert.ok(out.includes(`${ansi.bold()}quick`), 'bold');
+  assert.ok(out.includes(`${ansi.sgr(3)}Python`), 'italic');
+  const theme = require('../src/theme');
+  assert.ok(out.includes(`${theme.style(theme.current().syntax.code)}append()`), 'inline code');
+  assert.ok(out.includes(`${theme.style(theme.current().syntax.keyword)}def`), 'code blocks are highlighted');
+});
+
+test('markdown never runs past the terminal width', () => {
+  for (const width of [24, 40, 60, 100]) {
+    const out = renderMarkdown(REPLY, { width, col: 10 });
+    const lines = ansi.strip(out).split('\n');
+    lines.forEach((line, i) => assert.ok(ansi.width(line) + (i ? 0 : 10) <= width, `${width}: ${line}`));
+  }
+});
+
+test('markdown streamed in pieces renders the same as all at once', () => {
+  for (const live of [false, true]) {
+    const whole = renderMarkdown(REPLY, { width: 50, col: 10, live });
+    for (const size of [1, 2, 3, 7, 13]) {
+      let s = '';
+      const md = new MarkdownStream({ out: (x) => { s += x; }, width: 50, col: 10, live });
+      for (let i = 0; i < REPLY.length; i += size) md.write(REPLY.slice(i, i + size));
+      md.end();
+      assert.strictEqual(s, whole, `live=${live} pieces of ${size}`);
+    }
+  }
+});
+
+test('markdown holds a marker only until it closes, and shows unclosed ones as they are', () => {
+  let s = '';
+  const md = new MarkdownStream({ out: (x) => { s += x; } });
+  md.write('a **bold');
+  assert.strictEqual(ansi.strip(s), 'a');
+  md.write(' text** and');
+  assert.strictEqual(ansi.strip(s), 'a bold text');
+  md.write(' *args\n');
+  assert.strictEqual(ansi.strip(s), 'a bold text and *args');
+  md.end();
+  assert.strictEqual(ansi.strip(renderMarkdown('use `x = 1` here\n\n\n\nnext')), 'use x = 1 here\n\nnext');
+});
+
 if (failures) {
   console.error(`\n${failures} ai test(s) failed`);
   process.exit(1);

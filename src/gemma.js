@@ -60,9 +60,13 @@ function runAig(args, io, shell) {
   const t = theme.current();
   const colors = {
     accent: ansi.fg(t.ui.accent), accent2: ansi.fg(t.ui.accent2), muted: ansi.fg(t.ui.muted),
-    code: theme.style(t.syntax.code), bold: ansi.bold(), reset: ansi.reset(),
+    bold: ansi.bold(), reset: ansi.reset(),
   };
-  const env = { ...shell.env, MAXSHELL_AIG_COLORS: JSON.stringify(colors), MAXSHELL_GEMMA: dir() };
+  // gemma.py renders replies with src/markdown.js, run by this Node in this theme.
+  const env = {
+    ...shell.env, MAXSHELL_AIG_COLORS: JSON.stringify(colors), MAXSHELL_GEMMA: dir(),
+    MAXSHELL_NODE: process.execPath, MAXSHELL_THEME: theme.currentThemeName(),
+  };
   if (!env.MAXSHELL_AIG_DEVICE && training()) env.MAXSHELL_AIG_DEVICE = 'cpu';
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }

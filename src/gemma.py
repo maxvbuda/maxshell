@@ -17,6 +17,7 @@ Colours come from maxshell's theme in $MAXSHELL_AIG_COLORS.
 import datetime
 import json
 import os
+import shutil
 import signal
 import struct
 import subprocess
@@ -24,10 +25,11 @@ import sys
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NEED_FREE = 25  # % of memory free before loading (training pauses below 15)
-COLORS = {'accent': '', 'accent2': '', 'muted': '', 'code': '', 'bold': '', 'reset': ''}
+COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_AIG_COLORS') or '{}'))
 C = type('C', (), COLORS)
 TAG = f"{C.accent}{C.bold}✦ gemma ❯{C.reset} "
+TAG_WIDTH = len('✦ gemma ❯ ')
 YOU = f"{C.accent2}{C.bold}you ❯{C.reset} "
 
 
@@ -120,27 +122,42 @@ def load():
 
 
 class Printer:
-    """Writes the reply as it comes, colouring code blocks."""
+    """Shows the reply as it comes. At a terminal its markdown is rendered by
+    src/markdown.js (with maxshell's theme and syntax colours), which runs
+    beside us: the reply goes in on its stdin, and it answers a NUL on stderr
+    once a reply is on the screen."""
 
-    def __init__(self):
-        self.line = ''
-        self.code = False
-        self.text = ''
+    def __init__(self, tty):
+        self.proc = None
+        node = os.environ.get('MAXSHELL_NODE') or shutil.which('node')
+        if tty and node:
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'markdown.js')
+            try:
+                self.proc = subprocess.Popen([node, script, str(TAG_WIDTH)], stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            except OSError:
+                pass
 
-    def write(self, piece):
-        self.text += piece
-        for ch in piece:
-            if ch == '\n':
-                sys.stdout.write(f'{C.reset}\n')
-                if self.line.lstrip().startswith('```'):
-                    self.code = not self.code
-                self.line = ''
-                continue
-            if not self.line and self.code:
-                sys.stdout.write(C.code)
-            self.line += ch
-            sys.stdout.write(ch)
+    def write(self, text):
+        if self.proc:
+            try:
+                self.proc.stdin.write(text.replace('\0', '').encode())
+                self.proc.stdin.flush()
+                return
+            except OSError:
+                self.proc = None
+        sys.stdout.write(text)
         sys.stdout.flush()
+
+    def done(self):
+        if not self.proc:
+            return
+        try:
+            self.proc.stdin.write(b'\0')
+            self.proc.stdin.flush()
+            while self.proc.stderr.read(1) not in (b'\0', b''):
+                pass
+        except OSError:
+            self.proc = None
 
 
 def reply(model, tok, gen, device, turns, show):
@@ -196,17 +213,18 @@ def main():
     if tty:
         sys.stdout.write('\r\x1b[K')
 
+    printer = Printer(tty)
+
     def answer(turns):
         if tty:
             sys.stdout.write(TAG)
             sys.stdout.flush()
-        out = Printer() if tty else None
         text = []
-        stopped = reply(model, tok, gen, device, turns, out.write if out else (lambda s: (text.append(s), sys.stdout.write(s), sys.stdout.flush())))
-        said = (out.text if out else ''.join(text)).strip()
+        stopped = reply(model, tok, gen, device, turns, lambda s: (text.append(s), printer.write(s)))
+        printer.done()
         sys.stdout.write(f"{C.reset}{f'{C.muted} (stopped){C.reset}' if stopped else ''}\n")
         sys.stdout.flush()
-        return said
+        return ''.join(text).strip()
 
     if args:
         answer([('user', ' '.join(args))])

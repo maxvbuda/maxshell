@@ -75,6 +75,8 @@ then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 `leon-se/gemma-4-E2B-it-FP8-Dynamic`; model file linked from ~/Downloads)
 in `~/.maxshell/gemma/venv` via transformers: text weights only, the
 per-layer embedding memory-mapped from disk, CPU while mx training runs.
+At a terminal gemma.py pipes replies through `node src/markdown.js` (a
+streaming markdown renderer; NUL ends a reply and is acked on stderr).
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

@@ -1034,8 +1034,11 @@ stays on disk and is read a row at a time, so it takes about 5 GB. It won't
 start with less than 25% of memory free. While mx training has the GPU it
 runs on the CPU instead (`MAXSHELL_AIG_DEVICE` picks), which is as fast
 then and leaves training alone; that's a few words a second. Loading takes
-10–30 seconds, once per chat. Answers stream, code blocks are coloured, and
-**Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
+10–30 seconds, once per chat. Answers stream in as formatted markdown, in
+the theme's colours: headings, **bold**, *italic*, `inline code`, bullet and
+numbered lists, quotes, rules, aligned tables, and code blocks highlighted
+like the editor's — words wrap at the terminal's edge. (Piped, the answer
+stays plain markdown.) **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
 another model folder.
 
 ### 6-7
