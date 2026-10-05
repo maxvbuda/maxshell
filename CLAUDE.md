@@ -4,7 +4,7 @@ maxshell is a zsh-flavoured shell written from scratch in Node.js (no runtime
 dependencies): its own lexer, parser, word expansion and interpreter, a custom
 line editor, and a set of full-screen tools (editor, pager, Finder-style file
 browser, process monitor, git/GitHub UI). Repo: github.com/maxvbuda/maxshell
-(private). `maxshell` on this Mac is a global npm link to this folder, so every
+(public). `maxshell` on this Mac is a global npm link to this folder, so every
 change is live immediately.
 
 The README is the user-facing reference for every feature; read it before
