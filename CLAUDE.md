@@ -71,6 +71,10 @@ with `ai/mx2/parity.py`. mx3 (`ai/mx3/`: `make-corpus.js`, `talk.js`,
 answer fit?" → yes/no) that `checkedReply` uses. `ai` prefers mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
+`aig` (`src/gemma.js` → `src/gemma.py`) runs Gemma 4 E2B (FP8, from
+`leon-se/gemma-4-E2B-it-FP8-Dynamic`; model file linked from ~/Downloads)
+in `~/.maxshell/gemma/venv` via transformers: text weights only, the
+per-layer embedding memory-mapped from disk, CPU while mx training runs.
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion

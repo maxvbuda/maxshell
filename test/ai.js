@@ -4,6 +4,7 @@
 // forward pass (when a trained model is in models/).
 
 const assert = require('assert');
+const fs = require('fs');
 const ai = require('../src/ai');
 
 let failures = 0;
@@ -291,6 +292,26 @@ test('mx2 runtime matches a plain reference, in chunks, one token at a time, and
   pool.feed(tokens.slice(0, 70));
   close(pool.feed(tokens.slice(70)), 'on worker threads');
   pool.close();
+  fs.rmSync(dir, { recursive: true });
+});
+
+// aig: Gemma runs in Python; without its folder set up it says how to set it up.
+test('aig without Gemma set up points to aig --setup', () => {
+  const os = require('os');
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aig-'));
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: dir };
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const r = spawnSync('node', [sh, '-c', 'aig hello'], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /aig --setup/);
+  const help = spawnSync('node', [sh, '-c', 'aig --help'], { env, encoding: 'utf8' });
+  assert.match(help.stdout, /Gemma 4/);
+  const was = process.env.MAXSHELL_GEMMA;
+  process.env.MAXSHELL_GEMMA = dir;
+  assert.strictEqual(require('../src/gemma').ready(), false);
+  if (was === undefined) delete process.env.MAXSHELL_GEMMA; else process.env.MAXSHELL_GEMMA = was;
   fs.rmSync(dir, { recursive: true });
 });
 

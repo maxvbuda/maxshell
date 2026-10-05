@@ -874,6 +874,9 @@ BUILTINS.abbr = (args, io, shell) => {
 // run on this Mac with no dependencies.
 BUILTINS.ai = (args, io, shell) => require('./ai').runAi(args, io, shell);
 
+// aig: Gemma 4 (E2B), Google's open model, run on this Mac by src/gemma.py.
+BUILTINS.aig = (args, io, shell) => require('./gemma').runAig(args, io, shell);
+
 // bot: a chat "AI" that is really a list of if/else rules (no AI, no network).
 BUILTINS.bot = (args, io, shell) => require('./bot').runBot(args, io, shell);
 

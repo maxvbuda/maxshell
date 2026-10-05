@@ -1010,6 +1010,34 @@ out, so a run that used too much froze the whole machine; past the cap it
 stops with an error instead. Full-length windows recompute activations
 rather than keep them, which roughly halves their memory.
 
+### aig — Gemma on your Mac
+
+`aig` chats with **Gemma 4 (E2B)**, Google's open model, much bigger and
+broader than mx. It runs on this Mac too: no account, no internet once it's
+set up.
+
+```
+~ ❯ aig what is 12 times 12? just the number
+144
+~ ❯ aig
+you ❯ hi! who are you, in one sentence?
+✦ gemma ❯ I am Gemma 4, a Large Language Model developed by Google DeepMind.
+```
+
+`aig --setup` gets it ready: a Python of its own in `~/.maxshell/gemma/venv`
+(the system PyTorch plus `transformers`), the model's config and tokenizer
+from `leon-se/gemma-4-E2B-it-FP8-Dynamic` on Hugging Face, and a link to
+that repo's `model.safetensors` in `~/Downloads` (9 GB, the FP8 build). It
+loads only the text half of the model, not the image and audio parts: its
+weights go to the GPU as bfloat16, and the 4.7 GB per-layer embedding table
+stays on disk and is read a row at a time, so it takes about 5 GB. It won't
+start with less than 25% of memory free. While mx training has the GPU it
+runs on the CPU instead (`MAXSHELL_AIG_DEVICE` picks), which is as fast
+then and leaves training alone; that's a few words a second. Loading takes
+10–30 seconds, once per chat. Answers stream, code blocks are coloured, and
+**Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
+another model folder.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
