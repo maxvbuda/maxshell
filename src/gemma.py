@@ -17,6 +17,7 @@ Colours come from maxshell's theme in $MAXSHELL_AIG_COLORS.
 import datetime
 import json
 import os
+import re
 import shutil
 import signal
 import struct
@@ -31,6 +32,18 @@ C = type('C', (), COLORS)
 TAG = f"{C.accent}{C.bold}✦ gemma ❯{C.reset} "
 TAG_WIDTH = len('✦ gemma ❯ ')
 YOU = f"{C.accent2}{C.bold}you ❯{C.reset} "
+MAX_TOKENS = 8192
+CODE_TEMPERATURE = 0.3  # steadier code than Gemma's usual 1.0
+CODING = re.compile(r'```|\b(code|coding|program|script|function|method|class|bug|error|exception|traceback|compile|'
+                    r'regex|sql|python|javascript|typescript|java|swift|rust|golang|c\+\+|ruby|php|bash|shell|zsh|'
+                    r'html|css|json|yaml|api|algorithm|implement|refactor|debug|unit tests?)\b', re.I)
+
+
+def is_coding(turns):
+    """Whether the chat is about code: the question says so, or the last answer had some."""
+    last = [text for who, text in turns if who == 'user'][-1:]
+    said = [text for who, text in turns if who != 'user'][-1:]
+    return bool(last and CODING.search(last[0])) or bool(said and '```' in said[0])
 
 
 def free_memory():
@@ -166,7 +179,8 @@ def reply(model, tok, gen, device, turns, show):
 
     now = datetime.datetime.now()
     system = (f"You are Gemma, running on the user's Mac inside maxshell, a zsh-like shell. "
-              f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}. Be helpful and concise.")
+              f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}. Be helpful and concise. "
+              f"Write complete, runnable code in fenced blocks that name the language.")
     messages = [{'role': 'system', 'content': system}] + [{'role': 'user' if who == 'user' else 'assistant', 'content': text} for who, text in turns]
     ids = tok.apply_chat_template(messages, add_generation_prompt=True, return_tensors='pt', return_dict=True)['input_ids'].to(device)
 
@@ -183,7 +197,8 @@ def reply(model, tok, gen, device, turns, show):
     old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
     try:
         with torch.no_grad():
-            model.generate(ids, max_new_tokens=2048, do_sample=True, temperature=gen.get('temperature', 1.0),
+            temperature = CODE_TEMPERATURE if is_coding(turns) else gen.get('temperature', 1.0)
+            model.generate(ids, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
                            top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=gen['eos_token_id'],
                            pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
                            streamer=Stream(tok, skip_prompt=True, skip_special_tokens=True))

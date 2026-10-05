@@ -1038,7 +1038,9 @@ then and leaves training alone; that's a few words a second. Loading takes
 the theme's colours: headings, **bold**, *italic*, `inline code`, bullet and
 numbered lists, quotes, rules, aligned tables, and code blocks highlighted
 like the editor's — words wrap at the terminal's edge. (Piped, the answer
-stays plain markdown.) **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
+stays plain markdown.) Questions about code (or follow-ups to an answer
+with code) get a lower temperature for steadier code, and answers can run
+to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
 another model folder.
 
 ### 6-7
