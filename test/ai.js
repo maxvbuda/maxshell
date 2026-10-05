@@ -122,6 +122,12 @@ test('training status notices a pause for sleep, and the resume after it', () =>
   assert.ok(st.asleep && /low on memory .* at 23:40/.test(st.lastEvent), 'paused for memory');
   fs.appendFileSync(log, '  ▶ memory free again — training resumed (23:52)\nstep    150  loss 5.000  lr 1.20e-04  5.0 min  (~18.0 h left)\n');
   assert.ok(!ai.trainingStatus(log).asleep, 'running again once memory is free');
+  fs.appendFileSync(log, 'done — exported models/mx4.bin\n=== stage 1 finished; starting stage 2 2026-10-04 20:15 ===\nrun: --steps 2300 --batch 2x16 --lr 0.0003\nstep      1  loss 4.032  lr 6.00e-06  0.3 min  (~11.9 h left)\n');
+  st = ai.trainingStatus(log);
+  assert.strictEqual(st.stage, 2);
+  assert.ok(!st.done, 'stage 1 finishing is not the end');
+  assert.strictEqual(st.total, 2300);
+  assert.deepStrictEqual(st.steps.map((x) => x.step), [1], 'only stage 2 steps');
   fs.rmSync(dir, { recursive: true });
 });
 

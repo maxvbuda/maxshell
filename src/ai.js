@@ -595,9 +595,20 @@ function trainingLog() {
   return logs[0] || path.join(__dirname, '..', 'ai', 'data', 'train.log');
 }
 
+// When the run last showed signs of life: a log line, or its checkpoint
+// (saved every 15 minutes, even between log lines).
+function lastSign(logFile) {
+  const ckpt = path.join(path.dirname(logFile), 'ckpt.pt');
+  return Math.max(fs.statSync(logFile).mtimeMs, fs.existsSync(ckpt) ? fs.statSync(ckpt).mtimeMs : 0);
+}
+
 function trainingStatus(logFile = trainingLog()) {
   let text;
   try { text = fs.readFileSync(logFile, 'utf8'); } catch { return null; }
+  // A two-stage run (code, then chat) is reported one stage at a time.
+  const stages = text.split(/^=== stage 1 finished.*$/m);
+  const stage = stages.length > 1 ? 2 : null;
+  text = stages[stages.length - 1];
   const steps = [...text.matchAll(/^step\s+(\d+)\s+loss ([\d.]+)\s+lr ([\d.e+-]+)\s+([\d.]+) min/gm)]
     .map((m) => ({ step: +m[1], loss: +m[2], lr: +m[3], min: +m[4] }));
   const vals = [...text.matchAll(/validation loss ([\d.]+)/g)].map((m) => +m[1]);
@@ -617,8 +628,8 @@ function trainingStatus(logFile = trainingLog()) {
   const lastEvent = events.length ? events[events.length - 1] : null;
   const asleep = !!lastEvent && lastEvent[1] === '⏸' && !/^step\s/m.test(text.slice(lastEvent.index));
   const sleeps = events.filter((e) => e[1] === '⏸').length;
-  return { steps, vals, total, params, tokens, samples, done, asleep, sleeps, lastEvent: lastEvent && `${lastEvent[1]} ${lastEvent[2]} at ${lastEvent[3]}`,
-    service: serviceRunning(), mtime: fs.statSync(logFile).mtimeMs };
+  return { stage, steps, vals, total, params, tokens, samples, done, asleep, sleeps, lastEvent: lastEvent && `${lastEvent[1]} ${lastEvent[2]} at ${lastEvent[3]}`,
+    service: serviceRunning(), mtime: lastSign(logFile) };
 }
 
 // 514 → "8 hours 34 minutes"; 3000 → "2 days 2 hours"; 12000 → "1 week 1 day".
@@ -666,14 +677,18 @@ function showStatus(write, t, ansi) {
   const shortSteps = Math.max(0, Math.min(phase1, st.total) - last.step);
   const longRate = last.step >= phase1 ? 1 : 2;
   const left = rate ? Math.round(shortSteps * rate + longSteps * rate * longRate) : null;
-  // Steps are logged every 50, so a slow run is quiet for a while between lines.
-  const stale = Date.now() - st.mtime > Math.max(5, (rate || 0) * 50 * 1.5) * 60 * 1000;
+  // Steps are logged every 50, so a slow run is quiet for a while between
+  // lines; checkpoints are saved every 15 minutes.
+  const stale = Date.now() - st.mtime > Math.max(20, (rate || 0) * 50 * 1.5) * 60 * 1000;
   const state = st.done ? `${ansi.fg(t.ui.ok)}finished${R}`
     : st.asleep && /memory/.test(st.lastEvent) ? `${ansi.fg(t.ui.warn)}paused — the Mac is low on memory; progress saved, resumes when there's room${R}`
     : st.asleep ? `${ansi.fg(t.ui.warn)}paused while the Mac slept — progress saved, resumes on wake${R}`
       : stale ? `${ansi.fg(t.ui.warn)}${st.service ? 'paused' : 'stopped'} (no update for ${Math.round((Date.now() - st.mtime) / 60000)} min)${R}`
         : `${ansi.fg(t.ui.ok)}running${R}`;
-  write(`${ansi.bold()}${versionName((/ai\/(mx\d+)\//.exec(trainingLog()) || [, 'mx'])[1])} training${R}  ${state}\n`);
+  const name = (/ai\/(mx\d+)\//.exec(trainingLog()) || [, 'mx'])[1];
+  let stage = st.stage ? mu(` · stage ${st.stage} of 2`) : '';
+  if (!st.stage && fs.existsSync(path.join(path.dirname(trainingLog()), '..', 'train2.args'))) stage = mu(' · stage 1 of 2');
+  write(`${ansi.bold()}${versionName(name)} training${R}${stage}  ${state}\n`);
   write(`  ${meter(pct, 30)} step ${last.step.toLocaleString()} of ${st.total.toLocaleString()} (${Math.round(pct * 100)}%)${left !== null && !st.done ? mu(`  about ${duration(left)} to go`) : ''}\n`);
   if (st.params) write(`  model     ${st.params}M parameters, trained on ${st.tokens || '?'}M tokens\n`);
   const trend = st.steps.filter((_, i) => i % Math.max(1, Math.floor(st.steps.length / 12)) === 0).map((s) => s.loss);
