@@ -875,9 +875,8 @@ BUILTINS.abbr = (args, io, shell) => {
 BUILTINS.ai = (args, io, shell) => require('./ai').runAi(args, io, shell);
 
 // sage: Sage, maxshell's AI — Gemma 4 running on this Mac (src/gemma.js,
-// src/sage.js). `sage code` is its coding agent. aig is the old name.
+// src/sage.js). `sage code` is its coding agent.
 BUILTINS.sage = (args, io, shell) => require('./gemma').runSage(args, io, shell);
-BUILTINS.aig = (args, io, shell) => require('./gemma').runAig(args, io, shell);
 
 // bot: a chat "AI" that is really a list of if/else rules (no AI, no network).
 BUILTINS.bot = (args, io, shell) => require('./bot').runBot(args, io, shell);

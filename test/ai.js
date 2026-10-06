@@ -295,23 +295,24 @@ test('mx2 runtime matches a plain reference, in chunks, one token at a time, and
   fs.rmSync(dir, { recursive: true });
 });
 
-// aig: Gemma runs in Python; without its folder set up it says how to set it up.
-test('aig without Gemma set up points to sage --setup', () => {
+// sage: Gemma runs in Python; without its folder set up it says how to set it up.
+test('sage without Gemma set up points to sage --setup', () => {
   const os = require('os');
   const path = require('path');
   const { spawnSync } = require('child_process');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aig-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-'));
   const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: dir };
   const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
-  const r = spawnSync('node', [sh, '-c', 'aig hello'], { env, encoding: 'utf8' });
+  const r = spawnSync('node', [sh, '-c', 'sage hello'], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /sage --setup/);
-  const help = spawnSync('node', [sh, '-c', 'aig --help'], { env, encoding: 'utf8' });
+  const help = spawnSync('node', [sh, '-c', 'sage --help'], { env, encoding: 'utf8' });
+  assert.notStrictEqual(spawnSync('node', [sh, '-c', 'aig --help'], { env, encoding: 'utf8' }).status, 0);
   assert.match(help.stdout, /Gemma 4/);
   const was = process.env.MAXSHELL_GEMMA;
   process.env.MAXSHELL_GEMMA = dir;
   assert.strictEqual(require('../src/gemma').ready(), false);
-  const e2b = spawnSync('node', [sh, '-c', 'aig --e2b hello'], { env, encoding: 'utf8' });
+  const e2b = spawnSync('node', [sh, '-c', 'sage --e2b hello'], { env, encoding: 'utf8' });
   assert.strictEqual(e2b.status, 1);
   assert.match(e2b.stderr, /E2B.*sage --e2b --setup/);
   const { pick, MODELS } = require('../src/gemma');
@@ -322,7 +323,7 @@ test('aig without Gemma set up points to sage --setup', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
-// aig's replies are markdown, rendered as they stream in by src/markdown.js.
+// Sage's replies are markdown, rendered as they stream in by src/markdown.js.
 const { MarkdownStream, renderMarkdown } = require('../src/markdown');
 const ansi = require('../src/ansi');
 const REPLY = [

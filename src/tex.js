@@ -1,6 +1,6 @@
 'use strict';
 
-// TeX math as plain Unicode text, for a terminal (aig's Gemma writes math in
+// TeX math as plain Unicode text, for a terminal (Sage's Gemma writes math in
 // $…$): \frac{a}{b} → a/b, \sqrt{x} → √x, x^2 → x², a_1 → a₁, \alpha → α,
 // \pm → ±, \le → ≤ … Commands it doesn't know keep their name without the
 // backslash. Display math with \\ rows (aligned, cases, matrices) comes out

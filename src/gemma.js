@@ -1,6 +1,6 @@
 'use strict';
 
-// sage (and its other name, aig): Sage, maxshell's AI — Gemma 4 (E4B, or E2B
+// sage: Sage, maxshell's AI — Gemma 4 (E4B, or E2B
 // with --e2b), Google's open model, on this Mac. The full-screen app is
 // src/sage.js. The model runs in src/gemma.py under its own Python
 // (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `sage
@@ -91,7 +91,6 @@ const HELP = `sage — Google's Gemma 4, running entirely on your Mac
   sage --e2b …         use E2B, the smaller, faster model (MAXSHELL_AIG_MODEL=e2b
                        makes it the default; E4B is)
   sage --setup         install what it needs (sage --e2b --setup for E2B)
-(aig is another name for sage.)
 `;
 
 function runSage(args, io, shell, name = 'sage') {
@@ -138,6 +137,4 @@ function runSage(args, io, shell, name = 'sage') {
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }
 
-const runAig = (args, io, shell) => runSage(args, io, shell, 'aig');
-
-module.exports = { runSage, runAig, HELP, ready, pick, recent, MODELS, DEFAULT, REPO, FILES };
+module.exports = { runSage, HELP, ready, pick, recent, MODELS, DEFAULT, REPO, FILES };

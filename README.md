@@ -1076,8 +1076,7 @@ picks), which leaves training alone. Waking takes 10–30 seconds.
 
 Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 `sage <question>` prints one answer as markdown — plain when piped.
-`MAXSHELL_GEMMA` points it at another model folder. `aig` is Sage's old
-name and still works.
+`MAXSHELL_GEMMA` points it at another model folder.
 
 ### 6-7
 

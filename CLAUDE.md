@@ -72,7 +72,7 @@ with `ai/mx2/parity.py`. mx3 (`ai/mx3/`: `make-corpus.js`, `talk.js`,
 answer fit?" → yes/no) that `checkedReply` uses. `ai` prefers mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
-`sage` (old name `aig`; `src/gemma.js`) is Sage, Gemma 4 E4B (default) or
+`sage` (`src/gemma.js`) is Sage, Gemma 4 E4B (default) or
 E2B (FP8 builds from `leon-se/gemma-4-E{4,2}B-it-FP8-Dynamic`, in
 `~/.maxshell/gemma/e4b` and `~/.maxshell/gemma`) run by `src/gemma.py` in
 `~/.maxshell/gemma/venv` via transformers: text weights only, the per-layer

@@ -1,6 +1,6 @@
 'use strict';
 
-// Markdown for the terminal, written as it streams in (aig's Gemma replies):
+// Markdown for the terminal, written as it streams in (Sage's replies):
 // headings, **bold**, *italic*, ~~struck~~, `code`, links, lists, quotes,
 // rules, tables, fenced code coloured by syntax.js, and TeX math ($…$,
 // $$…$$, \(…\), \[…\]) as Unicode text by tex.js. Words are written as
