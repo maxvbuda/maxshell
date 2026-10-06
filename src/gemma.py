@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""aig: chat with Gemma 4 (E2B) on this Mac. Run by maxshell's `aig`.
+"""aig: chat with Gemma 4 (E2B or E4B) on this Mac. Run by maxshell's `aig`.
 
 The model folder (~/.maxshell/gemma, or $MAXSHELL_GEMMA) holds config.json,
 the tokenizer and model.safetensors (set up by `aig --setup`). Only the text
 half of the model is loaded — not the image and audio parts. Its FP8
 weights become bfloat16 on the GPU, and the 4.7 GB per-layer embedding
-table stays on disk and is read a row at a time, so it takes about 5 GB and
-can run next to mx training.
+table stays on disk and is read a row at a time, so E2B takes about 5 GB
+(E4B about 9) and can run next to mx training.
 
   aig                 chat (bye to leave; Ctrl-C stops an answer)
   aig <question>      one answer
@@ -25,7 +25,9 @@ import subprocess
 import sys
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
-NEED_FREE = 25  # % of memory free before loading (training pauses below 15)
+NAME = os.environ.get('MAXSHELL_AIG_NAME') or 'E2B'
+NEED_GB = 9 if NAME == 'E4B' else 5
+NEED_FREE = 40 if NAME == 'E4B' else 25  # % of memory free before loading (training pauses below 15)
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_AIG_COLORS') or '{}'))
 C = type('C', (), COLORS)
@@ -210,11 +212,11 @@ def reply(model, tok, gen, device, turns, show):
 def main():
     args = sys.argv[1:]
     if not os.path.exists(os.path.join(DIR, 'model.safetensors')):
-        sys.stderr.write(f'aig: no Gemma model in {DIR} — run: aig --setup\n')
+        sys.stderr.write(f"aig: no Gemma model in {DIR} — run: aig{' --e4b' if NAME == 'E4B' else ''} --setup\n")
         return 1
     free = free_memory()
     if free < NEED_FREE:
-        sys.stderr.write(f'aig: only {free}% of memory is free and Gemma needs about 5 GB — close something '
+        sys.stderr.write(f'aig: only {free}% of memory is free and Gemma 4 ({NAME}) needs about {NEED_GB} GB — close something '
                          f'(or pause training: ai --train stop) and try again.\n')
         return 1
     tty = sys.stdout.isatty()
@@ -244,7 +246,7 @@ def main():
     if args:
         answer([('user', ' '.join(args))])
         return 0
-    sys.stdout.write(f'{C.muted}Gemma 4 (E2B), running on this Mac. It can be wrong — double-check anything important. '
+    sys.stdout.write(f'{C.muted}Gemma 4 ({NAME}), running on this Mac. It can be wrong — double-check anything important. '
                      f'Ctrl-C stops an answer; bye to leave.{C.reset}\n')
     turns = []
     while True:

@@ -1043,6 +1043,13 @@ with code) get a lower temperature for steadier code, and answers can run
 to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
 another model folder.
 
+**E4B**, the bigger Gemma 4, is a switch away: `aig --e4b` (or
+`MAXSHELL_AIG_MODEL=e4b` to make it the default). `aig --e4b --setup`
+downloads its FP8 build from `leon-se/gemma-4-E4B-it-FP8-Dynamic` (13 GB)
+into `~/.maxshell/gemma/e4b`, sharing E2B's Python. It answers better but
+does about twice the work per word, so it's about half as fast, takes about
+9 GB, and won't start with less than 40% of memory free.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
