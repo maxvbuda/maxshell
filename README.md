@@ -15,7 +15,7 @@ maxshell %~ % for f in src/*.js; do
 ```
 
 > **✦ Meet Sage — an AI that lives in your shell.** Type `sage` and talk to
-> Google's Gemma 4, running entirely on your Mac: private, offline, no
+> an AI that runs entirely on your Mac: private, offline, no
 > account, no API key. Type `sage code` and it builds and fixes your
 > project with you — reading your files, proposing edits as diffs, and
 > changing nothing until you say yes. [More below.](#sage--an-ai-on-your-mac)
@@ -1029,7 +1029,7 @@ rather than keep them, which roughly halves their memory.
 
 ### sage — an AI on your Mac
 
-**Sage is maxshell's AI: Google's Gemma 4, running entirely on your Mac.**
+**Sage is maxshell's AI, running entirely on your Mac.**
 No cloud, no account, no API key, no data leaving the machine — and once
 it's set up, no internet. Ask it anything; let `sage code` work on your
 project with you.
@@ -1045,8 +1045,8 @@ project with you.
 **A real app, not a prompt.** `sage` opens full screen: a header with the
 model and what Sage is doing (waking, thinking, writing, and its speed in
 tokens a second), the conversation, and an input box at the bottom. The
-**model is a dropdown** — click `◆ Gemma 4 E4B ▾` (or press **^O**) and pick
-E4B, the smarter one, or E2B, twice as fast; it switches on the spot. A
+**model is a dropdown** — click `◆ Sage Pro ▾` (or press **^O**) and pick
+**Sage Pro**, the smarter one, or **Sage Lite**, twice as fast; it switches on the spot. A
 welcome screen offers examples to click. Answers stream in as formatted
 markdown in your theme's colours — headings, **bold**, lists, tables, code
 highlighted like the editor's, and **math**: TeX like
@@ -1067,25 +1067,26 @@ project folder asks too. Plain `sage` can't touch files at all.
 
 **Private, and quick to follow up.** Sage keeps what it has read of the
 conversation (its KV cache), so each follow-up reads only your new message
-and answers in seconds, however long the chat. It's honest about itself:
-built on Gemma 4, running here.
+and answers in seconds, however long the chat.
 
 **Setup.** `sage --setup` gets it ready: a Python of its own in
 `~/.maxshell/gemma/venv` (made from Python 3.10 or newer — macOS's own 3.9 is
 too old for `transformers` 5 — with the system PyTorch, or PyTorch installed
-if there isn't one, plus `transformers`), and Gemma 4 E4B's FP8 build from
-`leon-se/gemma-4-E4B-it-FP8-Dynamic` on Hugging Face (13 GB) in
-`~/.maxshell/gemma/e4b`. Only the text half of the model is loaded, not the
-image and audio parts: its weights go to the GPU as bfloat16 and the
-per-layer embedding table stays on disk, read a row at a time, so E4B takes
-about 9 GB and won't start with less than 40% of memory free. **E2B** needs
-about 5 GB (25% free): `sage --e2b --setup` downloads it (9 GB, from
-`leon-se/gemma-4-E2B-it-FP8-Dynamic`) into `~/.maxshell/gemma`; `sage --e2b`
-uses it, and `MAXSHELL_SAGE_MODEL=e2b` makes it the default. When you
-haven't picked a model and there's less than 40% of memory free (the GPU
-shares it), Sage starts on E2B instead and says so. While mx
-training has the GPU, Sage runs on the CPU instead (`MAXSHELL_SAGE_DEVICE`
-picks), which leaves training alone. Waking takes 10–30 seconds.
+if there isn't one, plus `transformers`), and Sage Pro's weights — an FP8
+build of Google's open Gemma 4 E4B, `leon-se/gemma-4-E4B-it-FP8-Dynamic` on
+Hugging Face (13 GB) — in `~/.maxshell/gemma/e4b`. Only the text half of the
+model is loaded, not the image and audio parts: its weights go to the GPU as
+bfloat16 and the per-layer embedding table stays on disk, read a row at a
+time, so Sage Pro takes about 9 GB and won't start with less than 40% of
+memory free. **Sage Lite** (Gemma 4 E2B) needs about 5 GB (25% free):
+`sage --lite --setup` downloads it (9 GB, from
+`leon-se/gemma-4-E2B-it-FP8-Dynamic`) into `~/.maxshell/gemma`; `sage --lite`
+uses it, and `MAXSHELL_SAGE_MODEL=lite` makes it the default (`--pro` and
+`pro` pick Sage Pro; `--e4b`/`--e2b` work too). When you haven't picked one
+and there's less than 40% of memory free (the GPU shares it), Sage starts
+as Sage Lite and says so. While mx training has the GPU, Sage runs on the
+CPU instead (`MAXSHELL_SAGE_DEVICE` picks), which leaves training alone.
+Waking takes 10–30 seconds.
 
 Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 `sage <question>` prints one answer as markdown — plain when piped.

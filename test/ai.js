@@ -296,7 +296,7 @@ test('mx2 runtime matches a plain reference, in chunks, one token at a time, and
 });
 
 // sage: Gemma runs in Python; without its folder set up it says how to set it up.
-test('sage without Gemma set up points to sage --setup', () => {
+test('sage without its model set up points to sage --setup', () => {
   const os = require('os');
   const path = require('path');
   const { spawnSync } = require('child_process');
@@ -308,13 +308,14 @@ test('sage without Gemma set up points to sage --setup', () => {
   assert.match(r.stderr, /sage --setup/);
   const help = spawnSync('node', [sh, '-c', 'sage --help'], { env, encoding: 'utf8' });
   assert.notStrictEqual(spawnSync('node', [sh, '-c', 'aig --help'], { env, encoding: 'utf8' }).status, 0);
-  assert.match(help.stdout, /Gemma 4/);
+  assert.match(help.stdout, /sage code/);
+  assert.ok(!/Gemma/.test(help.stdout));
   const was = process.env.MAXSHELL_GEMMA;
   process.env.MAXSHELL_GEMMA = dir;
   assert.strictEqual(require('../src/gemma').ready(), false);
   const e2b = spawnSync('node', [sh, '-c', 'sage --e2b hello'], { env, encoding: 'utf8' });
   assert.strictEqual(e2b.status, 1);
-  assert.match(e2b.stderr, /E2B.*sage --e2b --setup/);
+  assert.match(e2b.stderr, /Sage Lite.*sage --lite --setup/);
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'], chosen: true });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);

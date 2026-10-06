@@ -28,8 +28,8 @@ const tools = require('./sagetools');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  e4b: { label: 'Gemma 4 E4B', blurb: 'smarter · ~9 GB' },
-  e2b: { label: 'Gemma 4 E2B', blurb: 'twice as fast · ~5 GB' },
+  e4b: { label: 'Sage Pro', blurb: 'smarter · ~9 GB' },
+  e2b: { label: 'Sage Lite', blurb: 'twice as fast · ~5 GB' },
 };
 
 // --- the engine -----------------------------------------------------------------
@@ -325,7 +325,7 @@ class SageApp {
     const m = this.models.find((x) => x.key === key);
     if (!m) return;
     if (key === this.model && this.status !== 'error') { this.changed(); return; }
-    if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${key} --setup`, 'err'); return; }
+    if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${key === 'e2b' ? 'lite' : 'pro'} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
     this.engine.close();
     if (this.items.length) this.note(`Switched to ${MODEL_INFO[key].label} — a fresh conversation.`);
@@ -546,7 +546,7 @@ function welcome(app, w) {
   const lines = app.mode === 'code'
     ? ['Sage Code: your AI pair programmer, on your Mac.', `It reads, writes and edits files in ${tildify(app.root)}.`,
       'Every change is shown as a diff and asked first;', 'replaced files go to the Trash, never lost.']
-    : ['Google’s Gemma 4, running entirely on your Mac.', 'Private · offline · no account · no API key.'];
+    : ['An AI that runs entirely on your Mac.', 'Private · offline · no account · no API key.'];
   for (const l of lines) for (const part of wrap(l, w)) out.push(center(part, `${part}`));
   out.push({ s: '' });
   const tries = app.mode === 'code'

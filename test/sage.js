@@ -153,17 +153,17 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   let r = render(a, 90, 24, 0);
   const drop = r.hits.find((h) => h.action === 'menu');
   assert.strictEqual(drop.y, 0);
-  assert.match(text(r).split('\n')[0], /Gemma 4 E4B ▾/);
+  assert.match(text(r).split('\n')[0], /Sage Pro ▾/);
   a.mouse({ button: 0, release: false }, drop);
   r = render(a, 90, 24, 0);
-  assert.match(text(r), /✓ Gemma 4 E4B[\s\S]*Gemma 4 E2B/);
+  assert.match(text(r), /✓ Sage Pro[\s\S]*Sage Lite/);
   const e2b = r.hits.find((h) => h.action === 'model' && h.key === 'e2b');
   a.mouse({ button: 0, release: false }, e2b);
   assert.strictEqual(a.model, 'e2b');
   assert.strictEqual(a.started.length, 2);
   assert.strictEqual(a.started[0].e.closed, true);
   assert.strictEqual(a.status, 'loading');
-  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Gemma 4 E2B ▾/);
+  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Sage Lite ▾/);
   // keys: ^O, down, enter
   a.key({ name: 'o', ctrl: true });
   a.key({ name: 'down' });
@@ -173,7 +173,7 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   const b = app({ models: [{ key: 'e4b', ready: true }, { key: 'e2b', ready: false }] });
   b.switchModel('e2b');
   assert.strictEqual(b.model, 'e4b');
-  assert.match(b.items[b.items.length - 1].text, /sage --e2b --setup/);
+  assert.match(b.items[b.items.length - 1].text, /sage --lite --setup/);
 });
 
 test('sage code asks before a change; y applies it, n tells Sage no', () => {
@@ -292,7 +292,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'seen': gemma.visible(raw + gemma.tool_response('edit_file', 'ok') + 'Done.<turn|>'),
   'partial': gemma.visible('Sure!<|tool_call>call:edit_fi'),
   'tools': [t['function']['name'] for t in gemma.CODE_TOOLS],
-  'chat': 'sage code' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code')}))
+  'chat': 'sage code' in gemma.system_prompt('chat') and 'not Gemma' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code')}))
 `;
   const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
@@ -326,7 +326,7 @@ test('without room for E4B, Sage picks E2B unless a model was asked for', () => 
     process.env.MAXSHELL_SAGE_FREE = '30';
     const auto = gemma.fallback('e4b', false);
     assert.strictEqual(auto.key, 'e2b');
-    assert.match(auto.why, /30% of memory is free and E4B needs 40%/);
+    assert.match(auto.why, /30% of memory is free and Sage Pro needs 40%/);
     assert.strictEqual(gemma.fallback('e4b', true).key, 'e4b');
     process.env.MAXSHELL_SAGE_FREE = '55';
     assert.strictEqual(gemma.fallback('e4b', false).key, 'e4b');
@@ -337,7 +337,9 @@ test('without room for E4B, Sage picks E2B unless a model was asked for', () => 
     assert.strictEqual(gemma.pick(['hi']).chosen, false);
     assert.strictEqual(gemma.pick(['--e4b', 'hi']).chosen, true);
     const a = app({ notice: auto.why });
-    assert.match(text(render(a, 90, 26, 0)), /using E2B, the lighter model/);
+    assert.match(text(render(a, 90, 26, 0)).replace(/\s+/g, ' '), /this is Sage Lite, the lighter model/);
+    assert.strictEqual(gemma.pick(['--lite', 'hi']).key, 'e2b');
+    assert.ok(!/Gemma/.test(text(render(app(), 90, 26, 0))));
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in was)) delete process.env[k];
     Object.assign(process.env, was);

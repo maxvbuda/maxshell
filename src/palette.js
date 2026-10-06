@@ -28,7 +28,7 @@ function paletteItems(shell) {
     add('jobs', '⚙', `fg %${job.id}`, `${job.state} · ${job.cmd}`, `fg %${job.id}`);
   }
 
-  add('tools', '✨', 'sage', 'ask Sage, the AI on your Mac (Gemma 4, offline)', 'sage');
+  add('tools', '✨', 'sage', 'ask Sage, the AI on your Mac (private, offline)', 'sage');
   add('tools', '🛠', 'sage code', 'Sage Code: build and fix this project with AI', 'sage code');
   add('tools', '📊', 'dash', 'live dashboard: git, jobs, CPU, memory, recent commands', 'dash');
   add('tools', '🗂', 'files', 'browse this folder, Finder-style', 'files');

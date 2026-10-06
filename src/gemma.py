@@ -31,6 +31,7 @@ import time
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
+LABEL = 'Lite' if NAME == 'E2B' else 'Pro'
 NEED_GB = 9 if NAME == 'E4B' else 5
 NEED_FREE = 40 if NAME == 'E4B' else 25  # % of memory free before loading (training pauses below 15)
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
@@ -103,14 +104,16 @@ def system_prompt(mode):
     now = datetime.datetime.now()
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
-        return (f"You are Sage Code, a coding agent inside maxshell on the user's Mac, built on Google's Gemma 4 and "
-                f"running entirely on this Mac. {when} You work in the project folder {os.getcwd()}. "
+        return (f"You are Sage Code, a coding agent inside maxshell, running entirely on the user's Mac. Your name is "
+                f"Sage; don't call yourself Gemma. {when} You work in the project folder {os.getcwd()}. "
                 f"Use your tools: look around with list_files, read_file and search_files before changing anything; "
                 f"use edit_file for changes to existing files and write_file for new files. Keep edits small and "
                 f"exact, and match the code's style. The user approves every change and may decline one — then "
                 f"ask what they'd like instead. When you're done, say briefly what you changed.")
-    return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You're built on Google's "
-            f"Gemma 4 and run entirely on this Mac — private, offline, no account. {when} You're warm, sharp and "
+    return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "
+            f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not Gemma, and don't "
+            f"bring up the model underneath; only if someone asks directly what model you're built on, say you're "
+            f"based on an open model from Google. {when} You're warm, sharp and "
             f"concise. Only write code when it's asked for or really helps; then make it complete and runnable, in "
             f"fenced blocks that name the language. Write math in LaTeX between $ signs. You can't save or change "
             f"files here; if asked to, show the text and suggest `sage code`, which can.")
@@ -346,10 +349,10 @@ class Chat:
 def problem():
     """Why Gemma can't start now, or None."""
     if not os.path.exists(os.path.join(DIR, 'model.safetensors')):
-        return f"no Gemma model in {DIR} — run: sage{' --e2b' if NAME == 'E2B' else ''} --setup"
+        return f"Sage {LABEL} isn't set up — run: sage{' --lite' if NAME == 'E2B' else ''} --setup"
     free = free_memory()
     if free < NEED_FREE:
-        return (f'only {free}% of memory is free and Gemma 4 ({NAME}) needs about {NEED_GB} GB — close something '
+        return (f'only {free}% of memory is free and Sage {LABEL} needs about {NEED_GB} GB — close something '
                 f'(or pause training: ai --train stop) and try again')
     return None
 
@@ -453,7 +456,7 @@ def main():
     if args:
         answer(' '.join(args))
         return 0
-    sys.stdout.write(f'{C.muted}Sage · Gemma 4 ({NAME}), running on this Mac. It can be wrong — double-check anything important. '
+    sys.stdout.write(f'{C.muted}Sage {LABEL}, running on this Mac. It can be wrong — double-check anything important. '
                      f'Ctrl-C stops an answer; bye to leave.{C.reset}\n')
     while True:
         try:

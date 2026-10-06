@@ -16,8 +16,8 @@ const { spawnSync } = require('child_process');
 // The FP8 builds of Gemma 4 (instruction-tuned). E2B lives in the gemma
 // folder itself; E4B, about twice the compute and memory, in gemma/e4b.
 const MODELS = {
-  e2b: { name: 'E2B', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
-  e4b: { name: 'E4B', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB', needFree: 40 },
+  e2b: { name: 'E2B', label: 'Sage Lite', flag: 'lite', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
+  e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB', needFree: 40 },
 };
 const DEFAULT = 'e4b';
 const REPO = MODELS[DEFAULT].repo;
@@ -28,11 +28,14 @@ const dir = (m = MODELS[DEFAULT]) => path.join(base(), m.sub);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
 const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors')) && FILES.every((f) => fs.existsSync(path.join(dir(m), f)));
 
-// --e2b / --e4b at the front of the arguments, else $MAXSHELL_SAGE_MODEL, else E4B.
+// --lite / --pro (or --e2b / --e4b) at the front of the arguments, else
+// $MAXSHELL_SAGE_MODEL, else Pro.
+const ALIASES = { lite: 'e2b', pro: 'e4b' };
 function pick(args) {
-  const flag = /^--(e2b|e4b)$/i.exec(args[0] || '');
+  const flag = /^--(e2b|e4b|lite|pro)$/i.exec(args[0] || '');
   if (flag) args = args.slice(1);
-  const key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
+  let key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
+  key = ALIASES[key] || key;
   return { model: MODELS[key], key, args, chosen: !!(flag || process.env.MAXSHELL_SAGE_MODEL) };
 }
 
@@ -50,7 +53,7 @@ function fallback(key, chosen) {
   if (chosen || key !== 'e4b' || !ready(MODELS.e2b)) return { key };
   const free = freeMemory();
   if (free >= MODELS.e4b.needFree) return { key };
-  return { key: 'e2b', why: `Only ${free}% of memory is free and E4B needs ${MODELS.e4b.needFree}%, so Sage is using E2B, the lighter model.` };
+  return { key: 'e2b', why: `Only ${free}% of memory is free and Sage Pro needs ${MODELS.e4b.needFree}%, so this is Sage Lite, the lighter model.` };
 }
 const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
 
@@ -68,13 +71,13 @@ function setup(m, write, err) {
   // A venv made from a Python older than 3.10 (macOS's own is 3.9) can't have
   // transformers 5; it's ours, so make it again.
   if (fs.existsSync(python()) && !recent(python()) && !process.env.MAXSHELL_GEMMA_PYTHON) {
-    write('Gemma’s Python is too old for transformers 5 — making it again…\n');
+    write('Sage’s Python is too old for transformers 5 — making it again…\n');
     fs.rmSync(venv, { recursive: true, force: true });
   }
   if (!fs.existsSync(python())) {
     const py = findPython();
-    if (!py) { err('sage: Gemma needs Python 3.10 or newer — install it (brew install python, or python.org) and run sage --setup again\n'); return 1; }
-    write(`Making a Python for Gemma from ${py}…\n`);
+    if (!py) { err('sage: Sage needs Python 3.10 or newer — install it (brew install python, or python.org) and run sage --setup again\n'); return 1; }
+    write(`Making a Python for Sage from ${py}…\n`);
     if (!run(py, ['-m', 'venv', '--system-site-packages', venv])) { err('sage: couldn’t make the venv\n'); return 1; }
   }
   const hasTorch = spawnSync(python(), ['-c', 'import torch'], { stdio: 'ignore' }).status === 0;
@@ -88,7 +91,7 @@ function setup(m, write, err) {
     write(`Downloading ${m.repo}'s model.safetensors (${m.size}) into ${d}…\n`);
     if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
   }
-  write(`Sage (Gemma 4 ${m.name}) is ready — try: sage${m === MODELS[DEFAULT] ? '' : ' --' + m.name.toLowerCase()}\n`);
+  write(`${m.label} is ready — try: sage${m === MODELS[DEFAULT] ? '' : ` --${m.flag}`}\n`);
   return 0;
 }
 
@@ -100,14 +103,14 @@ function engineEnv(m, shell) {
   return env;
 }
 
-const HELP = `sage — Google's Gemma 4, running entirely on your Mac
+const HELP = `sage — an AI that runs entirely on your Mac
   sage                 chat, full screen (click the model to switch it)
   sage <question>      one answer, printed
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files here — every change shown as a diff and asked first
-  sage --e2b …         use E2B, the smaller, faster model (MAXSHELL_SAGE_MODEL=e2b
-                       makes it the default; E4B is, unless memory is short)
-  sage --setup         install what it needs (sage --e2b --setup for E2B)
+  sage --lite …        use Sage Lite, twice as fast (MAXSHELL_SAGE_MODEL=lite makes
+                       it the default; Sage Pro is, unless memory is short)
+  sage --setup         install what it needs (sage --lite --setup for Sage Lite)
 `;
 
 function runSage(args, io, shell, name = 'sage') {
@@ -118,15 +121,15 @@ function runSage(args, io, shell, name = 'sage') {
   let mode = 'chat';
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   let { model: m, key, args: rest, chosen } = pick(args);
-  if (!m) { err(`${name}: no Gemma model ${key} — e2b or e4b\n`); return 1; }
+  if (!m) { err(`${name}: no model ${key} — pro or lite\n`); return 1; }
   args = rest;
   if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
-  const flag = m === MODELS[DEFAULT] ? '' : ` --${key}`;
+  const flag = m === MODELS[DEFAULT] ? '' : ` --${m.flag}`;
   if (args[0] === '--setup') return setup(m, write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
   const auto = fallback(key, chosen);
   if (auto.key !== key) { key = auto.key; m = MODELS[key]; }
-  if (!ready(m)) { err(`${name}: Sage’s model (Gemma 4 ${m.name}) isn’t set up — run: sage${flag} --setup\n`); return 1; }
+  if (!ready(m)) { err(`${name}: ${m.label} isn’t set up — run: sage${flag} --setup\n`); return 1; }
   const env = engineEnv(m, shell);
   const tty = process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term' && io.stdin.kind !== 'string';
 
