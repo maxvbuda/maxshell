@@ -1050,9 +1050,8 @@ another model folder.
 
 **E2B**, the smaller Gemma 4, answers about twice as fast and needs about
 5 GB (25% free): `aig --e2b`, or `MAXSHELL_AIG_MODEL=e2b` to make it the
-default. `aig --e2b --setup` fetches its config and tokenizer from
-`leon-se/gemma-4-E2B-it-FP8-Dynamic` into `~/.maxshell/gemma` and links
-that repo's `model.safetensors` (9 GB) from `~/Downloads`.
+default. `aig --e2b --setup` downloads its FP8 build from
+`leon-se/gemma-4-E2B-it-FP8-Dynamic` (9 GB) into `~/.maxshell/gemma`.
 
 ### 6-7
 

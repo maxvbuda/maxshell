@@ -3,9 +3,9 @@
 // aig: chat with Gemma 4 (E4B, or E2B with --e2b), Google's open model, on
 // this Mac. The model runs in src/gemma.py under its own Python
 // (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `aig
-// --setup` makes that Python, fetches the model's config and tokenizer, and
-// links E2B's model file from ~/Downloads (E4B's is downloaded). While mx training has the GPU, Gemma runs on the CPU, which
-// is as fast then and doesn't slow the training.
+// --setup` makes that Python and downloads the model into its folder. While
+// mx training has the GPU, Gemma runs on the CPU, which is as fast then and
+// doesn't slow the training.
 
 const fs = require('fs');
 const os = require('os');
@@ -13,11 +13,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 // The FP8 builds of Gemma 4 (instruction-tuned). E2B lives in the gemma
-// folder itself (its model.safetensors is the one in ~/Downloads); E4B, about
-// twice the compute and memory, lives in gemma/e4b.
+// folder itself; E4B, about twice the compute and memory, in gemma/e4b.
 const MODELS = {
-  e2b: { name: 'E2B', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '' },
-  e4b: { name: 'E4B', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b' },
+  e2b: { name: 'E2B', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB' },
+  e4b: { name: 'E4B', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB' },
 };
 const DEFAULT = 'e4b';
 const REPO = MODELS[DEFAULT].repo;
@@ -67,14 +66,9 @@ function setup(m, write, err) {
   const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
   if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('aig: download failed\n'); return 1; }
   const model = path.join(d, 'model.safetensors');
-  if (!fs.existsSync(model) && m !== MODELS.e2b) {
-    write(`Downloading ${m.repo}'s model.safetensors (13 GB)…\n`);
+  if (!fs.existsSync(model)) {
+    write(`Downloading ${m.repo}'s model.safetensors (${m.size}) into ${d}…\n`);
     if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit' }).status !== 0) { err('aig: download failed\n'); return 1; }
-  } else if (!fs.existsSync(model)) {
-    const found = path.join(os.homedir(), 'Downloads', 'model.safetensors');
-    if (!fs.existsSync(found)) { err(`aig: put ${m.repo}'s model.safetensors in ~/Downloads (or ${d}) and run aig --setup again\n`); return 1; }
-    fs.symlinkSync(found, model);
-    write(`Linked ${found}\n`);
   }
   write(`Gemma 4 (${m.name}) is ready — try: aig${m === MODELS[DEFAULT] ? '' : ' --' + m.name.toLowerCase()}\n`);
   return 0;
