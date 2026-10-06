@@ -874,7 +874,9 @@ BUILTINS.abbr = (args, io, shell) => {
 // run on this Mac with no dependencies.
 BUILTINS.ai = (args, io, shell) => require('./ai').runAi(args, io, shell);
 
-// aig: Gemma 4 (E4B, or E2B with --e2b), Google's open model, run on this Mac by src/gemma.py.
+// sage: Sage, maxshell's AI — Gemma 4 running on this Mac (src/gemma.js,
+// src/sage.js). `sage code` is its coding agent. aig is the old name.
+BUILTINS.sage = (args, io, shell) => require('./gemma').runSage(args, io, shell);
 BUILTINS.aig = (args, io, shell) => require('./gemma').runAig(args, io, shell);
 
 // bot: a chat "AI" that is really a list of if/else rules (no AI, no network).

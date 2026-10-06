@@ -44,7 +44,7 @@ const BUILTIN_DESC = {
   float: 'a floating-point variable', builtin: 'run a builtin', where: 'every meaning of a name', abbr: 'expanding abbreviations',
   emulate: 'accepted for zsh scripts', dash: 'live dashboard', palette: 'the command palette (Ctrl-P)',
   explain: 'what a command line will do', snip: 'saved command snippets', mark: 'bookmark this folder',
-  go: 'jump to a bookmarked folder', cleanup: 'quit what isn’t needed; -r memory, -c CPU', '6-7': 'brainrot mode 🤷', bot: 'chat with a rules-only bot', ai: 'chat with mx, the on-device AI', aig: 'chat with Gemma 4, Google’s open model',
+  go: 'jump to a bookmarked folder', cleanup: 'quit what isn’t needed; -r memory, -c CPU', '6-7': 'brainrot mode 🤷', bot: 'chat with a rules-only bot', ai: 'chat with mx, the on-device AI', sage: 'Sage, the AI on your Mac — sage code edits files', aig: 'Sage, by its old name',
 };
 
 const COMMAND_DESC = {
@@ -93,6 +93,8 @@ const SUBCOMMANDS = {
   },
 };
 SUBCOMMANDS.pnpm = SUBCOMMANDS.npm;
+SUBCOMMANDS.sage = { code: 'Sage Code: build and fix this project', '--e2b': 'the smaller, faster model', '--setup': 'install what Sage needs', '--help': 'what sage can do' };
+SUBCOMMANDS.aig = SUBCOMMANDS.sage;
 SUBCOMMANDS.yarn = { add: 'add a dependency', install: 'install dependencies', run: 'run a script', remove: 'remove a dependency' };
 
 const BRANCH_ARGS = { git: new Set(['checkout', 'switch', 'merge', 'rebase', 'branch', 'diff', 'log']) };

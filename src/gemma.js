@@ -1,8 +1,9 @@
 'use strict';
 
-// aig: chat with Gemma 4 (E4B, or E2B with --e2b), Google's open model, on
-// this Mac. The model runs in src/gemma.py under its own Python
-// (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `aig
+// sage (and its other name, aig): Sage, maxshell's AI — Gemma 4 (E4B, or E2B
+// with --e2b), Google's open model, on this Mac. The full-screen app is
+// src/sage.js. The model runs in src/gemma.py under its own Python
+// (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `sage
 // --setup` makes that Python and downloads the model into its folder. While
 // mx training has the GPU, Gemma runs on the CPU, which is as fast then and
 // doesn't slow the training.
@@ -55,52 +56,88 @@ function setup(m, write, err) {
   }
   if (!fs.existsSync(python())) {
     const py = findPython();
-    if (!py) { err('aig: Gemma needs Python 3.10 or newer — install it (brew install python, or python.org) and run aig --setup again\n'); return 1; }
+    if (!py) { err('sage: Gemma needs Python 3.10 or newer — install it (brew install python, or python.org) and run sage --setup again\n'); return 1; }
     write(`Making a Python for Gemma from ${py}…\n`);
-    if (!run(py, ['-m', 'venv', '--system-site-packages', venv])) { err('aig: couldn’t make the venv\n'); return 1; }
+    if (!run(py, ['-m', 'venv', '--system-site-packages', venv])) { err('sage: couldn’t make the venv\n'); return 1; }
   }
   const hasTorch = spawnSync(python(), ['-c', 'import torch'], { stdio: 'ignore' }).status === 0;
   write(hasTorch ? 'Installing transformers…\n' : 'Installing PyTorch and transformers…\n');
-  if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('aig: pip install failed\n'); return 1; }
+  if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('sage: pip install failed\n'); return 1; }
   write(`Fetching the config and tokenizer from ${m.repo}…\n`);
   const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
-  if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('aig: download failed\n'); return 1; }
+  if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
   const model = path.join(d, 'model.safetensors');
   if (!fs.existsSync(model)) {
     write(`Downloading ${m.repo}'s model.safetensors (${m.size}) into ${d}…\n`);
-    if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit' }).status !== 0) { err('aig: download failed\n'); return 1; }
+    if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
   }
-  write(`Gemma 4 (${m.name}) is ready — try: aig${m === MODELS[DEFAULT] ? '' : ' --' + m.name.toLowerCase()}\n`);
+  write(`Sage (Gemma 4 ${m.name}) is ready — try: sage${m === MODELS[DEFAULT] ? '' : ' --' + m.name.toLowerCase()}\n`);
   return 0;
 }
 
-function runAig(args, io, shell) {
+// Where the engine runs and what it's told: the model folder, and the CPU
+// while mx training has the GPU.
+function engineEnv(m, shell) {
+  const env = { ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_AIG_NAME: m.name, MAXSHELL_NODE: process.execPath };
+  if (!env.MAXSHELL_AIG_DEVICE && training()) env.MAXSHELL_AIG_DEVICE = 'cpu';
+  return env;
+}
+
+const HELP = `sage — Google's Gemma 4, running entirely on your Mac
+  sage                 chat, full screen (click the model to switch it)
+  sage <question>      one answer, printed
+  sage code [task]     Sage Code: a coding agent that reads, writes and edits
+                       files here — every change shown as a diff and asked first
+  sage --e2b …         use E2B, the smaller, faster model (MAXSHELL_AIG_MODEL=e2b
+                       makes it the default; E4B is)
+  sage --setup         install what it needs (sage --e2b --setup for E2B)
+(aig is another name for sage.)
+`;
+
+function runSage(args, io, shell, name = 'sage') {
   const ansi = require('./ansi');
   const theme = require('./theme');
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
+  let mode = 'chat';
+  if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   const { model: m, key, args: rest } = pick(args);
-  if (!m) { err(`aig: no Gemma model ${key} — e2b or e4b\n`); return 1; }
+  if (!m) { err(`${name}: no Gemma model ${key} — e2b or e4b\n`); return 1; }
   args = rest;
+  if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   const flag = m === MODELS[DEFAULT] ? '' : ` --${key}`;
   if (args[0] === '--setup') return setup(m, write, err);
-  if (args[0] === '--help' || args[0] === '-h') {
-    write('aig — chat with Gemma 4 on this Mac\n  aig              chat (bye to leave, Ctrl-C stops an answer)\n  aig <question>   one answer\n  aig --e2b …      use E2B, the smaller, faster model (MAXSHELL_AIG_MODEL=e2b makes it the default)\n  aig --setup      install what it needs (aig --e2b --setup for E2B)\n');
-    return 0;
+  if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
+  if (!ready(m)) { err(`${name}: Sage’s model (Gemma 4 ${m.name}) isn’t set up — run: sage${flag} --setup\n`); return 1; }
+  const env = engineEnv(m, shell);
+  const tty = process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term' && io.stdin.kind !== 'string';
+
+  if (tty && (mode === 'code' || !args.length)) {
+    const sage = require('./sage');
+    const tui = require('./tui');
+    const keys = [DEFAULT, ...Object.keys(MODELS).filter((k) => k !== DEFAULT)];
+    const models = keys.map((k) => ({ key: k, ready: ready(MODELS[k]) }));
+    const fake = process.env.MAXSHELL_SAGE_ENGINE; // tests: a stand-in for gemma.py
+    const start = (k, md) => new sage.Engine(
+      fake ? [process.execPath, fake, '{commands}', md] : [python(), path.join(__dirname, 'gemma.py'), '--serve', '{commands}', md],
+      { cwd: shell.cwd, env: engineEnv(MODELS[k], shell) },
+    );
+    const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null });
+    return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
-  if (!ready(m)) { err(`aig: Gemma 4 (${m.name}) isn’t set up — run: aig${flag} --setup\n`); return 1; }
+  if (mode === 'code') { err(`${name}: sage code needs a terminal\n`); return 1; }
+
+  // One answer, or a plain chat when this isn't a terminal: gemma.py prints
+  // it, with replies rendered by src/markdown.js in this theme.
   const t = theme.current();
   const colors = {
     accent: ansi.fg(t.ui.accent), accent2: ansi.fg(t.ui.accent2), muted: ansi.fg(t.ui.muted),
     bold: ansi.bold(), reset: ansi.reset(),
   };
-  // gemma.py renders replies with src/markdown.js, run by this Node in this theme.
-  const env = {
-    ...shell.env, MAXSHELL_AIG_COLORS: JSON.stringify(colors), MAXSHELL_GEMMA: dir(m), MAXSHELL_AIG_NAME: m.name,
-    MAXSHELL_NODE: process.execPath, MAXSHELL_THEME: theme.currentThemeName(),
-  };
-  if (!env.MAXSHELL_AIG_DEVICE && training()) env.MAXSHELL_AIG_DEVICE = 'cpu';
+  Object.assign(env, { MAXSHELL_AIG_COLORS: JSON.stringify(colors), MAXSHELL_THEME: theme.currentThemeName() });
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }
 
-module.exports = { runAig, ready, pick, recent, MODELS, DEFAULT, REPO, FILES };
+const runAig = (args, io, shell) => runSage(args, io, shell, 'aig');
+
+module.exports = { runSage, runAig, HELP, ready, pick, recent, MODELS, DEFAULT, REPO, FILES };

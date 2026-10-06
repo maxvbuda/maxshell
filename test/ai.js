@@ -296,7 +296,7 @@ test('mx2 runtime matches a plain reference, in chunks, one token at a time, and
 });
 
 // aig: Gemma runs in Python; without its folder set up it says how to set it up.
-test('aig without Gemma set up points to aig --setup', () => {
+test('aig without Gemma set up points to sage --setup', () => {
   const os = require('os');
   const path = require('path');
   const { spawnSync } = require('child_process');
@@ -305,7 +305,7 @@ test('aig without Gemma set up points to aig --setup', () => {
   const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
   const r = spawnSync('node', [sh, '-c', 'aig hello'], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 1);
-  assert.match(r.stderr, /aig --setup/);
+  assert.match(r.stderr, /sage --setup/);
   const help = spawnSync('node', [sh, '-c', 'aig --help'], { env, encoding: 'utf8' });
   assert.match(help.stdout, /Gemma 4/);
   const was = process.env.MAXSHELL_GEMMA;
@@ -313,7 +313,7 @@ test('aig without Gemma set up points to aig --setup', () => {
   assert.strictEqual(require('../src/gemma').ready(), false);
   const e2b = spawnSync('node', [sh, '-c', 'aig --e2b hello'], { env, encoding: 'utf8' });
   assert.strictEqual(e2b.status, 1);
-  assert.match(e2b.stderr, /E2B.*aig --e2b --setup/);
+  assert.match(e2b.stderr, /E2B.*sage --e2b --setup/);
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'] });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);
@@ -411,44 +411,6 @@ test('markdown holds a marker only until it closes, and shows unclosed ones as t
   assert.strictEqual(ansi.strip(s), 'a bold text and *args');
   md.end();
   assert.strictEqual(ansi.strip(renderMarkdown('use `x = 1` here\n\n\n\nnext')), 'use x = 1 here\n\nnext');
-});
-
-// Gemma's save_file tool: its calls are parsed and hidden from the screen,
-// and a save needs a yes; a replaced file goes to the Trash.
-test('aig parses Gemma tool calls and saves files only when confirmed', () => {
-  const os = require('os');
-  const path = require('path');
-  const { spawnSync } = require('child_process');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aig-save-'));
-  fs.mkdirSync(path.join(dir, 'trash'));
-  const script = String.raw`
-import sys, os, json
-sys.path.insert(0, sys.argv[1])
-import gemma
-raw = 'Sure!<|tool_call>call:save_file{content:<|"|>print("hi")\nx = {1: 2}<|"|>,path:<|"|>a/hello.py<|"|>}<tool_call|>'
-out = {'call': gemma.parse_call(raw),
-       'seen': gemma.visible(raw + gemma.tool_response('save_file', 'ok') + 'Done.<turn|>'),
-       'partial': gemma.visible('Sure!<|tool_call>call:save_fi'),
-       'no': gemma.save_file('a/hello.py', 'x', lambda *a: False, None)}
-out['yes'] = gemma.save_file('a/hello.py', 'one\n', lambda *a: True, gemma.trash_with_node)
-out['again'] = gemma.save_file('a/hello.py', 'two\n', lambda f, c, exists: exists, gemma.trash_with_node)
-out['folder'] = gemma.save_file('a', 'x', lambda *a: True, None)
-print(json.dumps(out))
-`;
-  const env = { ...process.env, MAXSHELL_TRASH: path.join(dir, 'trash') };
-  const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { cwd: dir, env, encoding: 'utf8' });
-  assert.strictEqual(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout);
-  assert.deepStrictEqual(out.call, ['save_file', { content: 'print("hi")\nx = {1: 2}', path: 'a/hello.py' }]);
-  assert.strictEqual(out.seen, 'Sure!Done.');
-  assert.strictEqual(out.partial, 'Sure!');
-  assert.match(out.no, /chose not to save/);
-  assert.match(out.yes, /^Saved .*hello\.py \(4 bytes\)\.$/);
-  assert.match(out.again, /old file is in the Trash/);
-  assert.match(out.folder, /is a folder/);
-  assert.strictEqual(fs.readFileSync(path.join(dir, 'a', 'hello.py'), 'utf8'), 'two\n');
-  assert.strictEqual(fs.readFileSync(path.join(dir, 'trash', 'hello.py'), 'utf8'), 'one\n');
-  fs.rmSync(dir, { recursive: true });
 });
 
 // Gemma writes math in TeX; tex.js turns it into Unicode text.

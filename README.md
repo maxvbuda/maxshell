@@ -14,6 +14,12 @@ maxshell %~ % for f in src/*.js; do
    ...> done
 ```
 
+> **✦ Meet Sage — an AI that lives in your shell.** Type `sage` and talk to
+> Google's Gemma 4, running entirely on your Mac: private, offline, no
+> account, no API key. Type `sage code` and it builds and fixes your
+> project with you — reading your files, proposing edits as diffs, and
+> changing nothing until you say yes. [More below.](#sage--an-ai-on-your-mac)
+
 ## Install / run
 
 ```sh
@@ -1010,56 +1016,68 @@ out, so a run that used too much froze the whole machine; past the cap it
 stops with an error instead. Full-length windows recompute activations
 rather than keep them, which roughly halves their memory.
 
-### aig — Gemma on your Mac
+### sage — an AI on your Mac
 
-`aig` chats with **Gemma 4 (E4B)**, Google's open model, much bigger and
-broader than mx. It runs on this Mac too: no account, no internet once it's
-set up.
+**Sage is maxshell's AI: Google's Gemma 4, running entirely on your Mac.**
+No cloud, no account, no API key, no data leaving the machine — and once
+it's set up, no internet. Ask it anything; let `sage code` work on your
+project with you.
 
 ```
-~ ❯ aig what is 12 times 12? just the number
+~ ❯ sage                      # chat, full screen
+~ ❯ sage what is 12 times 12? just the number
 144
-~ ❯ aig
-you ❯ hi! who are you, in one sentence?
-✦ gemma ❯ I am Gemma 4, a Large Language Model developed by Google DeepMind.
+~/app ❯ sage code             # a coding agent for this folder
+~/app ❯ sage code add a --verbose flag to main.py
 ```
 
-`aig --setup` gets it ready: a Python of its own in `~/.maxshell/gemma/venv`
-(made from Python 3.10 or newer — macOS's own 3.9 is too old for
-`transformers` 5 — with the system PyTorch, or PyTorch installed if there
-isn't one, plus `transformers`), and the model's FP8 build from
+**A real app, not a prompt.** `sage` opens full screen: a header with the
+model and what Sage is doing (waking, thinking, writing, and its speed in
+tokens a second), the conversation, and an input box at the bottom. The
+**model is a dropdown** — click `◆ Gemma 4 E4B ▾` (or press **^O**) and pick
+E4B, the smarter one, or E2B, twice as fast; it switches on the spot. A
+welcome screen offers examples to click. Answers stream in as formatted
+markdown in your theme's colours — headings, **bold**, lists, tables, code
+highlighted like the editor's, and **math**: TeX like
+`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` shows as `(-b ± √(b² - 4ac))/2a`. Scroll
+with the wheel or PgUp/PgDn; ↑/↓ bring back what you asked before;
+**⌥Enter** starts a new line; **^C** stops an answer (and, at an empty box,
+leaves); **^N** or `/new` starts a fresh conversation; `/help` lists the rest.
+You can type while it's waking up — your message goes as soon as it's ready.
+
+**Sage Code builds and fixes things.** `sage code` is the same app with
+tools: Sage can list, read and search the files in the folder you started
+it in, and **create and edit** them. Every change is shown first as a
+red/green diff with **Yes · Yes, and don't ask again · No** (click, or press
+y / a / n); say no and Sage asks what you'd like instead. Edits are exact
+— the text to change must be found exactly once — and the file being
+replaced goes to the **Trash**, so nothing is ever lost. Reading outside the
+project folder asks too. Plain `sage` can't touch files at all.
+
+**Private, and quick to follow up.** Sage keeps what it has read of the
+conversation (its KV cache), so each follow-up reads only your new message
+and answers in seconds, however long the chat. It's honest about itself:
+built on Gemma 4, running here.
+
+**Setup.** `sage --setup` gets it ready: a Python of its own in
+`~/.maxshell/gemma/venv` (made from Python 3.10 or newer — macOS's own 3.9 is
+too old for `transformers` 5 — with the system PyTorch, or PyTorch installed
+if there isn't one, plus `transformers`), and Gemma 4 E4B's FP8 build from
 `leon-se/gemma-4-E4B-it-FP8-Dynamic` on Hugging Face (13 GB) in
-`~/.maxshell/gemma/e4b`. It loads only the text half of the model, not the
-image and audio parts: its weights go to the GPU as bfloat16, and the
-per-layer embedding table stays on disk and is read a row at a time, so it
-takes about 9 GB. It won't start with less than 40% of memory free. While mx training has the GPU it
-runs on the CPU instead (`MAXSHELL_AIG_DEVICE` picks), which is as fast
-then and leaves training alone; that's a few words a second. Loading takes
-10–30 seconds, once per chat. Gemma keeps what it has read of the chat
-(its KV cache), so each follow-up reads only your new message and starts
-answering in seconds, however long the conversation. Answers stream in as formatted markdown, in
-the theme's colours: headings, **bold**, *italic*, `inline code`, bullet and
-numbered lists, quotes, rules, aligned tables, code blocks highlighted
-like the editor's, and math: TeX in `$…$`, `$$…$$`, `\(…\)` or `\[…\]` becomes
-Unicode (`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` → `(-b ± √(b² - 4ac))/2a`),
-with display math on its own indented lines — words wrap at the terminal's edge. (Piped, the answer
-stays plain markdown.) Questions about code (or follow-ups to an answer
-with code) get a lower temperature for steadier code, and answers can run
-to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves.
+`~/.maxshell/gemma/e4b`. Only the text half of the model is loaded, not the
+image and audio parts: its weights go to the GPU as bfloat16 and the
+per-layer embedding table stays on disk, read a row at a time, so E4B takes
+about 9 GB and won't start with less than 40% of memory free. **E2B** needs
+about 5 GB (25% free): `sage --e2b --setup` downloads it (9 GB, from
+`leon-se/gemma-4-E2B-it-FP8-Dynamic`) into `~/.maxshell/gemma`; `sage --e2b`
+uses it, and `MAXSHELL_AIG_MODEL=e2b` makes it the default. While mx
+training has the GPU, Sage runs on the CPU instead (`MAXSHELL_AIG_DEVICE`
+picks), which leaves training alone. Waking takes 10–30 seconds.
 
-**Gemma can save files.** Ask it to ("write a script that … and save it as
-fib.py") and it calls its `save_file` tool: aig shows the file (the first
-15 lines of a long one) and asks `save ~/x/fib.py, 12 lines? [y/N]` —
-nothing is written without a yes, and nothing at all without a terminal to
-ask at. A relative path is in the folder you ran `aig` in; missing folders
-are made, and a file that's already there goes to the Trash first, never
-overwritten. Gemma is told how it went and carries on. `MAXSHELL_GEMMA` points it at
-another model folder.
-
-**E2B**, the smaller Gemma 4, answers about twice as fast and needs about
-5 GB (25% free): `aig --e2b`, or `MAXSHELL_AIG_MODEL=e2b` to make it the
-default. `aig --e2b --setup` downloads its FP8 build from
-`leon-se/gemma-4-E2B-it-FP8-Dynamic` (9 GB) into `~/.maxshell/gemma`.
+Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
+`sage <question>` prints one answer as markdown — plain when piped.
+`MAXSHELL_GEMMA` points it at another model folder. `aig` is Sage's old
+name and still works.
 
 ### 6-7
 

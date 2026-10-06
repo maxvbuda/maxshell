@@ -21,6 +21,8 @@ const TIPS = [
   'cmd | view pages output with highlighting and search',
   'top is a live process monitor; gitui stages and commits',
   'a ✓ or ✗ after slow commands says how long they took',
+  'sage — an AI on your Mac: Gemma 4, private and offline',
+  'sage code builds and fixes your project — you OK every change',
 ];
 
 // The logo painted across the theme gradient by column, so both rows line up.

@@ -14,7 +14,7 @@ changing behaviour, and keep it updated with each feature.
 
 ```sh
 node bin/maxshell.js            # REPL   (maxshell -c 'cmd', or a script path)
-npm test                        # 12 suites, ~20 seconds; all must pass
+npm test                        # 13 suites, ~25 seconds; all must pass
 ```
 
 Suites: `test/run.js` (language), `interactive.js` (line editor, highlight,
@@ -24,7 +24,8 @@ search, did-you-mean, j/back/forward, alerts), `look.js` (themes, logo,
 prompt), `modern.js` (completion menu, context prompt, ls), `github.js`
 (gitui's GitHub support against a fake `gh`), `jobs.js` (job control,
 streaming pipelines), `palette.js` (palette, picker, explain, dash,
-snippets/bookmarks), `ai.js` (the on-device model). New features get tests in a
+snippets/bookmarks), `ai.js` (the on-device model), `sage.js` (Sage's app,
+Sage Code's tools, the engine plumbing). New features get tests in a
 suite; new suites get appended to the `test` script in package.json.
 
 ## Architecture
@@ -71,12 +72,21 @@ with `ai/mx2/parity.py`. mx3 (`ai/mx3/`: `make-corpus.js`, `talk.js`,
 answer fit?" → yes/no) that `checkedReply` uses. `ai` prefers mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
-`aig` (`src/gemma.js` → `src/gemma.py`) runs Gemma 4 E2B (FP8, from
-`leon-se/gemma-4-E2B-it-FP8-Dynamic`; model file linked from ~/Downloads)
-in `~/.maxshell/gemma/venv` via transformers: text weights only, the
-per-layer embedding memory-mapped from disk, CPU while mx training runs.
-At a terminal gemma.py pipes replies through `node src/markdown.js` (a
-streaming markdown renderer; NUL ends a reply and is acked on stderr).
+`sage` (old name `aig`; `src/gemma.js`) is Sage, Gemma 4 E4B (default) or
+E2B (FP8 builds from `leon-se/gemma-4-E{4,2}B-it-FP8-Dynamic`, in
+`~/.maxshell/gemma/e4b` and `~/.maxshell/gemma`) run by `src/gemma.py` in
+`~/.maxshell/gemma/venv` via transformers: text weights only, the per-layer
+embedding memory-mapped from disk, KV cache kept across turns, CPU while mx
+training runs. At a terminal, `sage` / `sage code` open `src/sage.js`, a
+full-screen app (`SageApp` state + `render()`, model dropdown) that runs
+`gemma.py --serve` as a separate process: JSON commands appended to a file,
+JSON events read back from another (`Engine`), so it stays synchronous.
+`sage code` gives Gemma tools (native tool calls, parsed in gemma.py) that
+the app runs via `src/sagetools.js` — reads in the project are free,
+writes/edits show a diff and ask, replaced files go to the Trash. Tests
+use `test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). Off a terminal,
+gemma.py prints replies through `node src/markdown.js` (streaming markdown +
+`src/tex.js` math; NUL ends a reply and is acked on stderr).
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`
 (raw-mode editor: highlighting, ghost suggestions, Ctrl-R search, completion
