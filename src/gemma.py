@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
-NAME = os.environ.get('MAXSHELL_AIG_NAME') or 'E2B'
+NAME = os.environ.get('MAXSHELL_AIG_NAME') or 'E4B'
 NEED_GB = 9 if NAME == 'E4B' else 5
 NEED_FREE = 40 if NAME == 'E4B' else 25  # % of memory free before loading (training pauses below 15)
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
@@ -246,7 +246,7 @@ class Chat:
 def main():
     args = sys.argv[1:]
     if not os.path.exists(os.path.join(DIR, 'model.safetensors')):
-        sys.stderr.write(f"aig: no Gemma model in {DIR} — run: aig{' --e4b' if NAME == 'E4B' else ''} --setup\n")
+        sys.stderr.write(f"aig: no Gemma model in {DIR} — run: aig{' --e2b' if NAME == 'E2B' else ''} --setup\n")
         return 1
     free = free_memory()
     if free < NEED_FREE:

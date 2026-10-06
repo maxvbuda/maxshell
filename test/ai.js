@@ -311,13 +311,13 @@ test('aig without Gemma set up points to aig --setup', () => {
   const was = process.env.MAXSHELL_GEMMA;
   process.env.MAXSHELL_GEMMA = dir;
   assert.strictEqual(require('../src/gemma').ready(), false);
-  const e4b = spawnSync('node', [sh, '-c', 'aig --e4b hello'], { env, encoding: 'utf8' });
-  assert.strictEqual(e4b.status, 1);
-  assert.match(e4b.stderr, /E4B.*aig --e4b --setup/);
+  const e2b = spawnSync('node', [sh, '-c', 'aig --e2b hello'], { env, encoding: 'utf8' });
+  assert.strictEqual(e2b.status, 1);
+  assert.match(e2b.stderr, /E2B.*aig --e2b --setup/);
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'] });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);
-  assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_AIG_MODEL ? MODELS[process.env.MAXSHELL_AIG_MODEL] : MODELS.e2b);
+  assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_AIG_MODEL ? MODELS[process.env.MAXSHELL_AIG_MODEL] : MODELS.e4b);
   if (was === undefined) delete process.env.MAXSHELL_GEMMA; else process.env.MAXSHELL_GEMMA = was;
   fs.rmSync(dir, { recursive: true });
 });

@@ -1,6 +1,6 @@
 'use strict';
 
-// aig: chat with Gemma 4 (E2B, or E4B with --e4b), Google's open model, on
+// aig: chat with Gemma 4 (E4B, or E2B with --e2b), Google's open model, on
 // this Mac. The model runs in src/gemma.py under its own Python
 // (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `aig
 // --setup` makes that Python, fetches the model's config and tokenizer, and
@@ -19,19 +19,20 @@ const MODELS = {
   e2b: { name: 'E2B', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '' },
   e4b: { name: 'E4B', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b' },
 };
-const REPO = MODELS.e2b.repo;
+const DEFAULT = 'e4b';
+const REPO = MODELS[DEFAULT].repo;
 const FILES = ['config.json', 'generation_config.json', 'tokenizer.json', 'tokenizer_config.json', 'chat_template.jinja'];
 
 const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxshell', 'gemma');
-const dir = (m = MODELS.e2b) => path.join(base(), m.sub);
+const dir = (m = MODELS[DEFAULT]) => path.join(base(), m.sub);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
-const ready = (m = MODELS.e2b) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors')) && FILES.every((f) => fs.existsSync(path.join(dir(m), f)));
+const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors')) && FILES.every((f) => fs.existsSync(path.join(dir(m), f)));
 
-// --e2b / --e4b at the front of the arguments, else $MAXSHELL_AIG_MODEL, else E2B.
+// --e2b / --e4b at the front of the arguments, else $MAXSHELL_AIG_MODEL, else E4B.
 function pick(args) {
   const flag = /^--(e2b|e4b)$/i.exec(args[0] || '');
   if (flag) args = args.slice(1);
-  const key = (flag ? flag[1] : process.env.MAXSHELL_AIG_MODEL || 'e2b').toLowerCase();
+  const key = (flag ? flag[1] : process.env.MAXSHELL_AIG_MODEL || DEFAULT).toLowerCase();
   return { model: MODELS[key], key, args };
 }
 const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
@@ -75,7 +76,7 @@ function setup(m, write, err) {
     fs.symlinkSync(found, model);
     write(`Linked ${found}\n`);
   }
-  write(`Gemma 4 (${m.name}) is ready — try: aig${m === MODELS.e2b ? '' : ' --' + m.name.toLowerCase()}\n`);
+  write(`Gemma 4 (${m.name}) is ready — try: aig${m === MODELS[DEFAULT] ? '' : ' --' + m.name.toLowerCase()}\n`);
   return 0;
 }
 
@@ -87,10 +88,10 @@ function runAig(args, io, shell) {
   const { model: m, key, args: rest } = pick(args);
   if (!m) { err(`aig: no Gemma model ${key} — e2b or e4b\n`); return 1; }
   args = rest;
-  const flag = m === MODELS.e2b ? '' : ` --${key}`;
+  const flag = m === MODELS[DEFAULT] ? '' : ` --${key}`;
   if (args[0] === '--setup') return setup(m, write, err);
   if (args[0] === '--help' || args[0] === '-h') {
-    write('aig — chat with Gemma 4 on this Mac\n  aig              chat (bye to leave, Ctrl-C stops an answer)\n  aig <question>   one answer\n  aig --e4b …      use E4B, the bigger model (MAXSHELL_AIG_MODEL=e4b makes it the default)\n  aig --setup      install what it needs (aig --e4b --setup for E4B)\n');
+    write('aig — chat with Gemma 4 on this Mac\n  aig              chat (bye to leave, Ctrl-C stops an answer)\n  aig <question>   one answer\n  aig --e2b …      use E2B, the smaller, faster model (MAXSHELL_AIG_MODEL=e2b makes it the default)\n  aig --setup      install what it needs (aig --e2b --setup for E2B)\n');
     return 0;
   }
   if (!ready(m)) { err(`aig: Gemma 4 (${m.name}) isn’t set up — run: aig${flag} --setup\n`); return 1; }
@@ -108,4 +109,4 @@ function runAig(args, io, shell) {
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }
 
-module.exports = { runAig, ready, pick, recent, MODELS, REPO, FILES };
+module.exports = { runAig, ready, pick, recent, MODELS, DEFAULT, REPO, FILES };

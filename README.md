@@ -1012,7 +1012,7 @@ rather than keep them, which roughly halves their memory.
 
 ### aig — Gemma on your Mac
 
-`aig` chats with **Gemma 4 (E2B)**, Google's open model, much bigger and
+`aig` chats with **Gemma 4 (E4B)**, Google's open model, much bigger and
 broader than mx. It runs on this Mac too: no account, no internet once it's
 set up.
 
@@ -1027,13 +1027,12 @@ you ❯ hi! who are you, in one sentence?
 `aig --setup` gets it ready: a Python of its own in `~/.maxshell/gemma/venv`
 (made from Python 3.10 or newer — macOS's own 3.9 is too old for
 `transformers` 5 — with the system PyTorch, or PyTorch installed if there
-isn't one, plus `transformers`), the model's config and tokenizer
-from `leon-se/gemma-4-E2B-it-FP8-Dynamic` on Hugging Face, and a link to
-that repo's `model.safetensors` in `~/Downloads` (9 GB, the FP8 build). It
-loads only the text half of the model, not the image and audio parts: its
-weights go to the GPU as bfloat16, and the 4.7 GB per-layer embedding table
-stays on disk and is read a row at a time, so it takes about 5 GB. It won't
-start with less than 25% of memory free. While mx training has the GPU it
+isn't one, plus `transformers`), and the model's FP8 build from
+`leon-se/gemma-4-E4B-it-FP8-Dynamic` on Hugging Face (13 GB) in
+`~/.maxshell/gemma/e4b`. It loads only the text half of the model, not the
+image and audio parts: its weights go to the GPU as bfloat16, and the
+per-layer embedding table stays on disk and is read a row at a time, so it
+takes about 9 GB. It won't start with less than 40% of memory free. While mx training has the GPU it
 runs on the CPU instead (`MAXSHELL_AIG_DEVICE` picks), which is as fast
 then and leaves training alone; that's a few words a second. Loading takes
 10–30 seconds, once per chat. Gemma keeps what it has read of the chat
@@ -1049,12 +1048,11 @@ with code) get a lower temperature for steadier code, and answers can run
 to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
 another model folder.
 
-**E4B**, the bigger Gemma 4, is a switch away: `aig --e4b` (or
-`MAXSHELL_AIG_MODEL=e4b` to make it the default). `aig --e4b --setup`
-downloads its FP8 build from `leon-se/gemma-4-E4B-it-FP8-Dynamic` (13 GB)
-into `~/.maxshell/gemma/e4b`, sharing E2B's Python. It answers better but
-does about twice the work per word, so it's about half as fast, takes about
-9 GB, and won't start with less than 40% of memory free.
+**E2B**, the smaller Gemma 4, answers about twice as fast and needs about
+5 GB (25% free): `aig --e2b`, or `MAXSHELL_AIG_MODEL=e2b` to make it the
+default. `aig --e2b --setup` fetches its config and tokenizer from
+`leon-se/gemma-4-E2B-it-FP8-Dynamic` into `~/.maxshell/gemma` and links
+that repo's `model.safetensors` (9 GB) from `~/Downloads`.
 
 ### 6-7
 
