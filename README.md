@@ -970,7 +970,18 @@ and otherwise it says honestly that it didn't follow rather than make
 something up. `node ai/eval.js` scores what `ai` shows, including questions
 it was never taught; `--raw` scores the model alone.
 
-**mx 0.0.3** is the newest: the same 43M-parameter design as mx 0.0.2, trained on a
+**mx 0.0.4** is the newest and what `ai` uses when `models/mx4.bin` is
+there: 98M parameters (768 wide, 12 layers, 2,048-token context), trained in
+two stages on data built to be learned rather than memorized (`ai/mx4/`). On
+its exam (`node ai/mx4/eval.js`: functions built from steps it never saw,
+held-out exercises and games, conversation) it beats mx 0.0.3 overall, 26 to
+19 — conversation 18/24 (mx 0.0.3: 12), new steps 2/8 (0), known games in
+new words 1/3 (0), new games 3/5 (3) — but solves fewer held-out exercises
+(2/8 to 4/8), copies more of its training text, and is slower. It has no
+self-check, so answers aren't vetted the way mx 0.0.3's are.
+`MAXSHELL_AI=0.0.3 ai` uses mx 0.0.3.
+
+**mx 0.0.3**: the same 43M-parameter design as mx 0.0.2, trained on a
 balanced mix of hand-written data — conversation in many phrasings, about
 330 coding exercises and programs (every one run before training), a
 programming glossary and 190 knowledge articles, poems and stories, and
@@ -978,7 +989,7 @@ websites. It also learned to **check its own answers**: given a question
 and an answer, it says whether the answer fits, and `ai` asks it about the
 opening of every reply before showing it, so a reply that starts off wrong
 is dropped and rewritten. `node ai/mx3/eval.js` runs the code it writes and
-scores the checker. `ai` uses mx 0.0.3 when `models/mx3.bin` is there; it writes
+scores the checker. Before mx 0.0.4 it was the default; it writes
 working code for tasks it trained on (12/12, run and checked) and half of
 brand-new ones, and scores 87% on the everyday exam (mx 0.0.1: 99%) — it's weaker
 at reading the clock. `MAXSHELL_AI=0.0.1 ai` uses the original (`MAXSHELL_AI` takes a version

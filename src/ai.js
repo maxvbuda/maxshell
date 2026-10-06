@@ -228,13 +228,13 @@ function shortName(s) {
 // The model calls itself by its old name ("I'm mx3"); say the version instead.
 const ownName = (text) => text.replace(/\bmx([2-9])\b/g, 'mx 0.0.$1');
 
-// The newest model that's been trained and exported (mx3, mx2, then the
-// original mx); MAXSHELL_AI picks one.
+// The newest model that's been trained and exported (mx4, mx3, mx2, then
+// the original mx); MAXSHELL_AI picks one.
 function modelName() {
   const has = (n) => fs.existsSync(path.join(MODELS, `${n}.bin`)) && fs.existsSync(path.join(MODELS, `${n}-tokenizer.json`));
   const want = shortName(process.env.MAXSHELL_AI);
   if (want && has(want)) return want;
-  return ['mx3', 'mx2', 'mx'].find(has) || null;
+  return ['mx4', 'mx3', 'mx2', 'mx'].find(has) || null;
 }
 
 function available() { return modelName() !== null; }
@@ -902,7 +902,7 @@ function runAi(args, io, shell) {
     answer([['user', args.join(' ')]]);
     return 0;
   }
-  const intro = { mx3: 'mx 0.0.3, an AI running on this Mac — good at code, websites and explaining things. Ctrl-C stops an answer.', mx2: 'mx 0.0.2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' }[load().name] || `${versionName(load().name)}, a small AI running on this Mac.`;
+  const intro = { mx4: 'mx 0.0.4, an AI running on this Mac — good at conversation, code and simple games. Ctrl-C stops an answer.', mx3: 'mx 0.0.3, an AI running on this Mac — good at code, websites and explaining things. Ctrl-C stops an answer.', mx2: 'mx 0.0.2, an AI running on this Mac — good at code and websites. Ctrl-C stops an answer.' }[load().name] || `${versionName(load().name)}, a small AI running on this Mac.`;
   write(`${ansi.fg(t.ui.muted)}${intro} It can be wrong — double-check anything important. bye to leave.${R}\n`);
   const turns = [];
   for (;;) {
