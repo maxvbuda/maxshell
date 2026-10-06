@@ -124,7 +124,9 @@ class SageApp {
     this.scroll = 0;
     this.menu = null;           // { index } while the model dropdown is open
     this.approval = null;       // the tool call waiting for a yes or no
-    this.allowAll = false;      // "yes, don't ask again" for this session
+    this.allowAll = false;      // "yes, don't ask again" to changes, for this session
+    this.allowCommands = false; // …and to commands (risky ones are still asked)
+    this.toRun = null;          // an approved command, run after the screen shows it
     this.pendingAsk = ask;      // sent once the model is ready
     this.notice = notice;       // why this model, shown on the welcome screen
     this.done = false;
@@ -137,7 +139,7 @@ class SageApp {
 
   changed() { this.version++; }
 
-  get busy() { return ['thinking', 'writing', 'waiting', 'stopping'].includes(this.status); }
+  get busy() { return ['thinking', 'writing', 'waiting', 'running', 'stopping'].includes(this.status); }
 
   useModel(key) {
     this.model = key;
@@ -211,12 +213,22 @@ class SageApp {
     if (this.mode !== 'code') { reply('There are no tools in chat. Suggest `sage code` for working with files.'); return; }
     const said = this.lastSage();
     if (said) said.done = true; // what Gemma said before the call
-    const known = tools.READS.has(name) || tools.CHANGES.has(name);
+    const known = tools.READS.has(name) || tools.CHANGES.has(name) || tools.COMMANDS.has(name);
     if (!known) { reply(`There is no tool called ${name}.`); return; }
     if (tools.READS.has(name) && !tools.needsAsk(name, args, this.root)) {
       const r = tools.look(name, args, this.root);
       this.items.push({ type: 'tool', name, title: r.title, detail: r.detail, state: r.detail === 'failed' ? 'fail' : 'ok' });
       reply(r.text);
+      return;
+    }
+    if (tools.COMMANDS.has(name)) {
+      const command = String(args.command || '').trim();
+      const item = { type: 'tool', name, title: `Run ${command}`, command, risky: tools.risky(command), state: 'ask' };
+      this.items.push(item);
+      if (!command) { item.state = 'fail'; item.detail = 'no command'; reply('No command was given.'); return; }
+      if (this.allowCommands && !item.risky) { this.queueRun(item); return; }
+      this.approval = { item, name, args };
+      this.status = 'waiting';
       return;
     }
     if (tools.READS.has(name)) {
@@ -251,6 +263,28 @@ class SageApp {
     this.engine.send({ op: 'result', text: r.text });
   }
 
+  // Runs on the next tick, so "running" is on screen while it does.
+  queueRun(item) {
+    item.state = 'running';
+    item.v = (item.v || 0) + 1;
+    this.toRun = item;
+    this.status = 'running';
+    this.changed();
+  }
+
+  // Work that blocks: an approved command. The loop calls this after drawing.
+  work() {
+    const item = this.toRun;
+    if (!item) return;
+    this.toRun = null;
+    const r = tools.runCommand({ command: item.command }, this.root);
+    Object.assign(item, { state: r.ok ? 'ok' : 'fail', detail: r.detail, output: r.output });
+    item.v = (item.v || 0) + 1;
+    this.status = 'thinking';
+    this.engine.send({ op: 'result', text: r.text });
+    this.changed();
+  }
+
   // y: yes; a: yes, and don't ask again this session; n: no.
   answer(choice) {
     const ap = this.approval;
@@ -261,6 +295,9 @@ class SageApp {
       ap.item.state = 'declined';
       ap.item.v = (ap.item.v || 0) + 1;
       this.engine.send({ op: 'result', text: 'The user said no to this. Ask them what they would like instead.' });
+    } else if (ap.item.command) {
+      if (choice === 'a' && !ap.item.risky) this.allowCommands = true; // a risky one is a single yes
+      this.queueRun(ap.item);
     } else {
       if (choice === 'a') this.allowAll = true;
       if (ap.plan) this.finishChange(ap.item, ap.plan);
@@ -494,10 +531,20 @@ function itemLines(item, w, app) {
     return lines;
   }
   // a tool
-  const dot = { ok: theme.fg('ok'), fail: theme.fg('err'), ask: theme.fg('warn'), declined: muted }[item.state] || muted;
-  const detail = item.state === 'declined' ? 'declined' : item.detail;
+  const dot = { ok: theme.fg('ok'), fail: theme.fg('err'), ask: theme.fg('warn'), running: theme.fg('accent'), declined: muted }[item.state] || muted;
+  const detail = item.state === 'declined' ? 'declined' : item.state === 'running' ? 'running…' : item.detail;
+  if (item.command !== undefined) {
+    // a command: $ line(s), then what it printed
+    lines.push({ s: `${dot}●${RESET()} ${ansi.bold()}Run${RESET()}${detail ? `${muted} · ${detail}${RESET()}` : ''}${item.risky && item.state === 'ask' ? `  ${theme.fg('warn')}careful: this can delete or overwrite things${RESET()}` : ''}` });
+    wrap(item.command, w - 4).slice(0, 8).forEach((l, i) => lines.push({ s: `  ${muted}${i ? ' ' : '$'}${RESET()} ${theme.style(theme.current().syntax.code)}${l}${RESET()}` }));
+    if (item.output) {
+      const out = item.output.split('\n');
+      const shown = out.length > 8 ? [...out.slice(0, 3), `… ${out.length - 6} more lines …`, ...out.slice(-3)] : out;
+      for (const l of shown) lines.push({ s: `    ${muted}${fitText(l.replace(/\t/g, '    '), w - 4).trimEnd()}${RESET()}` });
+    }
+  }
   const head = `${dot}●${RESET()} ${ansi.bold()}${item.title}${RESET()}${detail ? `${muted} · ${detail}${RESET()}` : ''}`;
-  if (tui.textWidth(ansi.strip(head)) <= w) lines.push({ s: head });
+  if (item.command !== undefined) { /* drawn above */ } else if (tui.textWidth(ansi.strip(head)) <= w) lines.push({ s: head });
   else lines.push({ s: `${dot}●${RESET()} ${fitText(`${item.title}${detail ? ` · ${detail}` : ''}`, w - 2)}` });
   if (item.diff && (item.state === 'ask' || item.state === 'ok')) {
     const rows = item.diff.rows;
@@ -513,8 +560,9 @@ function itemLines(item, w, app) {
     if (rows.length > shown.length) lines.push({ s: `  ${muted}… ${rows.length - shown.length} more lines of changes${RESET()}` });
   }
   if (item.state === 'ask' && app && app.approval && app.approval.item === item) {
-    const q = item.diff ? 'Make this change?' : 'Allow it?';
-    const buttons = [['y', 'Yes'], ['a', item.diff ? 'Yes, and don’t ask again' : 'Yes to all'], ['n', 'No']];
+    const q = item.diff ? 'Make this change?' : item.command !== undefined ? 'Run it?' : 'Allow it?';
+    const again = item.diff ? 'Yes, and don’t ask again' : item.command !== undefined ? 'Yes, and don’t ask for commands' : 'Yes to all';
+    const buttons = [['y', 'Yes'], ...(item.risky ? [] : [['a', again]]), ['n', 'No']];
     let s = `  ${theme.fg('warn')}${q}${RESET()} `;
     let x = 2 + tui.textWidth(q) + 1;
     const hits = [];
@@ -544,8 +592,8 @@ function welcome(app, w) {
   out.push(center(logo, `${ansi.bold()}${theme.gradientText(logo)}${RESET()}`));
   out.push({ s: '' });
   const lines = app.mode === 'code'
-    ? ['Sage Code: your AI pair programmer, on your Mac.', `It reads, writes and edits files in ${tildify(app.root)}.`,
-      'Every change is shown as a diff and asked first;', 'replaced files go to the Trash, never lost.']
+    ? ['Sage Code: your AI pair programmer, on your Mac.', `It reads, writes and edits files and runs commands in ${tildify(app.root)}.`,
+      'Every change and command is shown and asked first;', 'replaced files go to the Trash, never lost.']
     : ['An AI that runs entirely on your Mac.', 'Private · offline · no account · no API key.'];
   for (const l of lines) for (const part of wrap(l, w)) out.push(center(part, `${part}`));
   out.push({ s: '' });
@@ -582,7 +630,7 @@ function render(app, cols, rows, now = Date.now()) {
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
     loading: `${spin} waking ${info.label}…`, ready: app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
-    thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', stopping: `${spin} stopping`, error: 'not running',
+    thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';
   const pill = app.mode === 'code' ? ' code ' : ' chat ';
@@ -640,7 +688,7 @@ function render(app, cols, rows, now = Date.now()) {
     box.push(`${frame}│${RESET()} ${i === 0 ? `${theme.fg('accent2')}${ansi.bold()}❯${RESET()}` : ' '} ${content} ${frame}│${RESET()}`);
   });
   box.push(`${frame}╰${'─'.repeat(W - 2)}╯${RESET()}`);
-  const keysHelp = app.approval ? 'y yes · a yes to all · n no (Esc) · ^C stop'
+  const keysHelp = app.approval ? `y yes${app.approval.item.risky ? '' : ' · a yes to all'} · n no (Esc) · ^C stop`
     : app.busy ? '^C stop · PgUp/PgDn scroll'
       : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
@@ -651,12 +699,14 @@ function render(app, cols, rows, now = Date.now()) {
   let body = [];
   if (!app.items.length) body = welcome(app, w);
   for (const item of app.items) {
+    if (item.type === 'sage' && !item.text.trim()) continue; // only whitespace between tool calls
     body.push({ s: '' }); // a blank line above each item, the first too
     const key = `${w}:${item.v || 0}:${item.state || ''}:${app.approval && app.approval.item === item}:${item.type === 'sage' && !item.done ? app.status : ''}`;
     if (!item.cache || item.cacheKey !== key) { item.cache = itemLines(item, w, app); item.cacheKey = key; }
     body.push(...item.cache);
   }
-  if ((app.status === 'thinking' || app.status === 'stopping') && !app.lastSage()) {
+  const writing = app.lastSage();
+  if ((app.status === 'thinking' || app.status === 'stopping') && !(writing && writing.text.trim())) {
     body.push({ s: '' }, { s: `${hilite('✦')} ${muted}${SPIN[Math.floor(now / 90) % SPIN.length]} ${app.status === 'stopping' ? 'stopping' : 'thinking'}…${RESET()}` });
   }
   const maxScroll = Math.max(0, body.length - bodyH);
@@ -740,6 +790,7 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
     }
     for (const ev of app.engine.poll()) app.onEvent(ev);
     if (!app.done) draw(false);
+    if (app.toRun) { app.work(); draw(true); }
   }
   app.close();
   return 0;

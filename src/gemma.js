@@ -107,7 +107,7 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage                 chat, full screen (click the model to switch it)
   sage <question>      one answer, printed
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
-                       files here — every change shown as a diff and asked first
+                       files and runs commands here — each one asked first
   sage --lite …        use Sage Lite, twice as fast (MAXSHELL_SAGE_MODEL=lite makes
                        it the default; Sage Pro is, unless memory is short)
   sage --setup         install what it needs (sage --lite --setup for Sage Lite)

@@ -72,6 +72,9 @@ CODE_TOOLS = [
     _tool('edit_file', 'Change part of a file: old_text, copied exactly from the file and found once there, '
           'becomes new_text. Read the file first. The user is asked first.', ['path', 'old_text', 'new_text'],
           path='the file', old_text='the exact text to replace', new_text='what replaces it'),
+    _tool('run_command', 'Run a shell command in the project folder, as in a terminal, and get its output: make '
+          'folders (mkdir -p), run tests or scripts, install packages, use git. It runs without input and stops '
+          'after 2 minutes. The user is asked first.', ['command'], command='the command line, e.g. mkdir -p src/utils'),
 ]
 QUOTE = '<|"|>'
 CALL = re.compile(r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>', re.S)
@@ -107,7 +110,9 @@ def system_prompt(mode):
         return (f"You are Sage Code, a coding agent inside maxshell, running entirely on the user's Mac. Your name is "
                 f"Sage; don't call yourself Gemma. {when} You work in the project folder {os.getcwd()}. "
                 f"Use your tools: look around with list_files, read_file and search_files before changing anything; "
-                f"use edit_file for changes to existing files and write_file for new files. Keep edits small and "
+                f"use edit_file for changes to existing files and write_file for new files. To make a folder, run "
+                f"mkdir -p with run_command; use run_command too for running code and tests, installing packages "
+                f"and git. Never delete files or folders. Keep edits small and "
                 f"exact, and match the code's style. The user approves every change and may decline one — then "
                 f"ask what they'd like instead. When you're done, say briefly what you changed.")
     return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "

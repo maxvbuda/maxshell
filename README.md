@@ -17,8 +17,8 @@ maxshell %~ % for f in src/*.js; do
 > **✦ Meet Sage — an AI that lives in your shell.** Type `sage` and talk to
 > an AI that runs entirely on your Mac: private, offline, no
 > account, no API key. Type `sage code` and it builds and fixes your
-> project with you — reading your files, proposing edits as diffs, and
-> changing nothing until you say yes. [More below.](#sage--an-ai-on-your-mac)
+> project with you — reading your files, proposing edits as diffs, running
+> commands, and changing nothing until you say yes. [More below.](#sage--an-ai-on-your-mac)
 
 ## Install / run
 
@@ -1063,7 +1063,18 @@ red/green diff with **Yes · Yes, and don't ask again · No** (click, or press
 y / a / n); say no and Sage asks what you'd like instead. Edits are exact
 — the text to change must be found exactly once — and the file being
 replaced goes to the **Trash**, so nothing is ever lost. Reading outside the
-project folder asks too. Plain `sage` can't touch files at all.
+project folder asks too.
+
+**It can use the terminal.** Sage Code runs shell commands in the project
+folder — `mkdir -p` for new folders (it's told to make folders that way),
+running scripts and tests, installing packages, git. Each command is shown
+(`$ mkdir -p src/utils`) and asked first; it runs with no keyboard input and
+stops after 2 minutes, and Sage reads its output and exit code. "Yes, and
+don't ask for commands" stops the asking for the session — except for
+commands that could delete or overwrite things (`rm`, `sudo`, `>` into a
+file, `git reset --hard`, `find -delete`, …), which are always asked and
+marked *careful*. Sage is told never to delete anything. Plain `sage` can't
+touch files or run commands at all.
 
 **Private, and quick to follow up.** Sage keeps what it has read of the
 conversation (its KV cache), so each follow-up reads only your new message

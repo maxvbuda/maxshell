@@ -2,7 +2,8 @@
 
 // Sage Code's tools, run by the app (src/sage.js) when Gemma calls them:
 // list_files, read_file and search_files look; write_file and edit_file
-// change, and are shown to the user as a diff and asked first. A file that's
+// change, and are shown to the user as a diff and asked first; run_command
+// runs a shell command in the project folder, also asked first. A file that's
 // replaced or edited goes to the Trash before the new text is written
 // (fileops.js), so nothing is lost. Each tool returns { text } — what Gemma
 // is told — and the app's summary, { title, detail }.
@@ -17,6 +18,12 @@ const MAX_LIST = 300;
 const MAX_HITS = 80;
 const READS = new Set(['list_files', 'read_file', 'search_files']);
 const CHANGES = new Set(['write_file', 'edit_file']);
+const COMMANDS = new Set(['run_command']);
+const COMMAND_TIMEOUT = 120000;
+const MAX_OUTPUT = 8000;   // characters of a command's output Gemma gets
+// Commands that could delete or overwrite things: always asked, even after
+// "yes, don't ask again".
+const RISKY = /(^|[;&|(`]\s*|\b(sudo|xargs|exec|env)\s+)(rm|rmdir|unlink|shred|dd|mkfs\S*|diskutil|chmod|chown|kill|killall|pkill|shutdown|reboot|launchctl|truncate)\b|\bsudo\b|\bgit\s+(reset\s+--hard|clean|checkout\s+--|restore|push\s+.*(-f|--force))|\bfind\b.*\s-delete\b|(^|[^>&2])>(?!>|&|\s*\/dev\/null)|\bmv\b.*\s-f\b|\bcurl\b.*\|\s*(sh|bash|zsh)\b/;
 
 const home = () => process.env.HOME || '';
 // A path as the user would write it: relative to the project, or ~/….
@@ -200,10 +207,30 @@ function look(name, args, root) {
   return { text: `There is no tool called ${name}.`, title: name, detail: 'unknown' };
 }
 
+// Runs a command in the project folder: { text, title, detail, output }.
+function runCommand(args, root, run = require('child_process').spawnSync) {
+  const command = String(args.command || '').trim();
+  const title = `Run ${command}`;
+  if (!command) return { text: 'No command was given.', title: 'Run', detail: 'failed', output: '' };
+  const shell = process.env.SHELL && /\/(zsh|bash|sh)$/.test(process.env.SHELL) ? process.env.SHELL : '/bin/zsh';
+  const r = run(shell, ['-c', command], {
+    cwd: root, encoding: 'utf8', timeout: COMMAND_TIMEOUT, maxBuffer: 10 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1', TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat' },
+  });
+  const output = [r.stdout, r.stderr].map((x) => (x || '').replace(/\s+$/, '')).filter(Boolean).join('\n');
+  const timedOut = r.error && r.error.code === 'ETIMEDOUT';
+  const code = timedOut ? null : r.status;
+  const detail = timedOut ? 'stopped after 2 minutes' : r.error ? r.error.code || 'failed' : `exit ${code}`;
+  const cut = output.length > MAX_OUTPUT ? `${output.slice(0, MAX_OUTPUT / 2)}\n… (${output.length - MAX_OUTPUT} characters cut) …\n${output.slice(-MAX_OUTPUT / 2)}` : output;
+  return { text: `${detail}\n${cut || '(no output)'}`, title, detail, output, ok: code === 0 };
+}
+
+const risky = (command) => RISKY.test(String(command || ''));
+
 // Whether a look needs asking: only outside the project folder.
 function needsAsk(name, args, root) {
-  if (CHANGES.has(name)) return true;
+  if (CHANGES.has(name) || COMMANDS.has(name)) return true;
   return !inside(resolve(args.path, root), root);
 }
 
-module.exports = { plural, look, plan, apply, diff, needsAsk, pretty, resolve, READS, CHANGES };
+module.exports = { plural, look, plan, apply, diff, needsAsk, runCommand, risky, pretty, resolve, READS, CHANGES, COMMANDS };

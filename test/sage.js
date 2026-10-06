@@ -208,6 +208,50 @@ test('sage code asks before a change; y applies it, n tells Sage no', () => {
   fs.rmSync(root, { recursive: true });
 });
 
+test('sage code runs commands after a yes, and always asks for risky ones', () => {
+  const root = project();
+  const a = app({ mode: 'code', root });
+  const e = a.started[0].e;
+  a.onEvent({ ev: 'ready' });
+  a.onEvent({ ev: 'tool', name: 'run_command', args: { command: 'mkdir -p src/utils && echo made' } });
+  assert.strictEqual(a.status, 'waiting');
+  let r = render(a, 90, 30, 0);
+  assert.match(text(r), /● Run[\s\S]*\$ mkdir -p src\/utils && echo made[\s\S]*Run it\?/);
+  a.key({ name: 'y', str: 'y', printable: true });
+  assert.strictEqual(a.status, 'running');
+  assert.match(text(render(a, 90, 30, 0)), /running…/);
+  a.work();
+  assert.ok(fs.statSync(path.join(root, 'src', 'utils')).isDirectory());
+  assert.strictEqual(e.sent.pop().text, 'exit 0\nmade');
+  assert.match(text(render(a, 90, 30, 0)), /exit 0[\s\S]*made/);
+  a.onEvent({ ev: 'text', s: '\n' });
+  assert.ok(!/✦\s*\n/.test(text(render(a, 90, 30, 0))), 'no empty ✦ line');
+  // "a": no more asking for commands…
+  a.onEvent({ ev: 'tool', name: 'run_command', args: { command: 'false' } });
+  a.key({ name: 'a', str: 'a', printable: true });
+  a.work();
+  assert.match(e.sent.pop().text, /^exit 1/);
+  a.onEvent({ ev: 'tool', name: 'run_command', args: { command: 'echo two' } });
+  assert.strictEqual(a.approval, null);
+  a.work();
+  assert.match(e.sent.pop().text, /two/);
+  // …but a risky one is always asked, and offers no "don't ask again"
+  a.onEvent({ ev: 'tool', name: 'run_command', args: { command: 'rm -rf src' } });
+  assert.ok(a.approval);
+  r = render(a, 90, 30, 0);
+  assert.match(text(r), /careful/);
+  assert.ok(!r.hits.some((h) => h.action === 'answer' && h.choice === 'a'));
+  a.key({ name: 'n', str: 'n', printable: true });
+  assert.match(e.sent.pop().text, /said no/);
+  assert.ok(fs.existsSync(path.join(root, 'src')));
+  fs.rmSync(root, { recursive: true });
+});
+
+test('risky commands are told apart from everyday ones', () => {
+  for (const c of ['rm -rf build', 'sudo make install', 'git reset --hard', 'ls > files.txt', 'find . -delete', 'cd x && rm a']) assert.ok(tools.risky(c), c);
+  for (const c of ['mkdir -p src/utils', 'npm test', 'git status', 'python3 a.py >> log', 'echo hi 2>/dev/null', 'ls | grep a']) assert.ok(!tools.risky(c), c);
+});
+
 test('plain sage has no tools', () => {
   const a = app();
   a.onEvent({ ev: 'ready' });
@@ -292,7 +336,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'seen': gemma.visible(raw + gemma.tool_response('edit_file', 'ok') + 'Done.<turn|>'),
   'partial': gemma.visible('Sure!<|tool_call>call:edit_fi'),
   'tools': [t['function']['name'] for t in gemma.CODE_TOOLS],
-  'chat': 'sage code' in gemma.system_prompt('chat') and 'not Gemma' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code')}))
+  'chat': 'sage code' in gemma.system_prompt('chat') and 'not Gemma' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code') and 'mkdir -p' in gemma.system_prompt('code')}))
 `;
   const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
@@ -300,7 +344,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.deepStrictEqual(out.call, ['edit_file', { new_text: 'x = {1: 2}', old_text: 'x = 1', path: 'a.py' }]);
   assert.strictEqual(out.seen, 'Sure!Done.');
   assert.strictEqual(out.partial, 'Sure!');
-  assert.deepStrictEqual(out.tools, ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file']);
+  assert.deepStrictEqual(out.tools, ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'run_command']);
   assert.deepStrictEqual([out.chat, out.code], [true, true]);
 });
 
