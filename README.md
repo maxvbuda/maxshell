@@ -1036,10 +1036,14 @@ stays on disk and is read a row at a time, so it takes about 5 GB. It won't
 start with less than 25% of memory free. While mx training has the GPU it
 runs on the CPU instead (`MAXSHELL_AIG_DEVICE` picks), which is as fast
 then and leaves training alone; that's a few words a second. Loading takes
-10–30 seconds, once per chat. Answers stream in as formatted markdown, in
+10–30 seconds, once per chat. Gemma keeps what it has read of the chat
+(its KV cache), so each follow-up reads only your new message and starts
+answering in seconds, however long the conversation. Answers stream in as formatted markdown, in
 the theme's colours: headings, **bold**, *italic*, `inline code`, bullet and
-numbered lists, quotes, rules, aligned tables, and code blocks highlighted
-like the editor's — words wrap at the terminal's edge. (Piped, the answer
+numbered lists, quotes, rules, aligned tables, code blocks highlighted
+like the editor's, and math: TeX in `$…$`, `$$…$$`, `\(…\)` or `\[…\]` becomes
+Unicode (`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` → `(-b ± √(b² - 4ac))/2a`),
+with display math on its own indented lines — words wrap at the terminal's edge. (Piped, the answer
 stays plain markdown.) Questions about code (or follow-ups to an answer
 with code) get a lower temperature for steadier code, and answers can run
 to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at

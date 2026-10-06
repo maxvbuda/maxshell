@@ -413,6 +413,41 @@ test('markdown holds a marker only until it closes, and shows unclosed ones as t
   assert.strictEqual(ansi.strip(renderMarkdown('use `x = 1` here\n\n\n\nnext')), 'use x = 1 here\n\nnext');
 });
 
+// Gemma writes math in TeX; tex.js turns it into Unicode text.
+test('TeX math becomes readable Unicode', () => {
+  const { texToText, texLines } = require('../src/tex');
+  assert.strictEqual(texToText(String.raw`x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}`), 'x = (-b ± √(b² - 4ac))/2a');
+  assert.strictEqual(texToText(String.raw`a \neq 0`), 'a ≠ 0');
+  assert.strictEqual(texToText(String.raw`2x\cos(x^2)`), '2x cos(x²)');
+  assert.strictEqual(texToText(String.raw`x_1, x_{n+1}, A^{-1}, 90^\circ`), 'x₁, xₙ₊₁, A⁻¹, 90°');
+  assert.strictEqual(texToText(String.raw`e^{i\pi} + 1 = 0`), 'e^(iπ) + 1 = 0');
+  assert.strictEqual(texToText(String.raw`\left( \frac{a}{b} \right)^2`), '(a/b)²');
+  assert.strictEqual(texToText(String.raw`\lim_{x \to 0} \frac{\sin x}{x} = 1`), 'lim(x → 0) (sin x)/x = 1');
+  assert.strictEqual(texToText(String.raw`\text{Area} = \pi r^2`), 'Area = π r²');
+  assert.deepStrictEqual(texLines(String.raw`\begin{aligned} x &= 2 \\ y &= 3 \end{aligned}`), ['x = 2', 'y = 3']);
+  assert.deepStrictEqual(texLines(String.raw`f(x) = \begin{cases} 1 & x > 0 \\ 0 & \text{otherwise} \end{cases}`), ['f(x) = 1, x > 0', '0, otherwise']);
+});
+
+test('markdown renders inline and display math, and leaves money alone', () => {
+  const text = String.raw`Solve $ax^2 + bx + c = 0$ with \(a \neq 0\):
+
+$$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$
+
+\[
+\begin{aligned} x &= 2 \\ y &= 3 \end{aligned}
+\]
+
+It costs $5 and $10; \$x\$ is escaped.`;
+  const out = renderMarkdown(text, { width: 60 });
+  assert.strictEqual(ansi.strip(out), 'Solve ax² + bx + c = 0 with a ≠ 0:\n\n    x = (-b ± √(b² - 4ac))/2a\n\n    x = 2\n    y = 3\n\nIt costs $5 and $10; $x$ is escaped.');
+  let streamed = '';
+  const md = new MarkdownStream({ width: 60, out: (x) => { streamed += x; } });
+  for (const ch of text) md.write(ch);
+  md.end();
+  assert.strictEqual(streamed, out);
+  for (const line of ansi.strip(renderMarkdown(text, { width: 20 })).split('\n')) assert.ok(ansi.width(line) <= 20, line);
+});
+
 if (failures) {
   console.error(`\n${failures} ai test(s) failed`);
   process.exit(1);

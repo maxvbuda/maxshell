@@ -175,38 +175,72 @@ class Printer:
             self.proc = None
 
 
-def reply(model, tok, gen, device, turns, show):
-    import torch
-    from transformers import StoppingCriteria, StoppingCriteriaList, TextStreamer
+class Chat:
+    """The conversation as tokens, and the model's cache of all it has read,
+    so each turn reads only the new message. (On the CPU, reading takes about
+    0.1 s a token: re-reading the whole chat every turn left a follow-up to a
+    long answer waiting minutes for its first word.)"""
 
-    now = datetime.datetime.now()
-    system = (f"You are Gemma, running on the user's Mac inside maxshell, a zsh-like shell. "
-              f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}. Be helpful and concise. "
-              f"Write complete, runnable code in fenced blocks that name the language.")
-    messages = [{'role': 'system', 'content': system}] + [{'role': 'user' if who == 'user' else 'assistant', 'content': text} for who, text in turns]
-    ids = tok.apply_chat_template(messages, add_generation_prompt=True, return_tensors='pt', return_dict=True)['input_ids'].to(device)
+    def __init__(self, model, tok, gen, device):
+        import torch
+        from transformers import DynamicCache
+        self.model, self.tok, self.gen, self.device = model, tok, gen, device
+        self.turns = []
+        self.eos = gen['eos_token_id'] if isinstance(gen['eos_token_id'], list) else [gen['eos_token_id']]
+        self.end_turn = tok.convert_tokens_to_ids('<turn|>')
+        now = datetime.datetime.now()
+        system = (f"You are Gemma, running on the user's Mac inside maxshell, a zsh-like shell. "
+                  f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}. Be helpful and concise. "
+                  f"Only write code when it's asked for or really helps; then make it complete and runnable, "
+                  f"in fenced blocks that name the language. Write math in LaTeX between $ signs.")
+        self.ids = self.encode(tok.apply_chat_template([{'role': 'system', 'content': system}], tokenize=False))
+        self.cache = DynamicCache(config=model.config)
+        with torch.no_grad():  # read the system prompt now, while "loading Gemma…" shows
+            model(self.ids, past_key_values=self.cache, use_cache=True)
 
-    stop = {'hit': False}
+    def encode(self, text):
+        import torch
+        return torch.tensor([self.tok.encode(text, add_special_tokens=False)], device=self.device)
 
-    class Stop(StoppingCriteria):
-        def __call__(self, input_ids, scores, **kw):
-            return stop['hit']
+    def reply(self, question, show):
+        """Gemma's answer to the question, shown as it comes; and whether
+        Ctrl-C stopped it."""
+        import torch
+        from transformers import StoppingCriteria, StoppingCriteriaList, TextStreamer
 
-    class Stream(TextStreamer):
-        def on_finalized_text(self, text, stream_end=False):
-            show(text)
+        self.turns.append(('user', question))
+        ids = torch.cat([self.ids, self.encode(f'<|turn>user\n{question}<turn|>\n<|turn>model\n')], dim=1)
+        stop = {'hit': False}
 
-    old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
-    try:
-        with torch.no_grad():
-            temperature = CODE_TEMPERATURE if is_coding(turns) else gen.get('temperature', 1.0)
-            model.generate(ids, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
-                           top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=gen['eos_token_id'],
-                           pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
-                           streamer=Stream(tok, skip_prompt=True, skip_special_tokens=True))
-    finally:
-        signal.signal(signal.SIGINT, old)
-    return stop['hit']
+        class Stop(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kw):
+                return stop['hit']
+
+        class Stream(TextStreamer):
+            def on_finalized_text(self, text, stream_end=False):
+                show(text)
+
+        text = []
+        old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
+        try:
+            with torch.no_grad():
+                gen = self.gen
+                temperature = CODE_TEMPERATURE if is_coding(self.turns) else gen.get('temperature', 1.0)
+                out = self.model.generate(
+                    ids, past_key_values=self.cache, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
+                    top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=self.eos,
+                    pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
+                    streamer=Stream(self.tok, skip_prompt=True, skip_special_tokens=True))
+        finally:
+            signal.signal(signal.SIGINT, old)
+        # The cache holds all but the last token. An end token is dropped (it
+        # wasn't read) and the turn closed the way the chat template does.
+        if out.shape[1] > ids.shape[1] and int(out[0, -1]) in self.eos:
+            out = out[:, :-1]
+        self.ids = torch.cat([out, self.encode('<turn|>\n')], dim=1)
+        answer = self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
+        self.turns.append(('ai', answer))
+        return stop['hit']
 
 
 def main():
@@ -227,28 +261,26 @@ def main():
     warnings.filterwarnings('ignore')
     os.environ.setdefault('TRANSFORMERS_VERBOSITY', 'error')
     model, tok, gen, device = load()
+    chat = Chat(model, tok, gen, device)
     if tty:
         sys.stdout.write('\r\x1b[K')
 
     printer = Printer(tty)
 
-    def answer(turns):
+    def answer(question):
         if tty:
             sys.stdout.write(TAG)
             sys.stdout.flush()
-        text = []
-        stopped = reply(model, tok, gen, device, turns, lambda s: (text.append(s), printer.write(s)))
+        stopped = chat.reply(question, printer.write)
         printer.done()
         sys.stdout.write(f"{C.reset}{f'{C.muted} (stopped){C.reset}' if stopped else ''}\n")
         sys.stdout.flush()
-        return ''.join(text).strip()
 
     if args:
-        answer([('user', ' '.join(args))])
+        answer(' '.join(args))
         return 0
     sys.stdout.write(f'{C.muted}Gemma 4 ({NAME}), running on this Mac. It can be wrong — double-check anything important. '
                      f'Ctrl-C stops an answer; bye to leave.{C.reset}\n')
-    turns = []
     while True:
         try:
             line = input(YOU)
@@ -260,8 +292,7 @@ def main():
             return 0
         if not line.strip():
             continue
-        turns.append(('user', line.strip()))
-        turns.append(('ai', answer(turns)))
+        answer(line.strip())
 
 
 if __name__ == '__main__':

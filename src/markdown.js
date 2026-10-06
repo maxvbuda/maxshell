@@ -2,7 +2,8 @@
 
 // Markdown for the terminal, written as it streams in (aig's Gemma replies):
 // headings, **bold**, *italic*, ~~struck~~, `code`, links, lists, quotes,
-// rules, tables, and fenced code coloured by syntax.js. Words are written as
+// rules, tables, fenced code coloured by syntax.js, and TeX math ($…$,
+// $$…$$, \(…\), \[…\]) as Unicode text by tex.js. Words are written as
 // soon as they end and wrap to the terminal width. The start of a line is
 // held only until its kind (heading, item, fence…) is known, an emphasis
 // only until its closing marker shows up, and a table until its last row —
@@ -18,6 +19,7 @@ const theme = require('./theme');
 const syntax = require('./syntax');
 const { paintSpans } = require('./paint');
 const { fit } = require('./tui');
+const { texToText, texLines } = require('./tex');
 
 const FENCE_LANGS = {
   py: 'python', python: 'python', python3: 'python',
@@ -92,6 +94,7 @@ class MarkdownStream {
     this.fence = null;   // { mark, lang, state } inside a fenced code block
     this.table = [];     // rows of the table being collected
     this.lists = [];     // indents of the open list levels
+    this.math = null;    // { close, tex } inside a display math block
     this.newLine();
   }
 
@@ -99,7 +102,7 @@ class MarkdownStream {
     this.line = '';      // the line so far
     this.done = 0;       // how much of it has been dealt with
     this.kind = null;    // what it is, once that's known
-    this.span = { bold: false, italic: false, strike: false, code: 0, link: false, url: false };
+    this.span = { bold: false, italic: false, strike: false, code: 0, link: false, url: false, math: false };
     this.base = '';      // the line's own style (heading, quote)
     this.pad = '';       // what a wrapped line starts with
     this.padW = 0;
@@ -157,8 +160,18 @@ class MarkdownStream {
       }
       return 'code';
     }
+    if (this.math) return final ? 'mathline' : null;
     const t = s.trimStart();
     if (!t) return final ? 'blank' : null;
+    if (/^(\$\$|\\\[)/.test(t) || t === '$' || t === '\\') {
+      if (!final) return null;
+      const m = /^(\$\$|\\\[)/.exec(t);
+      if (!m) return 'para';
+      const close = m[1] === '$$' ? '$$' : '\\]';
+      const at = t.indexOf(close, 2);
+      if (at < 0) return 'mathopen';
+      return at === t.trimEnd().length - close.length ? 'math' : 'para';
+    }
     if (/^(`{3,}|~{3,})/.test(t)) return final ? 'open' : null;
     if (/^(`{1,2}|~{1,2})$/.test(t)) return final ? 'para' : null;
     if (/^#{1,6}$/.test(t)) return final ? 'heading' : null;
@@ -252,6 +265,26 @@ class MarkdownStream {
       case 'close':
         this.fence = null;
         break;
+      case 'math': {
+        const t = this.line.trim();
+        this.displayMath(t.slice(2, -2));
+        break;
+      }
+      case 'mathopen': {
+        const t = this.line.trim();
+        this.math = { close: t.startsWith('$$') ? '$$' : '\\]', tex: t.slice(2) };
+        break;
+      }
+      case 'mathline': {
+        const t = this.line.trim();
+        if (t.endsWith(this.math.close)) {
+          this.displayMath(`${this.math.tex} ${t.slice(0, -2)}`);
+          this.math = null;
+        } else {
+          this.math.tex += ` ${t}`;
+        }
+        break;
+      }
       case 'code':
         this.codeLine();
         this.nl = 1;
@@ -270,6 +303,59 @@ class MarkdownStream {
         this.nl = 1;
     }
     this.newLine();
+  }
+
+  // Display math: each row on a line of its own, indented, wrapping there.
+  displayMath(tex) {
+    this.lists = [];
+    this.block();
+    for (const row of texLines(tex)) {
+      this.pad = '    ';
+      this.padW = 4;
+      this.put(this.pad, 4);
+      this.mathText(row);
+      this.flushWord();
+      this.put(ansi.reset(), 0);
+      this.sgr = '';
+      this.nl = 1;
+    }
+  }
+
+  mathText(text) {
+    this.span.math = true;
+    this.restyle();
+    for (const part of text.split(/( +)/)) {
+      if (part[0] === ' ') this.gap();
+      else if (part) this.add(part);
+    }
+    this.span.math = false;
+    this.restyle();
+  }
+
+  // Inline math starting at s[i]: { tex, end }, false when it isn't math,
+  // or null while its end may still be coming.
+  mathAt(s, i, final) {
+    const open = s.startsWith('$$', i) ? '$$' : s[i] === '$' ? '$' : s.slice(i, i + 2);
+    const close = { $$: '$$', $: '$', '\\(': '\\)', '\\[': '\\]' }[open];
+    if (!close) return false;
+    const from = i + open.length;
+    if (open === '$') {
+      // $x$ (pandoc's rule): no space just inside, no digit right after —
+      // so "$5 and $10" stays money.
+      if (from >= s.length) return final ? false : null;
+      if (SPACE.test(s[from])) return false;
+      for (let j = from + 1; j < s.length; j++) {
+        if (s[j] === '\\') { j++; continue; }
+        if (s[j] !== '$' || SPACE.test(s[j - 1])) continue;
+        if (j + 1 >= s.length && !final) return null;
+        if (/\d/.test(s[j + 1] || '')) continue;
+        return { tex: s.slice(from, j), end: j + 1 };
+      }
+      return final ? false : null;
+    }
+    const j = s.indexOf(close, from);
+    if (j < 0) return final ? false : null;
+    return { tex: s.slice(from, j), end: j + close.length };
   }
 
   // --- code -----------------------------------------------------------------
@@ -303,6 +389,7 @@ class MarkdownStream {
     if (sp.link) s += theme.style(sy.link);
     if (sp.url) s += theme.style(ui.muted);
     if (sp.code) s += theme.style(sy.code);
+    if (sp.math) s += theme.style(sy.num);
     return s;
   }
 
@@ -364,6 +451,11 @@ class MarkdownStream {
         continue;
       }
       if (SPACE.test(c)) { this.gap(); i++; continue; }
+      if (c === '$' || (c === '\\' && (s[i + 1] === '(' || s[i + 1] === '['))) {
+        const m = this.mathAt(s, i, final);
+        if (m === null) break;
+        if (m) { this.mathText(texToText(m.tex)); i = m.end; continue; }
+      }
       if (c === '\\' && /[!-/:-@[-`{-~]/.test(s[i + 1] || '')) { this.add(s[i + 1]); i += 2; continue; }
       if (c === '`') {
         const n = run(s, i);
