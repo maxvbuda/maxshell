@@ -36,16 +36,32 @@ function pick(args) {
 }
 const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
 
+// transformers 5 needs Python 3.10+; macOS's /usr/bin/python3 is 3.9.
+const recent = (py) => spawnSync(py, ['-c', 'import sys; sys.exit(sys.version_info < (3, 10))'], { stdio: 'ignore' }).status === 0;
+const PYTHONS = ['python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3.14', 'python3',
+  '/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/Library/Frameworks/Python.framework/Versions/Current/bin/python3'];
+const findPython = () => PYTHONS.find(recent);
+
 function setup(m, write, err) {
   const d = dir(m);
   fs.mkdirSync(d, { recursive: true });
   const run = (cmd, args) => spawnSync(cmd, args, { stdio: 'inherit' }).status === 0;
-  if (!fs.existsSync(python())) {
-    write('Making a Python for Gemma (uses the system PyTorch)…\n');
-    if (!run('python3', ['-m', 'venv', '--system-site-packages', path.join(base(), 'venv')])) { err('aig: couldn’t make the venv\n'); return 1; }
+  const venv = path.join(base(), 'venv');
+  // A venv made from a Python older than 3.10 (macOS's own is 3.9) can't have
+  // transformers 5; it's ours, so make it again.
+  if (fs.existsSync(python()) && !recent(python()) && !process.env.MAXSHELL_GEMMA_PYTHON) {
+    write('Gemma’s Python is too old for transformers 5 — making it again…\n');
+    fs.rmSync(venv, { recursive: true, force: true });
   }
-  write('Installing transformers…\n');
-  if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5'])) { err('aig: pip install failed\n'); return 1; }
+  if (!fs.existsSync(python())) {
+    const py = findPython();
+    if (!py) { err('aig: Gemma needs Python 3.10 or newer — install it (brew install python, or python.org) and run aig --setup again\n'); return 1; }
+    write(`Making a Python for Gemma from ${py}…\n`);
+    if (!run(py, ['-m', 'venv', '--system-site-packages', venv])) { err('aig: couldn’t make the venv\n'); return 1; }
+  }
+  const hasTorch = spawnSync(python(), ['-c', 'import torch'], { stdio: 'ignore' }).status === 0;
+  write(hasTorch ? 'Installing transformers…\n' : 'Installing PyTorch and transformers…\n');
+  if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('aig: pip install failed\n'); return 1; }
   write(`Fetching the config and tokenizer from ${m.repo}…\n`);
   const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
   if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('aig: download failed\n'); return 1; }
@@ -92,4 +108,4 @@ function runAig(args, io, shell) {
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }
 
-module.exports = { runAig, ready, pick, MODELS, REPO, FILES };
+module.exports = { runAig, ready, pick, recent, MODELS, REPO, FILES };

@@ -1025,7 +1025,9 @@ you ❯ hi! who are you, in one sentence?
 ```
 
 `aig --setup` gets it ready: a Python of its own in `~/.maxshell/gemma/venv`
-(the system PyTorch plus `transformers`), the model's config and tokenizer
+(made from Python 3.10 or newer — macOS's own 3.9 is too old for
+`transformers` 5 — with the system PyTorch, or PyTorch installed if there
+isn't one, plus `transformers`), the model's config and tokenizer
 from `leon-se/gemma-4-E2B-it-FP8-Dynamic` on Hugging Face, and a link to
 that repo's `model.safetensors` in `~/Downloads` (9 GB, the FP8 build). It
 loads only the text half of the model, not the image and audio parts: its

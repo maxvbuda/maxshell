@@ -316,6 +316,7 @@ test('aig without Gemma set up points to aig --setup', () => {
   assert.match(e4b.stderr, /E4B.*aig --e4b --setup/);
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'] });
+  assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);
   assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_AIG_MODEL ? MODELS[process.env.MAXSHELL_AIG_MODEL] : MODELS.e2b);
   if (was === undefined) delete process.env.MAXSHELL_GEMMA; else process.env.MAXSHELL_GEMMA = was;
   fs.rmSync(dir, { recursive: true });
