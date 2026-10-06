@@ -1070,7 +1070,9 @@ per-layer embedding table stays on disk, read a row at a time, so E4B takes
 about 9 GB and won't start with less than 40% of memory free. **E2B** needs
 about 5 GB (25% free): `sage --e2b --setup` downloads it (9 GB, from
 `leon-se/gemma-4-E2B-it-FP8-Dynamic`) into `~/.maxshell/gemma`; `sage --e2b`
-uses it, and `MAXSHELL_SAGE_MODEL=e2b` makes it the default. While mx
+uses it, and `MAXSHELL_SAGE_MODEL=e2b` makes it the default. When you
+haven't picked a model and there's less than 40% of memory free (the GPU
+shares it), Sage starts on E2B instead and says so. While mx
 training has the GPU, Sage runs on the CPU instead (`MAXSHELL_SAGE_DEVICE`
 picks), which leaves training alone. Waking takes 10–30 seconds.
 

@@ -113,7 +113,7 @@ class Engine {
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null }) {
     this.mode = mode;
     this.root = root;
     this.models = models;
@@ -126,6 +126,7 @@ class SageApp {
     this.approval = null;       // the tool call waiting for a yes or no
     this.allowAll = false;      // "yes, don't ask again" for this session
     this.pendingAsk = ask;      // sent once the model is ready
+    this.notice = notice;       // why this model, shown on the welcome screen
     this.done = false;
     this.version = 0;           // bumped on every change, for redraws
     this.status = 'loading';
@@ -551,6 +552,10 @@ function welcome(app, w) {
   const tries = app.mode === 'code'
     ? ['add a --verbose flag to main.py', 'why does test_parser fail? fix it', 'write a README for this project']
     : ['explain what a closure is, with an example', 'solve x² − 5x + 6 = 0 step by step', 'write a haiku about the terminal'];
+  if (app.notice) {
+    for (const part of wrap(app.notice, w)) out.push(center(part, `${theme.fg('warn')}${part}${RESET()}`));
+    out.push({ s: '' });
+  }
   out.push(center('try', `${muted}try${RESET()}`));
   for (const t of tries) { // click one to start with it
     const plain = fitText(`“${t}”`, w).trimEnd();

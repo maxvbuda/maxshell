@@ -315,6 +315,36 @@ test('sage --help names chat and code; sage code needs a terminal', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
+test('without room for E4B, Sage picks E2B unless a model was asked for', () => {
+  const gemma = require('../src/gemma');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-models-'));
+  const was = { ...process.env };
+  try {
+    process.env.MAXSHELL_GEMMA = dir;
+    process.env.MAXSHELL_GEMMA_PYTHON = process.execPath;
+    for (const f of [...gemma.FILES, 'model.safetensors']) fs.writeFileSync(path.join(dir, f), '');
+    process.env.MAXSHELL_SAGE_FREE = '30';
+    const auto = gemma.fallback('e4b', false);
+    assert.strictEqual(auto.key, 'e2b');
+    assert.match(auto.why, /30% of memory is free and E4B needs 40%/);
+    assert.strictEqual(gemma.fallback('e4b', true).key, 'e4b');
+    process.env.MAXSHELL_SAGE_FREE = '55';
+    assert.strictEqual(gemma.fallback('e4b', false).key, 'e4b');
+    fs.rmSync(path.join(dir, 'model.safetensors'));
+    process.env.MAXSHELL_SAGE_FREE = '30';
+    assert.strictEqual(gemma.fallback('e4b', false).key, 'e4b'); // E2B isn't set up
+    delete process.env.MAXSHELL_SAGE_MODEL;
+    assert.strictEqual(gemma.pick(['hi']).chosen, false);
+    assert.strictEqual(gemma.pick(['--e4b', 'hi']).chosen, true);
+    const a = app({ notice: auto.why });
+    assert.match(text(render(a, 90, 26, 0)), /using E2B, the lighter model/);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in was)) delete process.env[k];
+    Object.assign(process.env, was);
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
 if (failures) {
   console.error(`\n${failures} sage test(s) failed`);
   process.exit(1);
