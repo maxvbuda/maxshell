@@ -318,7 +318,7 @@ test('sage without Gemma set up points to sage --setup', () => {
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'] });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);
-  assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_AIG_MODEL ? MODELS[process.env.MAXSHELL_AIG_MODEL] : MODELS.e4b);
+  assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_SAGE_MODEL ? MODELS[process.env.MAXSHELL_SAGE_MODEL] : MODELS.e4b);
   if (was === undefined) delete process.env.MAXSHELL_GEMMA; else process.env.MAXSHELL_GEMMA = was;
   fs.rmSync(dir, { recursive: true });
 });

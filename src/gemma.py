@@ -15,7 +15,7 @@ takes about 9 GB (E2B about 5) and can run next to mx training.
                                appended, writes JSON events to stdout. MODE
                                is chat, or code (file tools, run by the app).
 
-Colours come from maxshell's theme in $MAXSHELL_AIG_COLORS.
+Colours come from maxshell's theme in $MAXSHELL_SAGE_COLORS.
 """
 
 import datetime
@@ -30,11 +30,11 @@ import sys
 import time
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
-NAME = os.environ.get('MAXSHELL_AIG_NAME') or 'E4B'
+NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
 NEED_GB = 9 if NAME == 'E4B' else 5
 NEED_FREE = 40 if NAME == 'E4B' else 25  # % of memory free before loading (training pauses below 15)
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
-COLORS.update(json.loads(os.environ.get('MAXSHELL_AIG_COLORS') or '{}'))
+COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
 C = type('C', (), COLORS)
 TAG = f"{C.accent}{C.bold}✦ sage ❯{C.reset} "
 TAG_WIDTH = len('✦ sage ❯ ')
@@ -132,7 +132,7 @@ def load():
     from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
     from transformers.models.gemma4.modeling_gemma4 import Gemma4ForCausalLM, Gemma4TextRotaryEmbedding
 
-    device = os.environ.get('MAXSHELL_AIG_DEVICE') or ('mps' if torch.backends.mps.is_available() else 'cpu')
+    device = os.environ.get('MAXSHELL_SAGE_DEVICE') or ('mps' if torch.backends.mps.is_available() else 'cpu')
     path = os.path.join(DIR, 'model.safetensors')
     with open(os.path.join(DIR, 'config.json')) as f:
         conf = json.load(f)

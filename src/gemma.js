@@ -28,11 +28,11 @@ const dir = (m = MODELS[DEFAULT]) => path.join(base(), m.sub);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
 const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors')) && FILES.every((f) => fs.existsSync(path.join(dir(m), f)));
 
-// --e2b / --e4b at the front of the arguments, else $MAXSHELL_AIG_MODEL, else E4B.
+// --e2b / --e4b at the front of the arguments, else $MAXSHELL_SAGE_MODEL, else E4B.
 function pick(args) {
   const flag = /^--(e2b|e4b)$/i.exec(args[0] || '');
   if (flag) args = args.slice(1);
-  const key = (flag ? flag[1] : process.env.MAXSHELL_AIG_MODEL || DEFAULT).toLowerCase();
+  const key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
   return { model: MODELS[key], key, args };
 }
 const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
@@ -78,8 +78,8 @@ function setup(m, write, err) {
 // Where the engine runs and what it's told: the model folder, and the CPU
 // while mx training has the GPU.
 function engineEnv(m, shell) {
-  const env = { ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_AIG_NAME: m.name, MAXSHELL_NODE: process.execPath };
-  if (!env.MAXSHELL_AIG_DEVICE && training()) env.MAXSHELL_AIG_DEVICE = 'cpu';
+  const env = { ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_SAGE_NAME: m.name, MAXSHELL_NODE: process.execPath };
+  if (!env.MAXSHELL_SAGE_DEVICE && training()) env.MAXSHELL_SAGE_DEVICE = 'cpu';
   return env;
 }
 
@@ -88,7 +88,7 @@ const HELP = `sage — Google's Gemma 4, running entirely on your Mac
   sage <question>      one answer, printed
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files here — every change shown as a diff and asked first
-  sage --e2b …         use E2B, the smaller, faster model (MAXSHELL_AIG_MODEL=e2b
+  sage --e2b …         use E2B, the smaller, faster model (MAXSHELL_SAGE_MODEL=e2b
                        makes it the default; E4B is)
   sage --setup         install what it needs (sage --e2b --setup for E2B)
 `;
@@ -133,7 +133,7 @@ function runSage(args, io, shell, name = 'sage') {
     accent: ansi.fg(t.ui.accent), accent2: ansi.fg(t.ui.accent2), muted: ansi.fg(t.ui.muted),
     bold: ansi.bold(), reset: ansi.reset(),
   };
-  Object.assign(env, { MAXSHELL_AIG_COLORS: JSON.stringify(colors), MAXSHELL_THEME: theme.currentThemeName() });
+  Object.assign(env, { MAXSHELL_SAGE_COLORS: JSON.stringify(colors), MAXSHELL_THEME: theme.currentThemeName() });
   return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
 }
 

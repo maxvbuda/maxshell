@@ -29,8 +29,8 @@ function next() {
   }
 }
 
-emit({ ev: 'loading', model: process.env.MAXSHELL_AIG_NAME || 'E4B' });
-emit({ ev: 'ready', model: process.env.MAXSHELL_AIG_NAME || 'E4B', device: 'cpu' });
+emit({ ev: 'loading', model: process.env.MAXSHELL_SAGE_NAME || 'E4B' });
+emit({ ev: 'ready', model: process.env.MAXSHELL_SAGE_NAME || 'E4B', device: 'cpu' });
 for (;;) {
   const cmd = next();
   if (cmd.op === 'quit') process.exit(0);
