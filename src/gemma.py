@@ -11,6 +11,9 @@ table stays on disk and is read a row at a time, so E2B takes about 5 GB
   aig                 chat (bye to leave; Ctrl-C stops an answer)
   aig <question>      one answer
 
+Asked to, Gemma can save files (its save_file tool): it shows the file and
+asks first, and a file it replaces goes to the Trash.
+
 Colours come from maxshell's theme in $MAXSHELL_AIG_COLORS.
 """
 
@@ -46,6 +49,79 @@ def is_coding(turns):
     last = [text for who, text in turns if who == 'user'][-1:]
     said = [text for who, text in turns if who != 'user'][-1:]
     return bool(last and CODING.search(last[0])) or bool(said and '```' in said[0])
+
+
+# Gemma's tools, declared to it in the system prompt.
+TOOLS = [{'type': 'function', 'function': {
+    'name': 'save_file',
+    'description': "Save a text file on the user's Mac. Use it only when the user asks for a file to be saved or "
+                   "written; they confirm each save. A relative path is in the current folder.",
+    'parameters': {'type': 'object', 'required': ['path', 'content'], 'properties': {
+        'path': {'type': 'string', 'description': 'where to save it, e.g. hello.py or ~/Desktop/notes.md'},
+        'content': {'type': 'string', 'description': 'the whole text of the file'}}}}}]
+QUOTE = '<|"|>'
+CALL = re.compile(r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>', re.S)
+HIDDEN = re.compile(r'<\|tool_call>.*?(<tool_call\|>|$)|<\|tool_response>.*?(<tool_response\|>|$)|<\|[^<>|\s]*>|<[^<>|\s]*\|>', re.S)
+MAX_CALLS = 5
+
+
+def visible(raw):
+    """What of Gemma's raw output (special tokens kept) the user sees: no tool
+    calls or responses, no special tokens."""
+    return HIDDEN.sub('', raw)
+
+
+def parse_call(raw):
+    """The last complete tool call in raw output: (name, {arg: text}), or None."""
+    calls = CALL.findall(raw)
+    if not calls:
+        return None
+    name, body = calls[-1]
+    args = dict(re.findall(r'(\w+):' + re.escape(QUOTE) + r'(.*?)' + re.escape(QUOTE), body, re.S))
+    return name, args
+
+
+def tool_response(name, result):
+    """The text that answers a call, as the chat template writes it."""
+    return f'<|tool_response>response:{name}{{result:{QUOTE}{result}{QUOTE}}}<tool_response|>'
+
+
+def save_file(path, content, confirm, trash):
+    """Saves content at path once confirm(full path, content, exists) says yes;
+    a file already there goes to the Trash first (trash(full path) -> error
+    text or None). Returns what to tell Gemma."""
+    if not path or not path.strip():
+        return 'Not saved: no path was given.'
+    full = os.path.abspath(os.path.expanduser(path.strip()))
+    if os.path.isdir(full):
+        return f'Not saved: {full} is a folder. Give a file name.'
+    exists = os.path.exists(full)
+    if not confirm(full, content, exists):
+        return 'Not saved: the user chose not to save it.'
+    if content and not content.endswith('\n'):
+        content += '\n'  # text files end with a newline
+    try:
+        if exists:
+            problem = trash(full)
+            if problem:
+                return f'Not saved: the old file could not be moved to the Trash ({problem}).'
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as e:
+        return f'Not saved: {e.strerror or e}.'
+    return f"Saved {full} ({len(content.encode())} bytes){' — the old file is in the Trash' if exists else ''}."
+
+
+def trash_with_node(full):
+    """Moves a file to the Trash with maxshell's fileops.js (undoable, never deleted)."""
+    node = os.environ.get('MAXSHELL_NODE') or shutil.which('node')
+    ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fileops.js')
+    if not node:
+        return 'node not found'
+    r = subprocess.run([node, '-e', 'require(process.argv[1]).trash([process.argv[2]])', ops, full],
+                       capture_output=True, text=True)
+    return None if r.returncode == 0 else (r.stderr.strip().splitlines() or ['failed'])[-1]
 
 
 def free_memory():
@@ -192,8 +268,11 @@ class Chat:
         system = (f"You are Gemma, running on the user's Mac inside maxshell, a zsh-like shell. "
                   f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}. Be helpful and concise. "
                   f"Only write code when it's asked for or really helps; then make it complete and runnable, "
-                  f"in fenced blocks that name the language. Write math in LaTeX between $ signs.")
-        self.ids = self.encode(tok.apply_chat_template([{'role': 'system', 'content': system}], tokenize=False))
+                  f"in fenced blocks that name the language. Write math in LaTeX between $ signs. "
+                  f"The current folder is {os.getcwd()}. When asked to save or write a file, call save_file "
+                  f"(the user confirms it) instead of only showing the text.")
+        self.ids = self.encode(tok.apply_chat_template([{'role': 'system', 'content': system}], tools=TOOLS, tokenize=False))
+        self.call_start = tok.convert_tokens_to_ids('<|tool_response>')
         self.cache = DynamicCache(config=model.config)
         with torch.no_grad():  # read the system prompt now, while "loading Gemma…" shows
             model(self.ids, past_key_values=self.cache, use_cache=True)
@@ -202,14 +281,16 @@ class Chat:
         import torch
         return torch.tensor([self.tok.encode(text, add_special_tokens=False)], device=self.device)
 
-    def reply(self, question, show):
+    def reply(self, question, show, tools=None):
         """Gemma's answer to the question, shown as it comes; and whether
-        Ctrl-C stopped it."""
+        Ctrl-C stopped it. tools maps a tool's name to a function of its
+        arguments that returns what to tell Gemma."""
         import torch
         from transformers import StoppingCriteria, StoppingCriteriaList, TextStreamer
 
         self.turns.append(('user', question))
         ids = torch.cat([self.ids, self.encode(f'<|turn>user\n{question}<turn|>\n<|turn>model\n')], dim=1)
+        start = ids.shape[1]
         stop = {'hit': False}
 
         class Stop(StoppingCriteria):
@@ -217,28 +298,50 @@ class Chat:
                 return stop['hit']
 
         class Stream(TextStreamer):
-            def on_finalized_text(self, text, stream_end=False):
-                show(text)
+            """Shows only what's visible: tool calls are held back."""
+            raw, shown = '', 0
 
-        text = []
-        old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
-        try:
-            with torch.no_grad():
-                gen = self.gen
-                temperature = CODE_TEMPERATURE if is_coding(self.turns) else gen.get('temperature', 1.0)
-                out = self.model.generate(
-                    ids, past_key_values=self.cache, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
-                    top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=self.eos,
-                    pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
-                    streamer=Stream(self.tok, skip_prompt=True, skip_special_tokens=True))
-        finally:
-            signal.signal(signal.SIGINT, old)
-        # The cache holds all but the last token. An end token is dropped (it
-        # wasn't read) and the turn closed the way the chat template does.
-        if out.shape[1] > ids.shape[1] and int(out[0, -1]) in self.eos:
-            out = out[:, :-1]
-        self.ids = torch.cat([out, self.encode('<turn|>\n')], dim=1)
-        answer = self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
+            def on_finalized_text(self, text, stream_end=False):
+                self.raw += text
+                seen = visible(self.raw)
+                if len(seen) > self.shown:
+                    show(seen[self.shown:])
+                    self.shown = len(seen)
+
+        gen = self.gen
+        temperature = CODE_TEMPERATURE if is_coding(self.turns) else gen.get('temperature', 1.0)
+        for _ in range(MAX_CALLS + 1):
+            old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
+            try:
+                with torch.no_grad():
+                    out = self.model.generate(
+                        ids, past_key_values=self.cache, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
+                        top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=self.eos,
+                        pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
+                        streamer=Stream(self.tok, skip_prompt=True, skip_special_tokens=False))
+            finally:
+                signal.signal(signal.SIGINT, old)
+            # The cache holds all but the last token; an end token (not read)
+            # is dropped.
+            last = int(out[0, -1]) if out.shape[1] > ids.shape[1] else None
+            if last in self.eos:
+                out = out[:, :-1]
+            call = None
+            if last == self.call_start and not stop['hit']:
+                call = parse_call(self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=False))
+            if not call:
+                ids = out
+                break
+            # Gemma stopped to call a tool: run it, answer, and let it go on.
+            name, args = call
+            fn = (tools or {}).get(name)
+            try:
+                result = fn(**args) if fn else f'There is no tool called {name}.'
+            except TypeError as e:
+                result = f'Bad arguments for {name}: {e}'
+            ids = torch.cat([out, self.encode(tool_response(name, result))], dim=1)
+        self.ids = torch.cat([ids, self.encode('<turn|>\n')], dim=1)
+        answer = visible(self.tok.decode(ids[0, start:], skip_special_tokens=False)).strip()
         self.turns.append(('ai', answer))
         return stop['hit']
 
@@ -266,12 +369,42 @@ def main():
         sys.stdout.write('\r\x1b[K')
 
     printer = Printer(tty)
+    can_ask = tty and sys.stdin.isatty()
+
+    def confirm(full, content, exists):
+        """Shows the file Gemma wants to save and asks; no terminal, no save."""
+        if not can_ask:
+            return False
+        lines = content.splitlines()
+        ext = os.path.splitext(full)[1].lstrip('.')
+        shown = lines if len(lines) <= 20 else lines[:15]
+        printer.write(f"\n\n```{ext}\n" + '\n'.join(shown) + '\n```\n')
+        printer.done()
+        more = f'{C.muted}… {len(lines) - len(shown)} more lines{C.reset}\n' if len(shown) < len(lines) else ''
+        where = full.replace(os.path.expanduser('~'), '~', 1)
+        note = f' {C.muted}(replaces the file there; the old one goes to the Trash){C.reset}' if exists else ''
+        try:
+            yes = input(f'\n{more}{C.accent}{C.bold}save{C.reset} {where}, {len(lines)} line{"s" * (len(lines) != 1)}{note}? [y/N] ')
+        except (EOFError, KeyboardInterrupt):
+            yes = ''
+            sys.stdout.write('\n')
+        return yes.strip().lower() in ('y', 'yes')
+
+    def save(path='', content=''):
+        result = save_file(path, content, confirm, trash_with_node)
+        if can_ask:  # how it went, then Gemma carries on after its tag
+            mark = '✓' if result.startswith('Saved') else '✗'
+            sys.stdout.write(f'{C.muted}{mark} {result.replace(os.path.expanduser("~"), "~")}{C.reset}\n{TAG}')
+            sys.stdout.flush()
+        return result
+
+    tools = {'save_file': save}
 
     def answer(question):
         if tty:
             sys.stdout.write(TAG)
             sys.stdout.flush()
-        stopped = chat.reply(question, printer.write)
+        stopped = chat.reply(question, printer.write, tools)
         printer.done()
         sys.stdout.write(f"{C.reset}{f'{C.muted} (stopped){C.reset}' if stopped else ''}\n")
         sys.stdout.flush()

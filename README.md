@@ -1045,7 +1045,15 @@ Unicode (`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` → `(-b ± √(b² - 4ac))/2a`),
 with display math on its own indented lines — words wrap at the terminal's edge. (Piped, the answer
 stays plain markdown.) Questions about code (or follow-ups to an answer
 with code) get a lower temperature for steadier code, and answers can run
-to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves. `MAXSHELL_GEMMA` points it at
+to 8,192 tokens. **Ctrl-C** stops an answer; `bye` leaves.
+
+**Gemma can save files.** Ask it to ("write a script that … and save it as
+fib.py") and it calls its `save_file` tool: aig shows the file (the first
+15 lines of a long one) and asks `save ~/x/fib.py, 12 lines? [y/N]` —
+nothing is written without a yes, and nothing at all without a terminal to
+ask at. A relative path is in the folder you ran `aig` in; missing folders
+are made, and a file that's already there goes to the Trash first, never
+overwritten. Gemma is told how it went and carries on. `MAXSHELL_GEMMA` points it at
 another model folder.
 
 **E2B**, the smaller Gemma 4, answers about twice as fast and needs about
