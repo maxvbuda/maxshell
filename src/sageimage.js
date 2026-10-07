@@ -18,6 +18,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const REPO = 'OsaurusAI/Qwen-Image-2.1-mflux-4bit';
+const MFLUX = '0.20.0';
 const SIZE = '10.6 GB';
 const PARTS = ['transformer', 'text_encoder', 'vae'];
 const DEFAULTS = { width: 768, height: 768, steps: 20 };
@@ -143,8 +144,9 @@ class Job {
 function setup(write, err) {
   const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { stdio: 'inherit', ...opts }).status === 0;
   if (!fs.existsSync(python())) { err('sage image: set Sage up first: sage --setup\n'); return 1; }
-  write('Installing mflux…\n');
-  if (!run(python(), ['-m', 'pip', 'install', '-q', 'mflux'])) { err('sage image: pip install failed\n'); return 1; }
+  // The 4-bit build was made with mflux 0.20; 0.21 reads its decoder differently.
+  write(`Installing mflux ${MFLUX}…\n`);
+  if (!run(python(), ['-m', 'pip', 'install', '-q', `mflux==${MFLUX}`])) { err('sage image: pip install failed\n'); return 1; }
   fs.mkdirSync(dir(), { recursive: true });
   write(`Downloading ${REPO} (${SIZE}) into ${dir()}…\n`);
   const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(REPO)}, local_dir='.')\n`;

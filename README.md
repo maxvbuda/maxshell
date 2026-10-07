@@ -1112,7 +1112,8 @@ prompt make the same picture), `-o name.png`, `--no-open`. In the Sage app,
 `/image <prompt>` draws in the background with a progress bar in the
 conversation while you keep chatting; ^C stops it. A picture takes a few
 minutes and about 6–10 GB of memory (with less than 35% free, mflux's
-low-RAM mode is used). `sage image --setup` installs mflux and downloads
+low-RAM mode is used). `sage image --setup` installs mflux 0.20 (the version the 4-bit build was
+made with) and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
 Qwen-Image 2.1 is under the **Qwen Research License** — research and
 evaluation, **not commercial use**; Qwen says the images you make are yours.
