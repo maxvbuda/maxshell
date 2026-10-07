@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Sage: Gemma 4 (E4B or E2B), running on this Mac. Run by maxshell's `sage`.
+"""Sage's engine: Sage Pro and Lite (Gemma 4 E4B / E2B, with transformers) and
+Sage Ultra (Qwen2.5-Coder-7B, with MLX), running on this Mac. Run by
+maxshell's `sage`.
 
 The model folder (~/.maxshell/gemma/e4b or ~/.maxshell/gemma, or
 $MAXSHELL_GEMMA) holds config.json, the tokenizer and model.safetensors (set
@@ -8,9 +10,9 @@ image and audio parts. Its FP8 weights become bfloat16 on the GPU, and the
 per-layer embedding table stays on disk and is read a row at a time, so E4B
 takes about 9 GB (E2B about 5) and can run next to mx training.
 
-  gemma.py                     chat on the terminal (bye to leave)
-  gemma.py <question>          one answer
-  gemma.py --serve CMDS MODE   the engine behind sage's full-screen app: reads
+  sage.py                      chat on the terminal (bye to leave)
+  sage.py <question>           one answer
+  sage.py --serve CMDS MODE    the engine behind sage's full-screen app: reads
                                JSON commands from the file CMDS as they're
                                appended, writes JSON events to stdout. MODE
                                is chat, or code (file tools, run by the app).
@@ -31,9 +33,12 @@ import time
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
-LABEL = 'Lite' if NAME == 'E2B' else 'Pro'
-NEED_GB = 9 if NAME == 'E4B' else 5
-NEED_FREE = 40 if NAME == 'E4B' else 25  # % of memory free before loading (training pauses below 15)
+ULTRA = NAME == 'ULTRA'  # Qwen2.5-Coder-7B on MLX (below), not Gemma
+LABEL = {'E2B': 'Lite', 'ULTRA': 'Ultra'}.get(NAME, 'Pro')
+FLAG = {'E2B': ' --lite', 'ULTRA': ' --ultra'}.get(NAME, '')
+NEED_GB = {'E4B': 9, 'E2B': 5, 'ULTRA': 6}.get(NAME, 9)
+NEED_FREE = {'E4B': 40, 'E2B': 25, 'ULTRA': 30}.get(NAME, 40)  # % of memory free before loading (training pauses below 15)
+MAKER = 'Alibaba' if ULTRA else 'Google'
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
 C = type('C', (), COLORS)
@@ -108,17 +113,18 @@ def system_prompt(mode):
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
         return (f"You are Sage Code, a coding agent inside maxshell, running entirely on the user's Mac. Your name is "
-                f"Sage; don't call yourself Gemma. {when} You work in the project folder {os.getcwd()}. "
+                f"Sage; don't call yourself by the model underneath. {when} You work in the project folder {os.getcwd()}. "
                 f"Use your tools: look around with list_files, read_file and search_files before changing anything; "
                 f"use edit_file for changes to existing files and write_file for new files. To make a folder, run "
                 f"mkdir -p with run_command; use run_command too for running code and tests, installing packages "
                 f"and git. Never delete files or folders. Keep edits small and "
                 f"exact, and match the code's style. The user approves every change and may decline one — then "
-                f"ask what they'd like instead. When you're done, say briefly what you changed.")
+                f"ask what they'd like instead. Call one tool at a time and wait for its result — never say you did "
+                f"something until a tool's result shows it worked. When you're done, say briefly what you changed.")
     return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "
-            f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not Gemma, and don't "
-            f"bring up the model underneath; only if someone asks directly what model you're built on, say you're "
-            f"based on an open model from Google. {when} You're warm, sharp and "
+            f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not by the model "
+            f"underneath, and don't bring it up; only if someone asks directly what model you're built on, say "
+            f"you're based on an open model from {MAKER}. {when} You're warm, sharp and "
             f"concise. Only write code when it's asked for or really helps; then make it complete and runnable, in "
             f"fenced blocks that name the language. Write math in LaTeX between $ signs. You can't save or change "
             f"files here; if asked to, show the text and suggest `sage code`, which can.")
@@ -351,15 +357,273 @@ class Chat:
         return stop['hit']
 
 
+# --- Sage Ultra: Qwen2.5-Coder-7B-Instruct (4-bit, MLX) on the GPU ---------------
+#
+# The same Chat interface as Gemma's above. Qwen calls tools by writing
+# <tool_call>{"name": …, "arguments": {…}}</tool_call> and stopping; the
+# answers go back in a user turn as <tool_response>…</tool_response>, and it
+# carries on. The conversation is kept as tokens next to MLX's KV cache, so
+# each turn reads only what's new.
+
+ULTRA_SPECIAL = re.compile(r'<\|im_(start|end)\|>|<\|endoftext\|>')
+TOOL_NAMES = {t['function']['name'] for t in CODE_TOOLS}
+
+
+def _call(text):
+    """(name, {arg: text}) if text is a JSON tool call, else None."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get('name') not in TOOL_NAMES:
+        return None
+    args = data.get('arguments') or data.get('parameters') or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return data['name'], {k: v if isinstance(v, str) else json.dumps(v) for k, v in args.items()}
+
+
+def ultra_scan(raw):
+    """Reads Qwen's output for tool calls. It writes them as <tool_call>JSON
+    </tool_call>, as its template asks — but often as a ```json block, or bare
+    JSON on a line of its own. Returns (shown, calls, cut): the text the user
+    sees, with calls taken out and anything that may still turn into one held
+    back; the complete calls; and where the first call ends (None if none)."""
+    out, calls, cut, i, n = [], [], None, 0, len(raw)
+    line_start = lambda k: k == 0 or raw[k - 1] == '\n'  # noqa: E731
+    while i < n:
+        if raw.startswith('<tool_call>', i):
+            j = raw.find('</tool_call>', i)
+            if j < 0:
+                break  # still coming
+            c = _call(raw[i + len('<tool_call>'):j].strip())
+            if c:
+                calls.append(c)
+                cut = j + len('</tool_call>') if cut is None else cut
+            i = j + len('</tool_call>')
+            continue
+        if raw.startswith('`', i) and line_start(i):
+            nl = raw.find('\n', i)
+            if nl < 0:
+                if re.match(r'^`{1,3}(j(s(on?)?)?)?[ \t]*$', raw[i:]):
+                    break  # may be the start of a ```json block
+            else:
+                lang = re.match(r'```[ \t]*([\w+#.-]*)[ \t]*\n', raw[i:nl + 1])
+                if lang and lang.group(1) not in ('', 'json'):
+                    # code in another language: pass the whole block through
+                    end = raw.find('\n```', nl)
+                    if end < 0:
+                        out.append(raw[i:])
+                        break
+                    after = end + 4
+                    out.append(raw[i:after])
+                    i = after
+                    continue
+                m = lang
+                if m:
+                    end = raw.find('\n```', nl)
+                    if end < 0:
+                        break  # held until the block closes
+                    after = end + 4
+                    if raw.startswith('\n', after):
+                        after += 1
+                    c = _call(raw[nl + 1:end].strip())
+                    if c:
+                        calls.append(c)
+                        cut = after if cut is None else cut
+                    else:
+                        out.append(raw[i:after])
+                    i = after
+                    continue
+        if raw[i] == '{' and line_start(i):
+            try:
+                obj, end = json.JSONDecoder().raw_decode(raw, i)
+                c = _call(raw[i:end])
+            except ValueError:
+                c, end = None, None
+            if c:
+                calls.append(c)
+                cut = end if cut is None else cut
+                i = end
+                continue
+            if end is None and ('\n' not in raw[i:] or re.match(r'\{\s*"name"', raw[i:])):
+                break  # may still become a call
+        out.append(raw[i])
+        i += 1
+    return ULTRA_SPECIAL.sub('', ''.join(out)), calls, cut
+
+
+def ultra_visible(raw):
+    """What of Qwen's output the user sees: no tool calls or special tokens."""
+    return ultra_scan(raw)[0]
+
+
+def ultra_parse_calls(raw):
+    """The tool calls in raw output: [(name, {arg: text})]."""
+    return ultra_scan(raw)[1]
+
+
+def ultra_tool_responses(results):
+    """The user turn that answers a message's tool calls."""
+    blocks = '\n'.join(f'<tool_response>\n{r}\n</tool_response>' for r in results)
+    return f'<|im_start|>user\n{blocks}<|im_end|>\n<|im_start|>assistant\n'
+
+
+class UltraEngine:
+    """The model, loaded once; chat() starts a conversation."""
+
+    def __init__(self, path, device=None):
+        import mlx.core as mx
+        from mlx_lm import load
+        if device == 'cpu':
+            mx.set_default_device(mx.cpu)
+        self.mx = mx
+        self.model, self.tok = load(path)
+        self.device = 'cpu' if device == 'cpu' else 'gpu'
+
+    def chat(self, mode, system, tools=None, max_calls=40, max_tokens=8192):
+        return UltraChat(self, mode, system, tools, max_calls, max_tokens)
+
+
+class UltraChat:
+    def __init__(self, engine, mode, system, tools, max_calls, max_tokens):
+        from mlx_lm.models.cache import make_prompt_cache
+        self.e, self.mode, self.max_calls, self.max_tokens = engine, mode, max_calls, max_tokens
+        self.tok = engine.tok
+        self.im_end = self.tok.convert_tokens_to_ids('<|im_end|>')
+        self.turns = []
+        self.generated = 0
+        self.seconds = 0.0
+        self.cache = make_prompt_cache(engine.model)
+        prefix = self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
+        self.tokens = self.encode(prefix)  # the whole conversation
+        mx = engine.mx
+        engine.model(mx.array(self.tokens)[None], cache=self.cache)  # read the system prompt now
+        mx.eval([c.state for c in self.cache])
+
+    def encode(self, text):
+        return list(self.tok.encode(text, add_special_tokens=False))
+
+    def fed(self):
+        return self.cache[0].offset
+
+    def pending(self):
+        """Conversation tokens the cache hasn't read; trims the cache if it read
+        past them (a token computed but never shown)."""
+        from mlx_lm.models.cache import trim_prompt_cache
+        if self.fed() > len(self.tokens):
+            trim_prompt_cache(self.cache, self.fed() - len(self.tokens))
+        return self.tokens[self.fed():]
+
+    def generate(self, text_after, show, stop, temperature):
+        """Adds text_after to the conversation and lets Qwen write; returns
+        its raw output."""
+        from mlx_lm import stream_generate
+        from mlx_lm.sample_utils import make_sampler, make_logits_processors
+        new = self.encode(text_after)
+        prompt = self.pending() + new
+        self.tokens += new
+        sampler = make_sampler(temp=temperature, top_p=0.8, top_k=20)
+        processors = make_logits_processors(repetition_penalty=1.05)
+        raw, shown, out, cut = '', 0, [], None
+        base = len(self.tokens)
+        began = time.time()
+        for r in stream_generate(self.e.model, self.tok, prompt, max_tokens=self.max_tokens, prompt_cache=self.cache,
+                                 sampler=sampler, logits_processors=processors):
+            if r.finish_reason is None:
+                out.append(r.token)
+            elif r.finish_reason in ('stop', 'length'):
+                out.append(r.token)
+            raw += r.text
+            seen, _, cut = ultra_scan(raw)
+            if len(seen) > shown:
+                show(seen[shown:])
+                shown = len(seen)
+            if stop['hit'] or cut is not None:
+                break  # a whole tool call: stop there, so it waits for the result
+        self.seconds += time.time() - began
+        self.generated += len(out)
+        if cut is None:
+            self.tokens += out
+            return raw
+        # Keep the conversation up to the end of the call: trim the cache back
+        # and let the call's text be read again (a few tokens).
+        from mlx_lm.models.cache import trim_prompt_cache
+        raw = raw[:cut]
+        if self.fed() > base:
+            trim_prompt_cache(self.cache, self.fed() - base)
+        self.tokens = self.tokens[:base] + self.encode(raw)
+        return raw
+
+    def close_turn(self):
+        if not self.tokens or self.tokens[-1] != self.im_end:
+            self.tokens.append(self.im_end)
+        self.tokens += self.encode('\n')
+
+    def reply(self, question, show, tools=None):
+        """Sage's answer, shown as it comes; and whether Ctrl-C stopped it.
+        tools maps a tool's name to a function of its arguments."""
+        self.turns.append(('user', question))
+        self.generated, self.seconds = 0, 0.0
+        stop = {'hit': False}
+        temperature = 0.3 if self.mode == 'code' else 0.7
+        text_after = f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
+        said = []
+        for _ in range(self.max_calls + 1):
+            old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
+            try:
+                raw = self.generate(text_after, show, stop, temperature)
+            finally:
+                signal.signal(signal.SIGINT, old)
+            shown, calls, _ = ultra_scan(raw)
+            said.append(shown)
+            calls = calls[:1] if not stop['hit'] else []  # one at a time: it sees each result
+            if not calls:
+                break
+            results = []
+            for name, args in calls:
+                fn = (tools or {}).get(name)
+                try:
+                    results.append(fn(**args) if fn else f'There is no tool called {name}.')
+                except Exception as e:  # noqa: BLE001 — Sage hears what went wrong
+                    results.append(f'{name} failed: {e}')
+                if stop['hit']:
+                    break
+            self.close_turn()
+            text_after = ultra_tool_responses(results)
+            if stop['hit']:
+                self.tokens += self.encode(text_after)
+                break
+        self.close_turn()
+        self.turns.append(('ai', ''.join(said).strip()))
+        return stop['hit']
+
+
 def problem():
-    """Why Gemma can't start now, or None."""
+    """Why the model can't start now, or None."""
     if not os.path.exists(os.path.join(DIR, 'model.safetensors')):
-        return f"Sage {LABEL} isn't set up — run: sage{' --lite' if NAME == 'E2B' else ''} --setup"
+        return f"Sage {LABEL} isn't set up — run: sage{FLAG} --setup"
     free = free_memory()
     if free < NEED_FREE:
         return (f'only {free}% of memory is free and Sage {LABEL} needs about {NEED_GB} GB — close something '
                 f'(or pause training: ai --train stop) and try again')
     return None
+
+
+def open_engine():
+    """Loads the model once; returns new_chat(mode) and the device it runs on."""
+    if ULTRA:
+        engine = UltraEngine(DIR, os.environ.get('MAXSHELL_SAGE_DEVICE'))
+        new_chat = lambda mode: engine.chat(mode, system_prompt(mode), CODE_TOOLS if mode == 'code' else None,  # noqa: E731
+                                            MAX_CALLS, MAX_TOKENS)
+        return new_chat, engine.device
+    model, tok, gen, device = load()
+    return (lambda mode: Chat(model, tok, gen, device, mode)), device
 
 
 def quiet():
@@ -385,8 +649,8 @@ def serve(cmd_path, mode):
         return 1
     emit(ev='loading', model=NAME)
     quiet()
-    model, tok, gen, device = load()
-    chat = Chat(model, tok, gen, device, mode)
+    new_chat, device = open_engine()
+    chat = new_chat(mode)
     emit(ev='ready', model=NAME, device=device)
     parent = os.getppid()
     cmds = open(cmd_path, encoding='utf-8')
@@ -422,7 +686,7 @@ def serve(cmd_path, mode):
         if op == 'quit':
             return 0
         if op == 'reset':
-            chat = Chat(model, tok, gen, device, mode)
+            chat = new_chat(mode)
             emit(ev='ready', model=NAME, device=device)
         elif op == 'ask':
             stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', s=s), tools)
@@ -442,8 +706,8 @@ def main():
         sys.stdout.write(f'{C.muted}waking Sage…{C.reset}')
         sys.stdout.flush()
     quiet()
-    model, tok, gen, device = load()
-    chat = Chat(model, tok, gen, device)
+    new_chat, _ = open_engine()
+    chat = new_chat('chat')
     if tty:
         sys.stdout.write('\r\x1b[K')
 

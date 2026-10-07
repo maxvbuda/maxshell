@@ -5,7 +5,7 @@
 // writes and edits files in the folder it's started in, showing every change
 // as a diff and asking first (src/sagetools.js).
 //
-// The engine is src/gemma.py --serve, a separate process: commands go to it
+// The engine is src/sage.py --serve, a separate process: commands go to it
 // by appending JSON lines to a file, and its events (text as it's written,
 // tool calls, done) come back the same way, so this stays synchronous like
 // maxshell's other full-screen tools — keys are polled with KeyReader and the
@@ -28,8 +28,9 @@ const tools = require('./sagetools');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  e4b: { label: 'Sage Pro', blurb: 'smarter · ~9 GB' },
-  e2b: { label: 'Sage Lite', blurb: 'twice as fast · ~5 GB' },
+  ultra: { label: 'Sage Ultra', blurb: 'best at code · ~6 GB', flag: 'ultra' },
+  e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~9 GB', flag: 'pro' },
+  e2b: { label: 'Sage Lite', blurb: 'fastest · ~5 GB', flag: 'lite' },
 };
 
 // --- the engine -----------------------------------------------------------------
@@ -362,7 +363,7 @@ class SageApp {
     const m = this.models.find((x) => x.key === key);
     if (!m) return;
     if (key === this.model && this.status !== 'error') { this.changed(); return; }
-    if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${key === 'e2b' ? 'lite' : 'pro'} --setup`, 'err'); return; }
+    if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${MODEL_INFO[key].flag} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
     this.engine.close();
     if (this.items.length) this.note(`Switched to ${MODEL_INFO[key].label} — a fresh conversation.`);

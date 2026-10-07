@@ -74,20 +74,25 @@ two-stage training, exam `ai/mx4/eval.js`; no self-check) is newer. `ai`
 prefers mx4, then mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
-`sage` (`src/gemma.js`) is Sage, Gemma 4 E4B (default) or
-E2B (FP8 builds from `leon-se/gemma-4-E{4,2}B-it-FP8-Dynamic`, in
-`~/.maxshell/gemma/e4b` and `~/.maxshell/gemma`) run by `src/gemma.py` in
-`~/.maxshell/gemma/venv` via transformers: text weights only, the per-layer
-embedding memory-mapped from disk, KV cache kept across turns, CPU while mx
-training runs. At a terminal, `sage` / `sage code` open `src/sage.js`, a
-full-screen app (`SageApp` state + `render()`, model dropdown) that runs
-`gemma.py --serve` as a separate process: JSON commands appended to a file,
+`sage` (`src/gemma.js`) is Sage: Sage Pro / Lite are Gemma 4 E4B / E2B
+(FP8 builds from `leon-se/gemma-4-E{4,2}B-it-FP8-Dynamic`, in
+`~/.maxshell/gemma/e4b` and `~/.maxshell/gemma`, run with transformers: text
+weights only, the per-layer embedding memory-mapped from disk, CPU while mx
+training runs); Sage Ultra is Qwen2.5-Coder-7B-Instruct 4-bit
+(`mlx-community/…-4bit` in `~/.maxshell/gemma/ultra`, run with mlx-lm on the
+GPU). Both engines live in `src/sage.py` (one venv,
+`~/.maxshell/gemma/venv`) behind the same Chat interface, with the KV cache
+kept across turns. At a terminal, `sage` / `sage code` open `src/sage.js`,
+a full-screen app (`SageApp` state + `render()`, model dropdown) that runs
+`sage.py --serve` as a separate process: JSON commands appended to a file,
 JSON events read back from another (`Engine`), so it stays synchronous.
-`sage code` gives Gemma tools (native tool calls, parsed in gemma.py) that
-the app runs via `src/sagetools.js` — reads in the project are free,
-writes/edits show a diff and ask, replaced files go to the Trash. Tests
-use `test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). Off a terminal,
-gemma.py prints replies through `node src/markdown.js` (streaming markdown +
+`sage code` gives the model tools (Gemma's native calls; Qwen's
+`<tool_call>` JSON or a ```json block, found by `ultra_scan`, which stops
+generation at the call) that the app runs via `src/sagetools.js` — reads in
+the project are free; writes, edits and commands show a diff / the command
+and ask; replaced files go to the Trash. Tests use
+`test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). Off a terminal, sage.py
+prints replies through `node src/markdown.js` (streaming markdown +
 `src/tex.js` math; NUL ends a reply and is acked on stderr).
 
 **Interactive shell** — `bin/maxshell.js` runs the REPL: `lineeditor.js`

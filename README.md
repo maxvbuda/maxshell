@@ -1046,7 +1046,8 @@ project with you.
 model and what Sage is doing (waking, thinking, writing, and its speed in
 tokens a second), the conversation, and an input box at the bottom. The
 **model is a dropdown** — click `◆ Sage Pro ▾` (or press **^O**) and pick
-**Sage Pro**, the smarter one, or **Sage Lite**, twice as fast; it switches on the spot. A
+**Sage Ultra**, the best at code, **Sage Pro**, the all-rounder, or
+**Sage Lite**, the fastest; it switches on the spot. A
 welcome screen offers examples to click. Answers stream in as formatted
 markdown in your theme's colours — headings, **bold**, lists, tables, code
 highlighted like the editor's, and **math**: TeX like
@@ -1098,6 +1099,19 @@ and there's less than 40% of memory free (the GPU shares it), Sage starts
 as Sage Lite and says so. While mx training has the GPU, Sage runs on the
 CPU instead (`MAXSHELL_SAGE_DEVICE` picks), which leaves training alone.
 Waking takes 10–30 seconds.
+
+**Sage Ultra** is a 7-billion-parameter coding model — Alibaba's open
+Qwen2.5-Coder-7B-Instruct, 4-bit, run with Apple's MLX on the GPU (about
+6 GB; it starts with 30% of memory free). It's the strongest at code and,
+on the GPU, the quickest to answer (around 13–16 tokens a second here).
+`sage --ultra --setup` installs `mlx-lm` into Sage's Python and downloads
+`mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` (4.3 GB) into
+`~/.maxshell/gemma/ultra`; `sage --ultra` and `sage code --ultra` use it, or
+pick it from the dropdown. It calls Sage Code's tools in its own format — and
+sometimes writes a call as a JSON block instead; either way the call is
+taken out of the answer, Sage stops right there, and carries on only once
+the tool has run (and you've said yes), so it can't claim to have done what
+it hasn't.
 
 Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 `sage <question>` prints one answer as markdown — plain when piped.

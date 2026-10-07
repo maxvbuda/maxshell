@@ -2,7 +2,7 @@
 
 // Sage: the full-screen app (state, drawing, clicks), Sage Code's tools, the
 // engine plumbing (against test/fake-sage-engine.js, no model), and
-// gemma.py's tool-call parsing.
+// sage.py's tool-call parsing.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -49,7 +49,7 @@ function app(opts = {}) {
   const started = [];
   const a = new SageApp({
     mode: 'chat', root: os.tmpdir(), model: 'e4b',
-    models: [{ key: 'e4b', ready: true }, { key: 'e2b', ready: true }],
+    models: [{ key: 'ultra', ready: true }, { key: 'e4b', ready: true }, { key: 'e2b', ready: true }],
     start: (key, mode) => { const e = fakeEngine(); started.push({ key, mode, e }); return e; },
     ...opts,
   });
@@ -156,7 +156,7 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   assert.match(text(r).split('\n')[0], /Sage Pro ▾/);
   a.mouse({ button: 0, release: false }, drop);
   r = render(a, 90, 24, 0);
-  assert.match(text(r), /✓ Sage Pro[\s\S]*Sage Lite/);
+  assert.match(text(r), /Sage Ultra[\s\S]*best at code[\s\S]*✓ Sage Pro[\s\S]*Sage Lite/);
   const e2b = r.hits.find((h) => h.action === 'model' && h.key === 'e2b');
   a.mouse({ button: 0, release: false }, e2b);
   assert.strictEqual(a.model, 'e2b');
@@ -166,14 +166,21 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Sage Lite ▾/);
   // keys: ^O, down, enter
   a.key({ name: 'o', ctrl: true });
-  a.key({ name: 'down' });
+  a.key({ name: 'up' });
   a.key({ name: 'return' });
   assert.strictEqual(a.model, 'e4b');
+  a.key({ name: 'o', ctrl: true });
+  a.key({ name: 'up' });
+  a.key({ name: 'return' });
+  assert.strictEqual(a.model, 'ultra');
+  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Sage Ultra ▾/);
   // a model that isn't set up says how to set it up
-  const b = app({ models: [{ key: 'e4b', ready: true }, { key: 'e2b', ready: false }] });
+  const b = app({ models: [{ key: 'ultra', ready: false }, { key: 'e4b', ready: true }, { key: 'e2b', ready: false }] });
   b.switchModel('e2b');
   assert.strictEqual(b.model, 'e4b');
   assert.match(b.items[b.items.length - 1].text, /sage --lite --setup/);
+  b.switchModel('ultra');
+  assert.match(b.items[b.items.length - 1].text, /Sage Ultra isn’t set up — run: sage --ultra --setup/);
 });
 
 test('sage code asks before a change; y applies it, n tells Sage no', () => {
@@ -326,17 +333,24 @@ test('the engine plumbing streams events from a separate process', () => {
   fs.rmSync(root, { recursive: true });
 });
 
-test('gemma.py parses Gemma tool calls and hides them from the reply', () => {
+test('sage.py parses Gemma tool calls and hides them from the reply', () => {
   const script = String.raw`
 import sys, json
 sys.path.insert(0, sys.argv[1])
-import gemma
+import sage as gemma
 raw = 'Sure!<|tool_call>call:edit_file{new_text:<|"|>x = {1: 2}<|"|>,old_text:<|"|>x = 1<|"|>,path:<|"|>a.py<|"|>}<tool_call|>'
 print(json.dumps({'call': gemma.parse_call(raw),
   'seen': gemma.visible(raw + gemma.tool_response('edit_file', 'ok') + 'Done.<turn|>'),
   'partial': gemma.visible('Sure!<|tool_call>call:edit_fi'),
   'tools': [t['function']['name'] for t in gemma.CODE_TOOLS],
-  'chat': 'sage code' in gemma.system_prompt('chat') and 'not Gemma' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code') and 'mkdir -p' in gemma.system_prompt('code')}))
+  'ucalls': gemma.ultra_parse_calls('Sure.\n<tool_call>\n{"name": "run_command", "arguments": {"command": "mkdir -p x"}}\n</tool_call>\n<tool_call>\n{"name": "read_file", "arguments": {"path": "a.py"}}\n</tool_call><tool_call>{bad json}</tool_call>'),
+  'useen': gemma.ultra_visible('Sure.<tool_call>\n{"name": "x", "arguments": {}}\n</tool_call><|im_end|>'),
+  'upartial': gemma.ultra_visible('Sure.<tool_call>\n{"na'),
+  'uresp': gemma.ultra_tool_responses(['exit 0', 'text']),
+  'fenced': gemma.ultra_scan('Sure.\n\x60\x60\x60json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n\x60\x60\x60\nI made it.'),
+  'pycode': gemma.ultra_scan('py:\n\x60\x60\x60python\nprint({"name": 1})\n\x60\x60\x60\nok'),
+  'holding': gemma.ultra_scan('x\n\x60\x60\x60jso')[0],
+  'chat': 'sage code' in gemma.system_prompt('chat') and 'introduce yourself as Sage' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code') and 'mkdir -p' in gemma.system_prompt('code')}))
 `;
   const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
@@ -346,6 +360,16 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.strictEqual(out.partial, 'Sure!');
   assert.deepStrictEqual(out.tools, ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'run_command']);
   assert.deepStrictEqual([out.chat, out.code], [true, true]);
+  // Sage Ultra (Qwen) writes its calls as JSON in <tool_call> tags
+  assert.deepStrictEqual(out.ucalls, [['run_command', { command: 'mkdir -p x' }], ['read_file', { path: 'a.py' }]]);
+  assert.strictEqual(out.useen, 'Sure.');
+  assert.strictEqual(out.upartial, 'Sure.');
+  // …or as a ```json block: taken out, and the answer cut where the call ends
+  assert.deepStrictEqual(out.fenced[1], [['run_command', { command: 'mkdir -p lib' }]]);
+  assert.strictEqual(out.fenced[2], 'Sure.\n```json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n```\n'.length);
+  assert.deepStrictEqual(out.pycode, ['py:\n```python\nprint({"name": 1})\n```\nok', [], null]);
+  assert.strictEqual(out.holding, 'x\n');
+  assert.strictEqual(out.uresp, '<|im_start|>user\n<tool_response>\nexit 0\n</tool_response>\n<tool_response>\ntext\n</tool_response><|im_end|>\n<|im_start|>assistant\n');
 });
 
 test('sage --help names chat and code; sage code needs a terminal', () => {
@@ -383,6 +407,8 @@ test('without room for E4B, Sage picks E2B unless a model was asked for', () => 
     const a = app({ notice: auto.why });
     assert.match(text(render(a, 90, 26, 0)).replace(/\s+/g, ' '), /this is Sage Lite, the lighter model/);
     assert.strictEqual(gemma.pick(['--lite', 'hi']).key, 'e2b');
+    assert.strictEqual(gemma.pick(['--ultra', 'hi']).key, 'ultra');
+    assert.strictEqual(gemma.MODELS.ultra.label, 'Sage Ultra');
     assert.ok(!/Gemma/.test(text(render(app(), 90, 26, 0))));
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in was)) delete process.env[k];

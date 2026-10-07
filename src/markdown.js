@@ -10,7 +10,7 @@
 // so rendering all at once and a character at a time give the same output.
 //
 // As a program (`node markdown.js COL`) it renders stdin to the terminal
-// for gemma.py: a NUL ends a reply and is answered with a NUL on stderr once
+// for sage.py: a NUL ends a reply and is answered with a NUL on stderr once
 // the reply is on the screen. COL is where each reply starts (after the
 // "✦ gemma ❯ " tag).
 
@@ -598,7 +598,7 @@ module.exports = { MarkdownStream, renderMarkdown };
 if (require.main === module) {
   const fs = require('fs');
   theme.loadSavedTheme();
-  process.on('SIGINT', () => {}); // Ctrl-C is gemma.py's: it stops the answer
+  process.on('SIGINT', () => {}); // Ctrl-C is sage.py's: it stops the answer
   const tty = process.stdout;
   const md = new MarkdownStream({
     col: Number(process.argv[2]) || 0, live: true,

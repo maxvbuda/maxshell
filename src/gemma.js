@@ -1,12 +1,13 @@
 'use strict';
 
-// sage: Sage, maxshell's AI — Gemma 4 (E4B, or E2B
-// with --e2b), Google's open model, on this Mac. The full-screen app is
-// src/sage.js. The model runs in src/gemma.py under its own Python
-// (~/.maxshell/gemma/venv: the system PyTorch plus transformers); `sage
-// --setup` makes that Python and downloads the model into its folder. While
-// mx training has the GPU, Gemma runs on the CPU, which is as fast then and
-// doesn't slow the training.
+// sage: Sage, maxshell's AI, on this Mac — Sage Pro and Sage Lite are Gemma 4
+// E4B and E2B (Google's open models, run with transformers), Sage Ultra is
+// Qwen2.5-Coder-7B (Alibaba's, run with MLX). The full-screen app is
+// src/sage.js; the models run in src/sage.py under Sage's own Python
+// (~/.maxshell/gemma/venv: the system PyTorch plus transformers, and mlx-lm
+// for Ultra); `sage --setup` makes that Python and downloads the model into
+// its folder. While mx training has the GPU, Gemma runs on the CPU, which is
+// as fast then and doesn't slow the training.
 
 const fs = require('fs');
 const os = require('os');
@@ -15,7 +16,12 @@ const { spawnSync } = require('child_process');
 
 // The FP8 builds of Gemma 4 (instruction-tuned). E2B lives in the gemma
 // folder itself; E4B, about twice the compute and memory, in gemma/e4b.
+// Ultra, a 4-bit MLX build of Qwen2.5-Coder-7B-Instruct, in gemma/ultra.
 const MODELS = {
+  ultra: {
+    name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit', sub: 'ultra',
+    size: '4.3 GB', needFree: 30, mlx: true, files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
+  },
   e2b: { name: 'E2B', label: 'Sage Lite', flag: 'lite', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
   e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB', needFree: 40 },
 };
@@ -26,13 +32,19 @@ const FILES = ['config.json', 'generation_config.json', 'tokenizer.json', 'token
 const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxshell', 'gemma');
 const dir = (m = MODELS[DEFAULT]) => path.join(base(), m.sub);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
-const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors')) && FILES.every((f) => fs.existsSync(path.join(dir(m), f)));
+// mlx-lm, which Ultra needs, in Sage's Python.
+function hasMlx() {
+  const lib = path.join(path.dirname(path.dirname(python())), 'lib');
+  try { return fs.readdirSync(lib).some((v) => fs.existsSync(path.join(lib, v, 'site-packages', 'mlx_lm'))); } catch { return false; }
+}
+const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors'))
+  && (m.files || FILES).every((f) => fs.existsSync(path.join(dir(m), f))) && (!m.mlx || !!process.env.MAXSHELL_GEMMA_PYTHON || hasMlx());
 
-// --lite / --pro (or --e2b / --e4b) at the front of the arguments, else
-// $MAXSHELL_SAGE_MODEL, else Pro.
+// --pro / --lite / --ultra (or --e4b / --e2b) at the front of the arguments,
+// else $MAXSHELL_SAGE_MODEL, else Pro.
 const ALIASES = { lite: 'e2b', pro: 'e4b' };
 function pick(args) {
-  const flag = /^--(e2b|e4b|lite|pro)$/i.exec(args[0] || '');
+  const flag = /^--(e2b|e4b|lite|pro|ultra)$/i.exec(args[0] || '');
   if (flag) args = args.slice(1);
   let key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
   key = ALIASES[key] || key;
@@ -83,6 +95,15 @@ function setup(m, write, err) {
   const hasTorch = spawnSync(python(), ['-c', 'import torch'], { stdio: 'ignore' }).status === 0;
   write(hasTorch ? 'Installing transformers…\n' : 'Installing PyTorch and transformers…\n');
   if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('sage: pip install failed\n'); return 1; }
+  if (m.mlx) {
+    write('Installing mlx-lm…\n');
+    if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm'])) { err('sage: pip install failed\n'); return 1; }
+    write(`Downloading ${m.repo} (${m.size}) into ${d}…\n`);
+    const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
+    if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...process.env, HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
+    write(`${m.label} is ready — try: sage --${m.flag}\n`);
+    return 0;
+  }
   write(`Fetching the config and tokenizer from ${m.repo}…\n`);
   const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
   if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
@@ -99,7 +120,7 @@ function setup(m, write, err) {
 // while mx training has the GPU.
 function engineEnv(m, shell) {
   const env = { ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_SAGE_NAME: m.name, MAXSHELL_NODE: process.execPath };
-  if (!env.MAXSHELL_SAGE_DEVICE && training()) env.MAXSHELL_SAGE_DEVICE = 'cpu';
+  if (!env.MAXSHELL_SAGE_DEVICE && !m.mlx && training()) env.MAXSHELL_SAGE_DEVICE = 'cpu'; // MLX shares the GPU
   return env;
 }
 
@@ -108,9 +129,11 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage <question>      one answer, printed
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
+  sage --ultra …       use Sage Ultra, the best at code (a 7B coding model)
   sage --lite …        use Sage Lite, twice as fast (MAXSHELL_SAGE_MODEL=lite makes
                        it the default; Sage Pro is, unless memory is short)
-  sage --setup         install what it needs (sage --lite --setup for Sage Lite)
+  sage --setup         install what it needs (sage --ultra --setup for Sage Ultra,
+                       sage --lite --setup for Sage Lite)
 `;
 
 function runSage(args, io, shell, name = 'sage') {
@@ -121,7 +144,7 @@ function runSage(args, io, shell, name = 'sage') {
   let mode = 'chat';
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   let { model: m, key, args: rest, chosen } = pick(args);
-  if (!m) { err(`${name}: no model ${key} — pro or lite\n`); return 1; }
+  if (!m) { err(`${name}: no model ${key} — pro, ultra or lite\n`); return 1; }
   args = rest;
   if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   const flag = m === MODELS[DEFAULT] ? '' : ` --${m.flag}`;
@@ -136,11 +159,11 @@ function runSage(args, io, shell, name = 'sage') {
   if (tty && (mode === 'code' || !args.length)) {
     const sage = require('./sage');
     const tui = require('./tui');
-    const keys = [DEFAULT, ...Object.keys(MODELS).filter((k) => k !== DEFAULT)];
+    const keys = ['ultra', 'e4b', 'e2b']; // the dropdown, best first
     const models = keys.map((k) => ({ key: k, ready: ready(MODELS[k]) }));
-    const fake = process.env.MAXSHELL_SAGE_ENGINE; // tests: a stand-in for gemma.py
+    const fake = process.env.MAXSHELL_SAGE_ENGINE; // tests: a stand-in for sage.py
     const start = (k, md) => new sage.Engine(
-      fake ? [process.execPath, fake, '{commands}', md] : [python(), path.join(__dirname, 'gemma.py'), '--serve', '{commands}', md],
+      fake ? [process.execPath, fake, '{commands}', md] : [python(), path.join(__dirname, 'sage.py'), '--serve', '{commands}', md],
       { cwd: shell.cwd, env: engineEnv(MODELS[k], shell) },
     );
     const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null, notice: auto.why });
@@ -149,7 +172,7 @@ function runSage(args, io, shell, name = 'sage') {
   if (mode === 'code') { err(`${name}: sage code needs a terminal\n`); return 1; }
   if (auto.why) err(`${theme.style(theme.current().ui.muted)}${auto.why}${ansi.reset()}\n`);
 
-  // One answer, or a plain chat when this isn't a terminal: gemma.py prints
+  // One answer, or a plain chat when this isn't a terminal: sage.py prints
   // it, with replies rendered by src/markdown.js in this theme.
   const t = theme.current();
   const colors = {
@@ -157,7 +180,7 @@ function runSage(args, io, shell, name = 'sage') {
     bold: ansi.bold(), reset: ansi.reset(),
   };
   Object.assign(env, { MAXSHELL_SAGE_COLORS: JSON.stringify(colors), MAXSHELL_THEME: theme.currentThemeName() });
-  return shell.runExternal([python(), path.join(__dirname, 'gemma.py'), ...args], io, env);
+  return shell.runExternal([python(), path.join(__dirname, 'sage.py'), ...args], io, env);
 }
 
 module.exports = { runSage, HELP, ready, pick, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };

@@ -1,6 +1,6 @@
 'use strict';
 
-// A stand-in for gemma.py --serve in tests: the same protocol, no model.
+// A stand-in for sage.py --serve in tests: the same protocol, no model.
 // "edit" asks for an edit_file of a.py (return 1 → return 2); anything else
 // is echoed back in two pieces.
 
