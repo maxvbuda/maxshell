@@ -13,7 +13,8 @@
 // file, so the Sage app can show it while you keep chatting. `sage image`
 // with no prompt opens the app for image chat: describe a picture, then say
 // how to change it — each message edits the latest version (the edit
-// pipeline, given that picture), and every version is kept.
+// pipeline, given that picture), and every version is kept. A picture of
+// your own (--edit, /edit, or a file dragged in) can be the starting point.
 
 const fs = require('fs');
 const os = require('os');
@@ -44,9 +45,45 @@ function outputPath(prompt, folder) {
   return path.join(folder, name);
 }
 
-// sage image's options: { prompt, width, height, steps, seed, output, open } or { error }.
-function parseArgs(args) {
-  const o = { ...DEFAULTS, seed: null, output: null, open: true };
+// The size to work at for a picture of w×h: its shape, the long side `side`,
+// in multiples of 32.
+function fitSize(w, h, side) {
+  const r32 = (v) => Math.max(256, Math.round(v / 32) * 32);
+  return w >= h ? { width: r32(side), height: r32((side * h) / w) } : { width: r32((side * w) / h), height: r32(side) };
+}
+
+// A picture of yours, ready to edit: a PNG copy in a scratch folder (sips
+// reads JPEG, HEIC, TIFF…, and shrinks big photos), never the file itself.
+// → { file, source, width, height } or { error }.
+function prepare(file, cwd = process.cwd()) {
+  const source = path.resolve(cwd, String(file).replace(/^~(?=\/|$)/, os.homedir()));
+  let st;
+  try { st = fs.statSync(source); } catch { return { error: `there’s no ${file}` }; }
+  if (!st.isFile()) return { error: `${file} isn’t a picture` };
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sage-input-')), 'picture.png');
+  const sips = (...args) => spawnSync('sips', args, { encoding: 'utf8' }).status === 0 && fs.existsSync(out);
+  if (!sips('-s', 'format', 'png', source, '--out', out)) return { error: `${file} isn’t a picture Sage can read` };
+  const dims = () => { const h = fs.readFileSync(out).subarray(0, 24); return [h.readUInt32BE(16), h.readUInt32BE(20)]; };
+  let [width, height] = dims();
+  if (Math.max(width, height) > 1536 && sips('-Z', '1536', out)) [width, height] = dims(); // only ever smaller
+  return { file: out, source, width, height };
+}
+
+// Text that is just a path to a picture — what a terminal pastes when a
+// file is dragged in: /a/b\ c.png, '/a/b c.png' or "…" — or null.
+function droppedPath(text, cwd = process.cwd()) {
+  let t = String(text).trim();
+  const q = /^(['"])(.*)\1$/.exec(t);
+  t = q ? q[2] : t.replace(/\\(.)/g, '$1');
+  if (!/\.(png|jpe?g|heic|heif|webp|gif|tiff?|bmp)$/i.test(t)) return null;
+  const full = path.resolve(cwd, t.replace(/^~(?=\/|$)/, os.homedir()));
+  return fs.existsSync(full) ? full : null;
+}
+
+// sage image's options: { prompt, width, height, steps, seed, output, open, images } or { error }.
+// With `chat`, no prompt is fine (it opens image chat).
+function parseArgs(args, { chat = false } = {}) {
+  const o = { ...DEFAULTS, seed: null, output: null, open: true, images: [], sized: false };
   const words = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -56,14 +93,16 @@ function parseArgs(args) {
       if (!m) return { error: 'size is WIDTHxHEIGHT, e.g. 1024x768' };
       o.width = Number(m[1]);
       o.height = Number(m[2] || m[1]);
-    } else if (a === '--steps') o.steps = Number(next());
+      o.sized = !!m[2]; // WxH is exact; one number is the long side when editing
+    } else if (a === '--edit' || a === '-e') o.images.push(next() || '');
+    else if (a === '--steps') o.steps = Number(next());
     else if (a === '--seed') o.seed = Number(next());
     else if (a === '-o' || a === '--output') o.output = next();
     else if (a === '--no-open') o.open = false;
     else words.push(a);
   }
   o.prompt = words.join(' ').trim();
-  if (!o.prompt) return { error: 'say what to draw: sage image "a red panda reading under a cherry tree"' };
+  if (!o.prompt && !chat) return { error: 'say what to draw: sage image "a red panda reading under a cherry tree"' };
   for (const k of ['width', 'height']) {
     if (!(o[k] >= 256 && o[k] <= 2048)) return { error: 'sizes go from 256 to 2048' };
     o[k] = Math.round(o[k] / 32) * 32; // the model works in multiples of 32
@@ -165,7 +204,10 @@ function setup(write, err) {
 const HELP = `sage image — pictures from a prompt, made on your Mac
   sage image                     image chat: describe a picture, then say how to change it
   sage image <prompt>            a ${DEFAULTS.width}×${DEFAULTS.height} PNG here, opened in Preview
-  sage image --size 1024x768 …   another size (256–2048, multiples of 32)
+  sage image --edit photo.jpg    image chat, starting from your picture
+  sage image --edit photo.jpg <prompt>   change your picture (it's kept; the result is a new file)
+  sage image --size 1024x768 …   another size (256–2048, multiples of 32; --size 512 with
+                                 --edit is the long side, keeping your picture's shape)
   sage image --steps 20 …        more steps: finer, slower (default ${DEFAULTS.steps})
   sage image --seed 7 …          the same seed and prompt make the same picture
   sage image -o name.png …       choose the file name (never over an existing file)
@@ -181,7 +223,17 @@ function runImage(args, io, shell) {
   const err = (s) => shell.writeTo(io.stderr, s);
   if (args[0] === '--setup') return setup(write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
-  if (!args.length) {
+  const o = parseArgs(args, { chat: true });
+  if (o.error) { err(`sage image: ${o.error}\n`); return 1; }
+  if (o.images.length > 1) { err('sage image: one picture at a time\n'); return 1; }
+  let mine = null;
+  if (o.images.length) {
+    mine = prepare(o.images[0], shell.cwd);
+    if (mine.error) { err(`sage image: ${mine.error}\n`); return 1; }
+    o.images = [mine.file];
+    if (!o.sized) Object.assign(o, fitSize(mine.width, mine.height, Math.max(o.width, o.height)));
+  }
+  if (!o.prompt) {
     if (!(process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term')) { write(HELP); return 1; }
     if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
     const sage = require('./sage');
@@ -189,17 +241,16 @@ function runImage(args, io, shell) {
     const free = () => require('./gemma').freeMemory();
     const app = new sage.SageApp({
       mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE,
-      startImage: (o) => new Job(o, shell.cwd, { env: shell.env, free: free() }),
+      startImage: (opts) => new Job(opts, shell.cwd, { env: shell.env, free: free() }),
     });
+    if (mine) app.load(mine);
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
-  const o = parseArgs(args);
-  if (o.error) { err(`sage image: ${o.error}\n`); return 1; }
   if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
   const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd);
   if (fs.existsSync(out)) { err(`sage image: ${o.output} is already there — pick another name\n`); return 1; }
   const muted = theme.style(theme.current().ui.muted);
-  write(`${muted}✦ drawing ${o.width}×${o.height}, ${o.steps} steps — usually a few minutes${ansi.reset()}\n`);
+  write(`${muted}✦ ${mine ? 'editing' : 'drawing'} ${o.width}×${o.height}, ${o.steps} steps — usually a few minutes${ansi.reset()}\n`);
   const began = Date.now();
   const free = require('./gemma').freeMemory();
   const status = shell.runExternal(argv(o, out, free), io, { ...shell.env, PYTHONUNBUFFERED: '1' });
@@ -211,4 +262,4 @@ function runImage(args, io, shell) {
   return 0;
 }
 
-module.exports = { runImage, Job, parseArgs, outputPath, argv, progress, ready, show, dir, DEFAULTS, REPO, HELP };
+module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, progress, ready, show, dir, DEFAULTS, REPO, HELP };

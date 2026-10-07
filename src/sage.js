@@ -121,6 +121,7 @@ class SageApp {
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
     this.picture = null;          // image chat: the latest version, which the next message edits
     this.pictureName = null;      // …and the first prompt, which names every version
+    this.fitted = null;           // a picture of yours: its shape, which edits keep
     this.drawOpts = { width: 768, height: 768, steps: 8 };
     this.mode = mode;
     this.root = root;
@@ -335,6 +336,8 @@ class SageApp {
     if (text.startsWith('/') && this.command(text)) { this.setInput(''); return; }
     if (this.mode === 'image') {
       if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
+      const dropped = require('./sageimage').droppedPath(text, this.root); // a file dragged in
+      if (dropped) { this.setInput(''); this.load(dropped); return; }
       this.history.push(text);
       this.historyAt = -1;
       this.setInput('');
@@ -365,14 +368,30 @@ class SageApp {
         const o = require('./sageimage').parseArgs([`--${cmd}`, arg || '', 'x']);
         if (o.error) { this.note(o.error, 'err'); return true; }
         Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height } : { steps: o.steps });
-        this.note(`From now on: ${this.drawOpts.width}×${this.drawOpts.height}, ${this.drawOpts.steps} steps.`);
+        if (cmd === 'size' && this.fitted) { // your picture keeps its shape unless WxH says otherwise
+          this.fitted = o.sized ? null : require('./sageimage').fitSize(this.fitted.width, this.fitted.height, o.width);
+        }
+        const now = this.fitted || this.drawOpts;
+        this.note(`From now on: ${now.width}×${now.height}, ${this.drawOpts.steps} steps.`);
+        return true;
+      }
+      case 'edit': case 'load': {
+        if (this.mode !== 'image') return false;
+        const file = text.slice(cmd.length + 1).trim();
+        if (!file) { this.note('Say which picture: /edit ~/Desktop/photo.jpg (or drag it in)'); return true; }
+        if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return true; }
+        this.load(require('./sageimage').droppedPath(file, this.root) || file);
         return true;
       }
       case 'open':
-        if (this.picture) require('child_process').spawnSync('open', [this.picture], { stdio: 'ignore' });
+        if (this.picture) {
+          const last = [...this.items].reverse().find((i) => i.type === 'image' && i.out === this.picture);
+          require('child_process').spawnSync('open', [(last && last.source) || this.picture], { stdio: 'ignore' });
+        }
         else this.note('No picture yet.');
         return true;
       case 'help':
+        if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
         this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
@@ -385,6 +404,7 @@ class SageApp {
       if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
       this.picture = null;
       this.pictureName = null;
+      this.fitted = null;
       this.items = [];
       this.changed();
       return;
@@ -424,9 +444,29 @@ class SageApp {
     if (this.drawing()) { this.note('Sage is already drawing — one picture at a time.'); return; }
     const o = img.parseArgs(prompt.split(/\s+/).filter(Boolean));
     if (o.error) { this.note(o.error.replace('sage image', '/image'), 'err'); return; }
+    if (o.images.length) { // /image --edit photo.jpg make it night
+      const p = img.prepare(o.images[0], this.root);
+      if (p.error) { this.note(`Can’t edit that: ${p.error}.`, 'err'); return; }
+      o.images = [p.file];
+      if (!o.sized) Object.assign(o, img.fitSize(p.width, p.height, Math.max(o.width, o.height)));
+    }
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
     this.items.push({ type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
+    this.scroll = 0;
+    this.changed();
+  }
+
+  // Image chat: a picture of yours to change — a file, or one already
+  // prepared by sageimage.prepare ({ file, source, width, height }).
+  load(file) {
+    const img = require('./sageimage');
+    const p = typeof file === 'string' ? img.prepare(file, this.root) : file;
+    if (p.error) { this.note(`Can’t edit that: ${p.error}.`, 'err'); return; }
+    this.picture = p.file;
+    this.pictureName = path.basename(p.source).replace(/\.[^.]+$/, '');
+    this.fitted = img.fitSize(p.width, p.height, Math.max(this.drawOpts.width, this.drawOpts.height));
+    this.items.push({ type: 'image', loaded: true, state: 'done', out: p.file, source: p.source, size: `${this.fitted.width}×${this.fitted.height}` });
     this.scroll = 0;
     this.changed();
   }
@@ -437,7 +477,7 @@ class SageApp {
     const img = require('./sageimage');
     const edit = !!this.picture;
     if (!edit) this.pictureName = text;
-    const o = { ...this.drawOpts, prompt: text, seed: null, open: false, images: edit ? [this.picture] : null };
+    const o = { ...this.drawOpts, ...(edit && this.fitted), prompt: text, seed: null, open: false, images: edit ? [this.picture] : null };
     o.output = path.basename(img.outputPath(this.pictureName, this.root));
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
@@ -649,14 +689,15 @@ function itemLines(item, w, app) {
     } else if (item.state === 'done') detail = `saved ${path.relative(app ? app.root : '', item.out) || item.out} · ${time(item.seconds)}${item.shown === 'preview' ? ' · opened in Preview' : ''}`;
     else if (item.state === 'failed') detail = `didn’t work: ${item.error}`;
     else detail = 'stopped';
-    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}${item.edit ? 'Edit' : 'Image'}${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
-    if (!item.edit) for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
+    if (item.loaded) detail = `${path.basename(item.source)} · say how to change it`;
+    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}${item.loaded ? 'Your picture' : item.edit ? 'Edit' : 'Image'}${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
+    if (!item.edit && !item.loaded) for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
     const fitted = lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
     if (item.state === 'done' && app && app.mode === 'image') {
       // the picture itself, in half blocks; click it to open it in Preview
       const cols = Math.max(8, Math.min(w - 2, 48));
       const thumb = require('./png').thumbnailFile(item.out, cols);
-      for (const l of thumb) fitted.push({ s: `  ${l}`, hits: [{ x0: 2, x1: 2 + cols, action: 'open', file: item.out }] });
+      for (const l of thumb) fitted.push({ s: `  ${l}`, hits: [{ x0: 2, x1: 2 + cols, action: 'open', file: item.source || item.out }] });
     }
     return fitted;
   }
@@ -723,7 +764,8 @@ function welcome(app, w) {
   out.push({ s: '' });
   const lines = app.mode === 'image'
     ? ['Sage Image: describe a picture, then change it by talking to it —', '“make it night”, “add a red umbrella”, “now in watercolour”.',
-      `Each version is saved in ${tildify(app.root)}; /new starts a new picture.`]
+      `Each version is saved in ${tildify(app.root)}; /new starts a new picture.`,
+      'To change a picture of yours, drag it in here or type /edit photo.jpg.']
     : app.mode === 'code'
     ? ['Sage Code: your AI pair programmer, on your Mac.', `It reads, writes and edits files and runs commands in ${tildify(app.root)}.`,
       'Every change and command is shown and asked first;', 'replaced files go to the Trash, never lost.']
@@ -826,7 +868,7 @@ function render(app, cols, rows, now = Date.now()) {
   box.push(`${frame}╰${'─'.repeat(W - 2)}╯${RESET()}`);
   const keysHelp = app.approval ? `y yes${app.approval.item.risky ? '' : ' · a yes to all'} · n no (Esc) · ^C stop`
     : app.busy ? '^C stop · PgUp/PgDn scroll'
-      : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /new new picture · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
+      : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /edit file · /new · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
         : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
 

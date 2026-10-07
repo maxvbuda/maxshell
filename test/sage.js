@@ -596,6 +596,84 @@ test('image chat: the first message draws, each one after edits the latest pictu
   fs.rmSync(root, { recursive: true });
 });
 
+test('image chat: a picture of yours, dragged in or by /edit, is what edits change', () => {
+  const { IDLE } = require('../src/sage');
+  const img = require('../src/sageimage');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-mine-'));
+  const PNG = makePng();
+  fs.writeFileSync(path.join(root, 'my photo.png'), PNG);
+  fs.writeFileSync(path.join(root, 'notes.txt'), 'hi');
+  // shape and dropped paths
+  assert.deepStrictEqual(img.fitSize(4000, 3000, 768), { width: 768, height: 576 });
+  assert.deepStrictEqual(img.fitSize(1080, 1920, 512), { width: 288, height: 512 });
+  assert.strictEqual(img.droppedPath(`${root}/my\\ photo.png`), path.join(root, 'my photo.png'));
+  assert.strictEqual(img.droppedPath(`'${root}/my photo.png'`), path.join(root, 'my photo.png'));
+  assert.strictEqual(img.droppedPath('my photo.png', root), path.join(root, 'my photo.png'));
+  assert.strictEqual(img.droppedPath('a fox in the snow'), null);
+  assert.strictEqual(img.droppedPath(path.join(root, 'notes.txt')), null);
+  const p = img.prepare('my photo.png', root);
+  assert.deepStrictEqual([p.width, p.height, p.source], [2, 2, path.join(root, 'my photo.png')]);
+  assert.notStrictEqual(p.file, p.source); // a copy: the original is never touched
+  assert.match(img.prepare('nope.jpg', root).error, /no nope\.jpg/);
+  assert.match(img.prepare('notes.txt', root).error, /can read/);
+  const o = img.parseArgs(['--edit', 'a.jpg', 'make', 'it', 'night']);
+  assert.deepStrictEqual([o.images, o.prompt, o.sized], [['a.jpg'], 'make it night', false]);
+  assert.strictEqual(img.parseArgs(['--edit', 'a.jpg'], { chat: true }).prompt, '');
+  // the app
+  const started = [];
+  const startImage = (opts) => {
+    const out = path.join(root, opts.output);
+    started.push(opts);
+    return { out, poll: () => { fs.writeFileSync(out, PNG); return { state: 'done', step: 1, total: 1 }; }, stop() {}, cleanup() {} };
+  };
+  const a = new SageApp({ mode: 'image', root, model: 'image', models: [], start: () => IDLE, startImage });
+  assert.match(text(render(a, 90, 30, 0)), /drag it in here or type \/edit/);
+  a.setInput(`${root}/my\\ photo.png`); // what a terminal pastes when it's dragged in
+  a.submit();
+  assert.strictEqual(started.length, 0);
+  let r = render(a, 90, 40, 0);
+  assert.match(text(r), /● Your picture 768×768 .*my photo\.png · say how to change it/);
+  assert.ok(r.hits.some((h) => h.action === 'open' && h.file === path.join(root, 'my photo.png')));
+  a.setInput('make it night');
+  a.submit();
+  assert.deepStrictEqual([started[0].images, started[0].output], [[a.items[0].out], 'sage-my-photo.png']);
+  a.tick();
+  assert.strictEqual(a.picture, path.join(root, 'sage-my-photo.png'));
+  assert.strictEqual(fs.readFileSync(path.join(root, 'my photo.png')).equals(PNG), true);
+  for (const [c, rr] of [[90, 30], [40, 14], [24, 10]]) fits(render(a, c, rr, 0), c);
+  a.fitted = img.fitSize(1600, 1200, 768);
+  a.setInput('/size 512'); // the long side: the picture keeps its shape
+  a.submit();
+  assert.deepStrictEqual(a.fitted, { width: 512, height: 384 });
+  a.setInput('/size 640x640');
+  a.submit();
+  assert.strictEqual(a.fitted, null);
+  a.setInput('/edit nope.jpg');
+  a.submit();
+  assert.match(a.items[a.items.length - 1].text, /Can’t edit that: there’s no nope\.jpg/);
+  a.setInput('/edit');
+  a.submit();
+  assert.match(a.items[a.items.length - 1].text, /drag it in/);
+  fs.rmSync(root, { recursive: true });
+});
+
+test('sage image --edit changes a picture of yours from the shell', () => {
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
+  for (const p of ['transformer', 'text_encoder', 'vae']) fs.mkdirSync(path.join(gem, 'image', p), { recursive: true });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-work-'));
+  fs.writeFileSync(path.join(work, 'cat.png'), makePng());
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_IMAGE_BIN: path.join(__dirname, 'fake-mflux.js'), MAXSHELL_SAGE_FREE: '80' };
+  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage image --edit cat.png --steps 2 give it a hat`], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /editing 768×768.*saved sage-give-it-a-hat\.png/s);
+  const bad = spawnSync('node', [sh, '-c', `cd ${work} && sage image --edit missing.jpg a hat`], { env, encoding: 'utf8' });
+  assert.strictEqual(bad.status, 1);
+  assert.match(bad.stderr, /there’s no missing\.jpg/);
+  fs.rmSync(gem, { recursive: true });
+  fs.rmSync(work, { recursive: true });
+});
+
 test('png: decodes a PNG and draws it in half blocks', () => {
   const png = require('../src/png');
   const PNG = makePng();

@@ -1127,6 +1127,16 @@ Editing reads the picture as well as your words, so it's slower than
 drawing: here, at 512×512 a picture took about a minute and a change about
 two; at 768×768 a change took about 11 minutes — `/size 512` keeps a
 conversation moving.
+
+**Edit a picture of your own.** In image chat, drag a photo into the
+terminal (or type `/edit ~/Desktop/photo.jpg`) and say how to change it;
+`sage image --edit photo.jpg` opens image chat with it, and
+`sage image --edit photo.jpg "make it night"` does one change from the
+shell. JPEG, HEIC, PNG, TIFF, WebP… all work (macOS's `sips` makes a PNG
+copy, shrunk to 1536 pixels at most), your file is never touched, and the
+edits keep its shape — the long side at the current size (768 by default),
+the other in proportion. Results are saved here as `sage-photo.png`,
+`sage-photo-2.png`…
 Qwen-Image 2.1 is under the **Qwen Research License** — research and
 evaluation, **not commercial use**; Qwen says the images you make are yours.
 
