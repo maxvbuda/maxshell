@@ -1114,6 +1114,19 @@ conversation while you keep chatting; ^C stops it. On an M3 a picture takes abou
 768×768, and about 10 GB of memory (with less than 35% free, mflux's
 low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
+
+**Talk to a picture to change it.** `sage image` on its own opens image
+chat, full screen: describe a picture, and once it's drawn — shown right in
+the conversation in coloured half blocks (click it to open it in Preview) —
+say how to change it: "make it night", "add a red umbrella", "now as a
+watercolour". Each message edits the latest version, keeping the rest of the
+picture, and every version is saved (`sage-a-cabin-in-the-snow.png`, then
+`-2`, `-3`…). `/new` starts a new picture, `/size 512` and `/steps 20` change
+what comes next, `/open` opens the latest in Preview, ^C stops a drawing.
+Editing reads the picture as well as your words, so it's slower than
+drawing: here, at 512×512 a picture took about a minute and a change about
+two; at 768×768 a change took about 11 minutes — `/size 512` keeps a
+conversation moving.
 Qwen-Image 2.1 is under the **Qwen Research License** — research and
 evaluation, **not commercial use**; Qwen says the images you make are yours.
 

@@ -110,12 +110,18 @@ class Engine {
   }
 }
 
+// No model to talk to: image chat only draws.
+const IDLE = { send() {}, poll: () => [], close() {}, interrupt() {}, errors: () => '' };
+
 // --- the app ------------------------------------------------------------------------
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
   constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null }) {
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
+    this.picture = null;          // image chat: the latest version, which the next message edits
+    this.pictureName = null;      // …and the first prompt, which names every version
+    this.drawOpts = { width: 768, height: 768, steps: 8 };
     this.mode = mode;
     this.root = root;
     this.models = models;
@@ -145,6 +151,7 @@ class SageApp {
 
   useModel(key) {
     this.model = key;
+    if (this.mode === 'image') { this.engine = IDLE; this.status = 'ready'; this.changed(); return; }
     this.status = 'loading';
     this.loadStarted = Date.now();
     this.engine = this.start(key, this.mode);
@@ -326,6 +333,15 @@ class SageApp {
     const text = this.input.trim();
     if (!text) return;
     if (text.startsWith('/') && this.command(text)) { this.setInput(''); return; }
+    if (this.mode === 'image') {
+      if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
+      this.history.push(text);
+      this.historyAt = -1;
+      this.setInput('');
+      this.items.push({ type: 'user', text });
+      this.draw(text);
+      return;
+    }
     if (this.status === 'loading') { this.pendingAsk = text; this.items.push({ type: 'user', text, queued: true }); this.setInput(''); return; }
     if (this.busy) { this.note('Sage is still answering — ^C stops it.'); return; }
     if (this.status === 'error') { this.note('Sage isn’t running — pick a model above (^O) to start it again.', 'err'); return; }
@@ -344,6 +360,18 @@ class SageApp {
         return true;
       case 'exit': case 'quit': case 'bye': this.done = true; return true;
       case 'image': case 'draw': this.image(text.slice(cmd.length + 1).trim()); return true;
+      case 'size': case 'steps': {
+        if (this.mode !== 'image') return false;
+        const o = require('./sageimage').parseArgs([`--${cmd}`, arg || '', 'x']);
+        if (o.error) { this.note(o.error, 'err'); return true; }
+        Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height } : { steps: o.steps });
+        this.note(`From now on: ${this.drawOpts.width}×${this.drawOpts.height}, ${this.drawOpts.steps} steps.`);
+        return true;
+      }
+      case 'open':
+        if (this.picture) require('child_process').spawnSync('open', [this.picture], { stdio: 'ignore' });
+        else this.note('No picture yet.');
+        return true;
       case 'help':
         this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
@@ -353,6 +381,14 @@ class SageApp {
 
   newChat() {
     if (this.busy) { this.note('Sage is still answering — ^C stops it.'); return; }
+    if (this.mode === 'image') {
+      if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
+      this.picture = null;
+      this.pictureName = null;
+      this.items = [];
+      this.changed();
+      return;
+    }
     this.items = [];
     this.allowAll = false;
     this.scroll = 0;
@@ -376,6 +412,7 @@ class SageApp {
   }
 
   openMenu() {
+    if (this.mode === 'image') return; // one image model: nothing to pick
     this.menu = { index: Math.max(0, this.models.findIndex((m) => m.key === this.model)) };
     this.changed();
   }
@@ -390,6 +427,21 @@ class SageApp {
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
     this.items.push({ type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
+    this.scroll = 0;
+    this.changed();
+  }
+
+  // Image chat: the first message draws; each one after edits the latest picture.
+  draw(text) {
+    if (!this.startImage) { this.note('Sage can’t draw yet — set it up in the shell: sage image --setup', 'err'); return; }
+    const img = require('./sageimage');
+    const edit = !!this.picture;
+    if (!edit) this.pictureName = text;
+    const o = { ...this.drawOpts, prompt: text, seed: null, open: false, images: edit ? [this.picture] : null };
+    o.output = path.basename(img.outputPath(this.pictureName, this.root));
+    let job;
+    try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
+    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
     this.scroll = 0;
     this.changed();
   }
@@ -409,7 +461,8 @@ class SageApp {
       item.out = item.job.out;
       item.error = p.error;
       item.job.cleanup();
-      if (p.state === 'done') item.shown = require('./sageimage').show(item.out, () => {});
+      if (p.state === 'done' && this.mode === 'image') this.picture = item.out; // the next message edits this
+      else if (p.state === 'done') item.shown = require('./sageimage').show(item.out, () => {});
     }
     item.v = (item.v || 0) + 1;
     this.changed();
@@ -508,10 +561,12 @@ class SageApp {
     if (k.button === 64) { this.scroll += 3; this.changed(); return; }
     if (k.button === 65) { this.scroll = Math.max(0, this.scroll - 3); this.changed(); return; }
     if (k.release || k.button !== 0) return;
+    if (hit && hit.action === 'menu' && this.mode === 'image') return; // nothing to pick
     if (hit && hit.action === 'menu') { if (this.menu) { this.menu = null; this.changed(); } else this.openMenu(); return; }
     if (hit && hit.action === 'model') { this.switchModel(hit.key); return; }
     if (hit && hit.action === 'answer') { this.answer(hit.choice); return; }
     if (hit && hit.action === 'try') { this.setInput(hit.text); return; }
+    if (hit && hit.action === 'open') { require('child_process').spawnSync('open', [hit.file], { stdio: 'ignore' }); return; }
     if (this.menu) { this.menu = null; this.changed(); }
   }
 
@@ -594,9 +649,16 @@ function itemLines(item, w, app) {
     } else if (item.state === 'done') detail = `saved ${path.relative(app ? app.root : '', item.out) || item.out} · ${time(item.seconds)}${item.shown === 'preview' ? ' · opened in Preview' : ''}`;
     else if (item.state === 'failed') detail = `didn’t work: ${item.error}`;
     else detail = 'stopped';
-    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}Image${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
-    for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
-    return lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
+    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}${item.edit ? 'Edit' : 'Image'}${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
+    if (!item.edit) for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
+    const fitted = lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
+    if (item.state === 'done' && app && app.mode === 'image') {
+      // the picture itself, in half blocks; click it to open it in Preview
+      const cols = Math.max(8, Math.min(w - 2, 48));
+      const thumb = require('./png').thumbnailFile(item.out, cols);
+      for (const l of thumb) fitted.push({ s: `  ${l}`, hits: [{ x0: 2, x1: 2 + cols, action: 'open', file: item.out }] });
+    }
+    return fitted;
   }
   // a tool
   const dot = { ok: theme.fg('ok'), fail: theme.fg('err'), ask: theme.fg('warn'), running: theme.fg('accent'), declined: muted }[item.state] || muted;
@@ -659,13 +721,18 @@ function welcome(app, w) {
   const logo = w >= 30 ? '✦  S  A  G  E' : '✦ SAGE';
   out.push(center(logo, `${ansi.bold()}${theme.gradientText(logo)}${RESET()}`));
   out.push({ s: '' });
-  const lines = app.mode === 'code'
+  const lines = app.mode === 'image'
+    ? ['Sage Image: describe a picture, then change it by talking to it —', '“make it night”, “add a red umbrella”, “now in watercolour”.',
+      `Each version is saved in ${tildify(app.root)}; /new starts a new picture.`]
+    : app.mode === 'code'
     ? ['Sage Code: your AI pair programmer, on your Mac.', `It reads, writes and edits files and runs commands in ${tildify(app.root)}.`,
       'Every change and command is shown and asked first;', 'replaced files go to the Trash, never lost.']
     : ['An AI that runs entirely on your Mac.', 'Private · offline · no account · no API key.'];
   for (const l of lines) for (const part of wrap(l, w)) out.push(center(part, `${part}`));
   out.push({ s: '' });
-  const tries = app.mode === 'code'
+  const tries = app.mode === 'image'
+    ? ['a cozy cabin in a snowy forest at night, warm light', 'a red panda reading under a cherry tree, watercolor', 'a retro poster of a rocket over Mars']
+    : app.mode === 'code'
     ? ['add a --verbose flag to main.py', 'why does test_parser fail? fix it', 'write a README for this project']
     : ['explain what a closure is, with an example', 'solve x² − 5x + 6 = 0 step by step', 'write a haiku about the terminal'];
   if (app.notice) {
@@ -694,14 +761,14 @@ function render(app, cols, rows, now = Date.now()) {
   const barBg = theme.bg(ui.bar.bg);
   const barFg = ansi.fg(ui.bar.fg);
   const info = MODEL_INFO[app.model] || { label: app.model };
-  const drop = ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
+  const drop = app.mode === 'image' ? ' ◆ Sage Image ' : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
     loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} drawing ${app.drawing().step}/${app.drawing().total}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
     thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';
-  const pill = app.mode === 'code' ? ' code ' : ' chat ';
+  const pill = ` ${app.mode} `;
   const left = `${brand} ${pill}`;
   const dropW = tui.textWidth(drop);
   const room = W - tui.textWidth(left) - dropW;
@@ -719,7 +786,8 @@ function render(app, cols, rows, now = Date.now()) {
 
   // input box
   const inner = Math.max(4, W - 6);
-  const prompt = app.approval ? 'answer above: y / a / n' : app.mode === 'code' ? 'Tell Sage what to build or fix…' : 'Ask Sage anything…';
+  const prompt = app.approval ? 'answer above: y / a / n' : app.mode === 'code' ? 'Tell Sage what to build or fix…'
+    : app.mode === 'image' ? (app.picture ? 'Say how to change it…' : 'Describe a picture…') : 'Ask Sage anything…';
   const inputRows = [];
   let cursor = null;
   {
@@ -758,7 +826,8 @@ function render(app, cols, rows, now = Date.now()) {
   box.push(`${frame}╰${'─'.repeat(W - 2)}╯${RESET()}`);
   const keysHelp = app.approval ? `y yes${app.approval.item.risky ? '' : ' · a yes to all'} · n no (Esc) · ^C stop`
     : app.busy ? '^C stop · PgUp/PgDn scroll'
-      : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
+      : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /new new picture · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
+        : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
 
   // transcript
@@ -865,4 +934,4 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
   return 0;
 }
 
-module.exports = { Engine, SageApp, render, wrap, itemLines, loop, MODEL_INFO };
+module.exports = { IDLE, Engine, SageApp, render, wrap, itemLines, loop, MODEL_INFO };

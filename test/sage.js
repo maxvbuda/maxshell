@@ -25,6 +25,24 @@ function test(name, fn) {
   }
 }
 
+// A 2×2 RGB PNG: red, green / blue, white.
+function makePng() {
+  const zlib = require('zlib');
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type), data])) >>> 0);
+    return Buffer.concat([len, Buffer.from(type), data, crc]);
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(2, 0);
+  head.writeUInt32BE(2, 4);
+  head.set([8, 2, 0, 0, 0], 8);
+  const raw = Buffer.from([0, 255, 0, 0, 0, 255, 0, 0, 0, 0, 255, 255, 255, 255]);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
 function project() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-test-'));
   process.env.MAXSHELL_TRASH = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-trash-'));
@@ -530,6 +548,67 @@ test('Sage Ultra is for sage code only', () => {
   a.submit();
   assert.strictEqual(a.model, 'e4b');
   assert.match(a.items[a.items.length - 1].text, /it’s in sage code/);
+});
+
+test('image chat: the first message draws, each one after edits the latest picture', () => {
+  const { IDLE } = require('../src/sage');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-imgchat-'));
+  const PNG = makePng();
+  const started = [];
+  const startImage = (o) => {
+    const out = path.join(root, o.output);
+    started.push({ ...o, out });
+    return { out, poll: () => { fs.writeFileSync(out, PNG); return { state: 'done', step: o.steps, total: o.steps }; }, stop() {}, cleanup() {} };
+  };
+  const a = new SageApp({ mode: 'image', root, model: 'image', models: [], start: () => IDLE, startImage });
+  assert.strictEqual(a.status, 'ready');
+  let r = render(a, 90, 26, 0);
+  assert.match(text(r), /change it by talking to it/);
+  assert.match(text(r).split('\n')[0], /✦ Sage {2}image .*◆ Sage Image/);
+  assert.match(text(r), /Describe a picture…/);
+  a.setInput('a fox in the snow');
+  a.submit();
+  assert.deepStrictEqual([started[0].prompt, started[0].images, started[0].output], ['a fox in the snow', null, 'sage-a-fox-in-the-snow.png']);
+  a.tick();
+  assert.strictEqual(a.picture, path.join(root, 'sage-a-fox-in-the-snow.png'));
+  r = render(a, 90, 40, 0);
+  assert.match(text(r), /● Image 768×768 {2}saved sage-a-fox-in-the-snow\.png/);
+  assert.match(text(r), /▀/); // the picture, in half blocks
+  assert.ok(r.hits.some((h) => h.action === 'open'));
+  assert.match(text(r), /Say how to change it…/);
+  a.setInput('make it night');
+  a.submit();
+  assert.deepStrictEqual([started[1].prompt, started[1].images, started[1].output], ['make it night', [path.join(root, 'sage-a-fox-in-the-snow.png')], 'sage-a-fox-in-the-snow-2.png']);
+  a.tick();
+  assert.strictEqual(a.picture, path.join(root, 'sage-a-fox-in-the-snow-2.png'));
+  assert.match(text(render(a, 90, 60, 0)), /● Edit 768×768 {2}saved sage-a-fox-in-the-snow-2\.png/);
+  for (const [c, rr] of [[90, 30], [40, 14], [24, 10]]) fits(render(a, c, rr, 0), c);
+  a.setInput('/size 512');
+  a.submit();
+  a.setInput('/new');
+  a.submit();
+  assert.strictEqual(a.picture, null);
+  a.setInput('a boat');
+  a.submit();
+  assert.deepStrictEqual([started[2].width, started[2].images], [512, null]);
+  a.key({ name: 'o', ctrl: true });
+  assert.strictEqual(a.menu, null);
+  fs.rmSync(root, { recursive: true });
+});
+
+test('png: decodes a PNG and draws it in half blocks', () => {
+  const png = require('../src/png');
+  const PNG = makePng();
+  const img = png.decode(PNG);
+  assert.deepStrictEqual([img.width, img.height], [2, 2]);
+  const t = png.thumbnail(img, 2, { truecolor: true });
+  assert.strictEqual(t.length, 1);
+  assert.strictEqual(ansi.width(t[0]), 2);
+  assert.deepStrictEqual([...img.rgb], [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]);
+  assert.strictEqual(t[0], '\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m▀\x1b[38;2;0;255;0m\x1b[48;2;255;255;255m▀\x1b[0m'); // red over blue, green over white
+  assert.strictEqual(png.to256([255, 0, 0]), 196);
+  assert.strictEqual(png.to256([128, 128, 128]), 244);
+  assert.throws(() => png.decode(Buffer.from('nope')));
 });
 
 if (failures) {

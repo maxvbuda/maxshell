@@ -10,7 +10,10 @@
 // evaluation, not commercial use. The images you make are yours.
 //
 // Job runs a generation as a separate process and reads its progress from a
-// file, so the Sage app can show it while you keep chatting.
+// file, so the Sage app can show it while you keep chatting. `sage image`
+// with no prompt opens the app for image chat: describe a picture, then say
+// how to change it — each message edits the latest version (the edit
+// pipeline, given that picture), and every version is kept.
 
 const fs = require('fs');
 const os = require('os');
@@ -76,6 +79,7 @@ function argv(o, out, free = 100) {
   const a = [bin(), '--model', dir(), '--prompt', o.prompt,
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
+  if (o.images && o.images.length) a.push('--image-paths', ...o.images); // edit these
   if (free < NEED_FREE) a.push('--low-ram');
   return a;
 }
@@ -159,6 +163,7 @@ function setup(write, err) {
 }
 
 const HELP = `sage image — pictures from a prompt, made on your Mac
+  sage image                     image chat: describe a picture, then say how to change it
   sage image <prompt>            a ${DEFAULTS.width}×${DEFAULTS.height} PNG here, opened in Preview
   sage image --size 1024x768 …   another size (256–2048, multiples of 32)
   sage image --steps 20 …        more steps: finer, slower (default ${DEFAULTS.steps})
@@ -175,7 +180,19 @@ function runImage(args, io, shell) {
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
   if (args[0] === '--setup') return setup(write, err);
-  if (args[0] === '--help' || args[0] === '-h' || !args.length) { write(HELP); return args.length ? 0 : 1; }
+  if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
+  if (!args.length) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term')) { write(HELP); return 1; }
+    if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
+    const sage = require('./sage');
+    const tui = require('./tui');
+    const free = () => require('./gemma').freeMemory();
+    const app = new sage.SageApp({
+      mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE,
+      startImage: (o) => new Job(o, shell.cwd, { env: shell.env, free: free() }),
+    });
+    return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
+  }
   const o = parseArgs(args);
   if (o.error) { err(`sage image: ${o.error}\n`); return 1; }
   if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
