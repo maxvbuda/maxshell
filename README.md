@@ -1107,13 +1107,12 @@ saved as a PNG in the current folder, named after the prompt
 (`sage-a-lighthouse-at-dusk-oil-painting.png`) — never over a file that's
 there — and opened in Preview (shown inline in iTerm2 and WezTerm).
 `--size 1024x768` (256–2048, in multiples of 32; 768×768 by default),
-`--steps 40` (finer and slower; 20 by default), `--seed 7` (the same seed and
+`--steps 20` (finer and slower; 8 by default, which already looks finished), `--seed 7` (the same seed and
 prompt make the same picture), `-o name.png`, `--no-open`. In the Sage app,
 `/image <prompt>` draws in the background with a progress bar in the
-conversation while you keep chatting; ^C stops it. A picture takes a few
-minutes and about 6–10 GB of memory (with less than 35% free, mflux's
-low-RAM mode is used). `sage image --setup` installs mflux 0.20 (the version the 4-bit build was
-made with) and downloads
+conversation while you keep chatting; ^C stops it. On an M3 a picture takes about 1½ minutes at 512×512 and 3½ minutes at
+768×768, and about 10 GB of memory (with less than 35% free, mflux's
+low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
 Qwen-Image 2.1 is under the **Qwen Research License** — research and
 evaluation, **not commercial use**; Qwen says the images you make are yours.

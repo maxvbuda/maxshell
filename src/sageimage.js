@@ -18,16 +18,19 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const REPO = 'OsaurusAI/Qwen-Image-2.1-mflux-4bit';
-const MFLUX = '0.20.0';
+const MFLUX = '0.21.0';
 const SIZE = '10.6 GB';
 const PARTS = ['transformer', 'text_encoder', 'vae'];
-const DEFAULTS = { width: 768, height: 768, steps: 20 };
+// 8 steps already look finished; on an M3 a step takes ~9 s at 512² and ~20 s at 768².
+const DEFAULTS = { width: 768, height: 768, steps: 8 };
 const NEED_FREE = 35; // % of memory free; below it, mflux's low-RAM mode
 
 const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxshell', 'gemma');
 const dir = () => path.join(base(), 'image');
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
-const bin = () => process.env.MAXSHELL_IMAGE_BIN || path.join(path.dirname(python()), 'mflux-generate-qwen-2.1');
+// The edit pipeline: it also does plain text-to-image, and it's the one this
+// build is made for (the plain qwen-2.1 pipeline makes only noise with it).
+const bin = () => process.env.MAXSHELL_IMAGE_BIN || path.join(path.dirname(python()), 'mflux-generate-qwen-2.1-edit');
 const ready = () => fs.existsSync(bin()) && PARTS.every((p) => fs.existsSync(path.join(dir(), p)));
 
 // "a red panda, reading!" → sage-a-red-panda-reading.png, or -2, -3… if taken.
@@ -70,7 +73,7 @@ function parseArgs(args) {
 // The mflux command line for a picture.
 function argv(o, out, free = 100) {
   const seed = o.seed ?? Math.floor(Math.random() * 1e9);
-  const a = [bin(), '--model', dir(), '--base-model', 'qwen-image-2.1', '--prompt', o.prompt,
+  const a = [bin(), '--model', dir(), '--prompt', o.prompt,
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
   if (free < NEED_FREE) a.push('--low-ram');
@@ -144,7 +147,7 @@ class Job {
 function setup(write, err) {
   const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { stdio: 'inherit', ...opts }).status === 0;
   if (!fs.existsSync(python())) { err('sage image: set Sage up first: sage --setup\n'); return 1; }
-  // The 4-bit build was made with mflux 0.20; 0.21 reads its decoder differently.
+  // The build runs on mflux 0.21's qwen-2.1-edit pipeline.
   write(`Installing mflux ${MFLUX}…\n`);
   if (!run(python(), ['-m', 'pip', 'install', '-q', `mflux==${MFLUX}`])) { err('sage image: pip install failed\n'); return 1; }
   fs.mkdirSync(dir(), { recursive: true });
@@ -158,7 +161,7 @@ function setup(write, err) {
 const HELP = `sage image — pictures from a prompt, made on your Mac
   sage image <prompt>            a ${DEFAULTS.width}×${DEFAULTS.height} PNG here, opened in Preview
   sage image --size 1024x768 …   another size (256–2048, multiples of 32)
-  sage image --steps 40 …        more steps: finer, slower (default ${DEFAULTS.steps})
+  sage image --steps 20 …        more steps: finer, slower (default ${DEFAULTS.steps})
   sage image --seed 7 …          the same seed and prompt make the same picture
   sage image -o name.png …       choose the file name (never over an existing file)
   sage image --no-open …         don't open it
