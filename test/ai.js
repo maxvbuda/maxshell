@@ -317,7 +317,7 @@ test('sage without its model set up points to sage --setup', () => {
   assert.strictEqual(e2b.status, 1);
   assert.match(e2b.stderr, /Sage Lite.*sage --lite --setup/);
   const { pick, MODELS } = require('../src/gemma');
-  assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'], chosen: true });
+  assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'], chosen: true, flagged: true });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);
   assert.strictEqual(pick(['hi']).model, process.env.MAXSHELL_SAGE_MODEL ? MODELS[process.env.MAXSHELL_SAGE_MODEL] : MODELS.e4b);
   if (was === undefined) delete process.env.MAXSHELL_GEMMA; else process.env.MAXSHELL_GEMMA = was;

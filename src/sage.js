@@ -114,7 +114,8 @@ class Engine {
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null }) {
+    this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
     this.mode = mode;
     this.root = root;
     this.models = models;
@@ -342,8 +343,9 @@ class SageApp {
         if (arg && MODEL_INFO[arg.toLowerCase()]) this.switchModel(arg.toLowerCase()); else this.openMenu();
         return true;
       case 'exit': case 'quit': case 'bye': this.done = true; return true;
+      case 'image': case 'draw': this.image(text.slice(cmd.length + 1).trim()); return true;
       case 'help':
-        this.note(`/new  a fresh conversation  ·  /model [e4b|e2b]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
@@ -361,7 +363,10 @@ class SageApp {
   switchModel(key) {
     this.menu = null;
     const m = this.models.find((x) => x.key === key);
-    if (!m) return;
+    if (!m) {
+      if (key === 'ultra') this.note('Sage Ultra is for coding — it’s in sage code (sage code --ultra).');
+      return;
+    }
     if (key === this.model && this.status !== 'error') { this.changed(); return; }
     if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${MODEL_INFO[key].flag} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
@@ -375,8 +380,52 @@ class SageApp {
     this.changed();
   }
 
+  // /image: draws a picture in the background; the conversation goes on.
+  image(prompt) {
+    const img = require('./sageimage');
+    if (!this.startImage) { this.note('Sage can’t draw yet — set it up in the shell: sage image --setup', 'err'); return; }
+    if (this.drawing()) { this.note('Sage is already drawing — one picture at a time.'); return; }
+    const o = img.parseArgs(prompt.split(/\s+/).filter(Boolean));
+    if (o.error) { this.note(o.error.replace('sage image', '/image'), 'err'); return; }
+    let job;
+    try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
+    this.items.push({ type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
+    this.scroll = 0;
+    this.changed();
+  }
+
+  drawing() { return this.items.find((i) => i.type === 'image' && i.state === 'running') || null; }
+
+  // Checks on a picture being drawn; the loop calls it between keys.
+  tick() {
+    const item = this.drawing();
+    if (!item) return;
+    const p = item.job.poll();
+    if (p.state === 'running' && p.step === item.step && p.total === item.total) return;
+    Object.assign(item, { step: p.step, total: p.total });
+    if (p.state !== 'running') {
+      item.state = p.state;
+      item.seconds = Math.round((Date.now() - item.started) / 1000);
+      item.out = item.job.out;
+      item.error = p.error;
+      item.job.cleanup();
+      if (p.state === 'done') item.shown = require('./sageimage').show(item.out, () => {});
+    }
+    item.v = (item.v || 0) + 1;
+    this.changed();
+  }
+
   interrupt() {
     if (this.menu) { this.menu = null; this.changed(); return; }
+    const drawing = this.drawing();
+    if (drawing && !this.busy && !this.approval) { // ^C stops the picture first
+      drawing.job.stop();
+      drawing.state = 'stopped';
+      drawing.job.cleanup();
+      drawing.v = (drawing.v || 0) + 1;
+      this.changed();
+      return;
+    }
     if (this.approval) this.answer('n');
     if (this.busy) {
       this.status = 'stopping';
@@ -467,6 +516,8 @@ class SageApp {
   }
 
   close() {
+    const drawing = this.drawing();
+    if (drawing) { drawing.job.stop(); drawing.job.cleanup(); }
     this.engine.close();
   }
 }
@@ -530,6 +581,22 @@ function itemLines(item, w, app) {
     md.forEach((l, i) => lines.push({ s: `${i ? '  ' : `${hilite('✦')} `}${l}${RESET()}` }));
     if (!item.done && app && app.status === 'writing') lines[lines.length - 1].s += `${muted}▍${RESET()}`;
     return lines;
+  }
+  if (item.type === 'image') {
+    const color = { running: theme.fg('accent'), done: theme.fg('ok'), failed: theme.fg('err') }[item.state] || muted;
+    const time = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+    let detail;
+    if (item.state === 'running') {
+      const barW = Math.max(4, Math.min(20, w - 30));
+      const f = item.total ? item.step / item.total : 0;
+      const filled = Math.round(f * barW);
+      detail = `${item.step ? `${item.step}/${item.total} ` : 'reading the prompt… '}${theme.fg('accent')}${'━'.repeat(filled)}${muted}${'━'.repeat(barW - filled)}`;
+    } else if (item.state === 'done') detail = `saved ${path.relative(app ? app.root : '', item.out) || item.out} · ${time(item.seconds)}${item.shown === 'preview' ? ' · opened in Preview' : ''}`;
+    else if (item.state === 'failed') detail = `didn’t work: ${item.error}`;
+    else detail = 'stopped';
+    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}Image${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
+    for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
+    return lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
   }
   // a tool
   const dot = { ok: theme.fg('ok'), fail: theme.fg('err'), ask: theme.fg('warn'), running: theme.fg('accent'), declined: muted }[item.state] || muted;
@@ -630,7 +697,7 @@ function render(app, cols, rows, now = Date.now()) {
   const drop = ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
-    loading: `${spin} waking ${info.label}…`, ready: app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
+    loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} drawing ${app.drawing().step}/${app.drawing().total}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
     thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';
@@ -768,7 +835,7 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
   let lastSpin = 0;
   const draw = (force) => {
     const now = Date.now();
-    const spinning = app.status !== 'ready' && app.status !== 'error' && app.status !== 'waiting';
+    const spinning = (app.status !== 'ready' && app.status !== 'error' && app.status !== 'waiting') || !!app.drawing();
     const key = `${app.version}:${output.columns}x${output.rows}`;
     if (!force && key === drawn && !(spinning && now - lastSpin > 90)) return;
     lastSpin = now;
@@ -790,6 +857,7 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
       app.key(k);
     }
     for (const ev of app.engine.poll()) app.onEvent(ev);
+    app.tick();
     if (!app.done) draw(false);
     if (app.toRun) { app.work(); draw(true); }
   }

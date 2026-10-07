@@ -417,6 +417,121 @@ test('without room for E4B, Sage picks E2B unless a model was asked for', () => 
   }
 });
 
+test('sage image: options, file names that never overwrite, progress', () => {
+  const img = require('../src/sageimage');
+  const o = img.parseArgs(['--size', '1000x700', '--steps', '8', '--seed', '7', 'a', 'red', 'panda']);
+  assert.deepStrictEqual([o.prompt, o.width, o.height, o.steps, o.seed], ['a red panda', 992, 704, 8, 7]);
+  assert.match(img.parseArgs([]).error, /say what to draw/);
+  assert.match(img.parseArgs(['--size', 'big', 'x']).error, /WIDTHxHEIGHT/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-img-'));
+  const first = img.outputPath('A red panda, reading!', dir);
+  assert.strictEqual(path.basename(first), 'sage-a-red-panda-reading.png');
+  fs.writeFileSync(first, 'x');
+  assert.strictEqual(path.basename(img.outputPath('A red panda, reading!', dir)), 'sage-a-red-panda-reading-2.png');
+  assert.deepStrictEqual(img.progress(' 35%|███▌ | 7/20 [00:41<01:16]\r 40%|████ | 8/20 [00:47<01:10'), { step: 8, total: 20 });
+  assert.ok(img.argv({ ...o }, '/tmp/x.png', 20).includes('--low-ram'));
+  assert.ok(!img.argv({ ...o }, '/tmp/x.png', 80).includes('--low-ram'));
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('a background image job reports progress, then the saved picture', () => {
+  const img = require('../src/sageimage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-img-'));
+  process.env.MAXSHELL_IMAGE_BIN = path.join(__dirname, 'fake-mflux.js');
+  try {
+    const job = new img.Job(img.parseArgs(['--steps', '5', 'a', 'cat']), dir);
+    let p;
+    for (let i = 0; i < 300; i++) { p = job.poll(); if (p.state !== 'running') break; sleepSync(20); }
+    assert.strictEqual(p.state, 'done');
+    assert.deepStrictEqual([p.step, p.total], [5, 5]);
+    assert.ok(fs.statSync(path.join(dir, 'sage-a-cat.png')).size > 0);
+    job.cleanup();
+    const bad = new img.Job(img.parseArgs(['please', 'fail']), dir);
+    for (let i = 0; i < 300; i++) { p = bad.poll(); if (p.state !== 'running') break; sleepSync(20); }
+    assert.strictEqual(p.state, 'failed');
+    assert.match(p.error, /out of memory/);
+    bad.cleanup();
+  } finally {
+    delete process.env.MAXSHELL_IMAGE_BIN;
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('/image draws in the background while the chat goes on', () => {
+  const polls = [{ state: 'running', step: 0, total: 20 }, { state: 'running', step: 7, total: 20 }, { state: 'done', step: 20, total: 20 }];
+  const job = { out: path.join(os.tmpdir(), 'sage-a-fox.png'), stopped: false, poll: () => polls.shift() || { state: 'done', step: 20, total: 20 }, stop() { this.stopped = true; }, cleanup() {} };
+  process.env.MAXSHELL_IMAGE_NO_OPEN = '1';
+  const a = app({ startImage: () => job });
+  a.onEvent({ ev: 'ready' });
+  a.setInput('/image a fox in the snow');
+  a.submit();
+  assert.ok(a.drawing());
+  a.tick();
+  a.tick();
+  let r = render(a, 90, 24, 0);
+  assert.match(text(r), /● Image 768×768 {2}7\/20 ━+[\s\S]*“a fox in the snow”/);
+  assert.match(text(r).split('\n')[0], /drawing 7\/20/);
+  fits(render(a, 40, 14, 0), 40);
+  a.setInput('/image another');
+  a.submit();
+  assert.match(a.items[a.items.length - 1].text, /one picture at a time/);
+  a.send('meanwhile, a question'); // chatting still works
+  assert.strictEqual(a.status, 'thinking');
+  a.tick();
+  r = render(a, 90, 24, 0);
+  assert.match(text(r), /saved .*sage-a-fox\.png · 0s/);
+  assert.strictEqual(a.drawing(), null);
+  // not set up: says how
+  const b = app();
+  b.setInput('/image x');
+  b.submit();
+  assert.match(b.items[b.items.length - 1].text, /sage image --setup/);
+  // ^C stops a picture being drawn
+  const c = app({ startImage: () => ({ ...job, poll: () => ({ state: 'running', step: 1, total: 20 }) }) });
+  c.onEvent({ ev: 'ready' });
+  c.image('a boat');
+  c.key({ name: 'c', ctrl: true });
+  assert.strictEqual(c.items[0].state, 'stopped');
+  assert.strictEqual(c.done, false);
+  delete process.env.MAXSHELL_IMAGE_NO_OPEN;
+});
+
+test('sage image from the shell saves a PNG here and never overwrites', () => {
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
+  for (const p of ['transformer', 'text_encoder', 'vae']) fs.mkdirSync(path.join(gem, 'image', p), { recursive: true });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-work-'));
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_IMAGE_BIN: path.join(__dirname, 'fake-mflux.js'), MAXSHELL_SAGE_FREE: '80' };
+  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage image --steps 3 a tiny boat`], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /saved sage-a-tiny-boat\.png/);
+  assert.ok(fs.existsSync(path.join(work, 'sage-a-tiny-boat.png')));
+  const again = spawnSync('node', [sh, '-c', `cd ${work} && sage image -o sage-a-tiny-boat.png a tiny boat`], { env, encoding: 'utf8' });
+  assert.strictEqual(again.status, 1);
+  assert.match(again.stderr, /already there/);
+  const help = spawnSync('node', [sh, '-c', 'sage image --help'], { env, encoding: 'utf8' });
+  assert.match(help.stdout, /Research License/);
+  fs.rmSync(gem, { recursive: true });
+  fs.rmSync(work, { recursive: true });
+});
+
+test('Sage Ultra is for sage code only', () => {
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const env = { ...process.env, MAXSHELL_SETUP: '0' };
+  const r = spawnSync('node', [sh, '-c', 'sage --ultra hello'], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /Sage Ultra is for coding — use: sage code --ultra/);
+  const a = app({ models: [{ key: 'e4b', ready: true }, { key: 'e2b', ready: true }] }); // a chat's dropdown
+  a.onEvent({ ev: 'ready' });
+  a.openMenu();
+  assert.ok(!/Ultra/.test(text(render(a, 90, 24, 0))));
+  a.menu = null;
+  a.setInput('/model ultra');
+  a.submit();
+  assert.strictEqual(a.model, 'e4b');
+  assert.match(a.items[a.items.length - 1].text, /it’s in sage code/);
+});
+
 if (failures) {
   console.error(`\n${failures} sage test(s) failed`);
   process.exit(1);

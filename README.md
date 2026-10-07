@@ -1046,8 +1046,8 @@ project with you.
 model and what Sage is doing (waking, thinking, writing, and its speed in
 tokens a second), the conversation, and an input box at the bottom. The
 **model is a dropdown** — click `◆ Sage Pro ▾` (or press **^O**) and pick
-**Sage Ultra**, the best at code, **Sage Pro**, the all-rounder, or
-**Sage Lite**, the fastest; it switches on the spot. A
+**Sage Pro**, the all-rounder, or **Sage Lite**, the fastest (in
+`sage code`, also **Sage Ultra**, the best at code); it switches on the spot. A
 welcome screen offers examples to click. Answers stream in as formatted
 markdown in your theme's colours — headings, **bold**, lists, tables, code
 highlighted like the editor's, and **math**: TeX like
@@ -1100,14 +1100,32 @@ as Sage Lite and says so. While mx training has the GPU, Sage runs on the
 CPU instead (`MAXSHELL_SAGE_DEVICE` picks), which leaves training alone.
 Waking takes 10–30 seconds.
 
+**Sage draws, too.** `sage image "a lighthouse at dusk, oil painting"` makes
+a picture on your Mac with Qwen-Image 2.1, Alibaba's open image model
+(4-bit, run with [mflux](https://github.com/filipstrand/mflux) on MLX). It's
+saved as a PNG in the current folder, named after the prompt
+(`sage-a-lighthouse-at-dusk-oil-painting.png`) — never over a file that's
+there — and opened in Preview (shown inline in iTerm2 and WezTerm).
+`--size 1024x768` (256–2048, in multiples of 32; 768×768 by default),
+`--steps 40` (finer and slower; 20 by default), `--seed 7` (the same seed and
+prompt make the same picture), `-o name.png`, `--no-open`. In the Sage app,
+`/image <prompt>` draws in the background with a progress bar in the
+conversation while you keep chatting; ^C stops it. A picture takes a few
+minutes and about 6–10 GB of memory (with less than 35% free, mflux's
+low-RAM mode is used). `sage image --setup` installs mflux and downloads
+`OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
+Qwen-Image 2.1 is under the **Qwen Research License** — research and
+evaluation, **not commercial use**; Qwen says the images you make are yours.
+
 **Sage Ultra** is a 7-billion-parameter coding model — Alibaba's open
 Qwen2.5-Coder-7B-Instruct, 4-bit, run with Apple's MLX on the GPU (about
 6 GB; it starts with 30% of memory free). It's the strongest at code and,
 on the GPU, the quickest to answer (around 13–16 tokens a second here).
 `sage --ultra --setup` installs `mlx-lm` into Sage's Python and downloads
 `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` (4.3 GB) into
-`~/.maxshell/gemma/ultra`; `sage --ultra` and `sage code --ultra` use it, or
-pick it from the dropdown. It calls Sage Code's tools in its own format — and
+`~/.maxshell/gemma/ultra`; it's for coding, so it's in `sage code` only:
+`sage code --ultra`, or pick it from Sage Code's dropdown (plain `sage`
+chats with Pro or Lite). It calls Sage Code's tools in its own format — and
 sometimes writes a call as a JSON block instead; either way the call is
 taken out of the answer, Sage stops right there, and carries on only once
 the tool has run (and you've said yes), so it can't claim to have done what

@@ -93,7 +93,7 @@ const SUBCOMMANDS = {
   },
 };
 SUBCOMMANDS.pnpm = SUBCOMMANDS.npm;
-SUBCOMMANDS.sage = { code: 'Sage Code: build and fix this project', '--ultra': 'Sage Ultra, the best at code', '--pro': 'Sage Pro, the all-rounder', '--lite': 'Sage Lite, the fastest', '--setup': 'install what Sage needs', '--help': 'what sage can do' };
+SUBCOMMANDS.sage = { code: 'Sage Code: build and fix this project', image: 'draw a picture from a prompt', '--ultra': 'Sage Ultra, the best at code', '--pro': 'Sage Pro, the all-rounder', '--lite': 'Sage Lite, the fastest', '--setup': 'install what Sage needs', '--help': 'what sage can do' };
 SUBCOMMANDS.yarn = { add: 'add a dependency', install: 'install dependencies', run: 'run a script', remove: 'remove a dependency' };
 
 const BRANCH_ARGS = { git: new Set(['checkout', 'switch', 'merge', 'rebase', 'branch', 'diff', 'log']) };

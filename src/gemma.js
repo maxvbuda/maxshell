@@ -48,7 +48,7 @@ function pick(args) {
   if (flag) args = args.slice(1);
   let key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
   key = ALIASES[key] || key;
-  return { model: MODELS[key], key, args, chosen: !!(flag || process.env.MAXSHELL_SAGE_MODEL) };
+  return { model: MODELS[key], key, args, chosen: !!(flag || process.env.MAXSHELL_SAGE_MODEL), flagged: !!flag };
 }
 
 // % of memory free — on a Mac the GPU's memory is the same memory.
@@ -127,9 +127,10 @@ function engineEnv(m, shell) {
 const HELP = `sage — an AI that runs entirely on your Mac
   sage                 chat, full screen (click the model to switch it)
   sage <question>      one answer, printed
+  sage image <prompt>  a picture, made here (sage image --help)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
-  sage --ultra …       use Sage Ultra, the best at code (a 7B coding model)
+  sage code --ultra …  use Sage Ultra, the best at code (a 7B coding model; sage code only)
   sage --lite …        use Sage Lite, twice as fast (MAXSHELL_SAGE_MODEL=lite makes
                        it the default; Sage Pro is, unless memory is short)
   sage --setup         install what it needs (sage --ultra --setup for Sage Ultra,
@@ -142,14 +143,23 @@ function runSage(args, io, shell, name = 'sage') {
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
   let mode = 'chat';
+  if (args[0] === 'image') return require('./sageimage').runImage(args.slice(1), io, shell);
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
-  let { model: m, key, args: rest, chosen } = pick(args);
+  let { model: m, key, args: rest, chosen, flagged } = pick(args);
   if (!m) { err(`${name}: no model ${key} — pro, ultra or lite\n`); return 1; }
   args = rest;
   if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   const flag = m === MODELS[DEFAULT] ? '' : ` --${m.flag}`;
   if (args[0] === '--setup') return setup(m, write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
+  // Sage Ultra is a coding model, for sage code only: asked for by name in a
+  // chat, say so; set as the default, chats use Sage Pro.
+  if (mode === 'chat' && key === 'ultra') {
+    if (flagged) { err(`${name}: Sage Ultra is for coding — use: sage code --ultra\n`); return 1; }
+    key = DEFAULT;
+    m = MODELS[key];
+    chosen = false;
+  }
   const auto = fallback(key, chosen);
   if (auto.key !== key) { key = auto.key; m = MODELS[key]; }
   if (!ready(m)) { err(`${name}: ${m.label} isn’t set up — run: sage${flag} --setup\n`); return 1; }
@@ -159,14 +169,16 @@ function runSage(args, io, shell, name = 'sage') {
   if (tty && (mode === 'code' || !args.length)) {
     const sage = require('./sage');
     const tui = require('./tui');
-    const keys = ['ultra', 'e4b', 'e2b']; // the dropdown, best first
+    const keys = mode === 'code' ? ['ultra', 'e4b', 'e2b'] : ['e4b', 'e2b']; // the dropdown, best first; Ultra codes only
     const models = keys.map((k) => ({ key: k, ready: ready(MODELS[k]) }));
     const fake = process.env.MAXSHELL_SAGE_ENGINE; // tests: a stand-in for sage.py
     const start = (k, md) => new sage.Engine(
       fake ? [process.execPath, fake, '{commands}', md] : [python(), path.join(__dirname, 'sage.py'), '--serve', '{commands}', md],
       { cwd: shell.cwd, env: engineEnv(MODELS[k], shell) },
     );
-    const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null, notice: auto.why });
+    const img = require('./sageimage');
+    const startImage = img.ready() ? (o) => new img.Job(o, shell.cwd, { env: shell.env, free: freeMemory() }) : null;
+    const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null, notice: auto.why, startImage });
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
   if (mode === 'code') { err(`${name}: sage code needs a terminal\n`); return 1; }
