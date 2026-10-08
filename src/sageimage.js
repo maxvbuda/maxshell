@@ -45,10 +45,10 @@ const bin = () => process.env.MAXSHELL_IMAGE_BIN || path.join(path.dirname(pytho
 const ready = () => fs.existsSync(bin()) && PARTS.every((p) => fs.existsSync(path.join(dir(), p)));
 
 // "a red panda, reading!" → sage-a-red-panda-reading.png, or -2, -3… if taken.
-function outputPath(prompt, folder) {
+function outputPath(prompt, folder, ext = '.png') {
   const slug = String(prompt).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'image';
-  let name = `sage-${slug}.png`;
-  for (let n = 2; fs.existsSync(path.join(folder, name)); n++) name = `sage-${slug}-${n}.png`;
+  let name = `sage-${slug}${ext}`;
+  for (let n = 2; fs.existsSync(path.join(folder, name)); n++) name = `sage-${slug}-${n}${ext}`;
   return path.join(folder, name);
 }
 
@@ -158,19 +158,21 @@ function show(file, write) {
 const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
 // What Sage is asked to write from: the words, and for an edit, what the
-// picture shows so far.
-const request = (o) => JSON.stringify({ prompt: o.prompt, edit: !!(o.images && o.images.length), context: o.context || null });
+// picture shows so far. A video's "edit" is the picture it starts from.
+const request = (o, kind = 'image') => JSON.stringify({ prompt: o.prompt, edit: !!(o.images && o.images.length), context: o.context || null, kind, ...(o.seconds && { seconds: o.seconds }) });
 
 // The last thing a failed prompt writer said.
 const lastLine = (text) => String(text).trim().split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
 
 // A generation running in the background (for the Sage app). With a writer
-// (gemma.promptWriter), Sage writes the prompt first.
+// (gemma.promptWriter), Sage writes the prompt first. sage video uses it
+// too, with its own command line (build), file type and kind.
 class Job {
-  constructor(o, folder, { env = process.env, free = 100, writer = null } = {}) {
+  constructor(o, folder, { env = process.env, free = 100, writer = null, build = argv, ext = '.png', kind = 'image' } = {}) {
     this.options = o;
     this.writer = writer;
-    this.out = o.output ? path.resolve(folder, o.output) : outputPath(o.prompt, folder);
+    this.kind = kind;
+    this.out = o.output ? path.resolve(folder, o.output) : outputPath(o.prompt, folder, ext);
     this.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-image-'));
     const at = (name) => path.join(this.tmp, name);
     [this.log, this.exit, this.prompt, this.detailed, this.wrote, this.writerLog] = ['log', 'exit', 'prompt.txt', 'detailed.txt', 'wrote', 'writer.log'].map(at);
@@ -178,12 +180,12 @@ class Job {
     fs.writeFileSync(this.prompt, o.prompt); // the image model's prompt, unless Sage writes a better one
     let first = '';
     if (writer) {
-      fs.writeFileSync(at('request.json'), request(o));
+      fs.writeFileSync(at('request.json'), request(o, kind));
       first = `${[...writer.cmd, '--image-prompt', at('request.json'), this.detailed].map(quote).join(' ')} > "$WRITERLOG" 2>&1 && cp "$DETAILED" "$PROMPTFILE"; : > "$WROTE"; `;
     }
     const fd = fs.openSync(this.log, 'w');
     const script = `trap "" INT; ${first}"$@"; echo $? > "$EXITFILE"`;
-    const [cmd, ...rest] = argv({ ...o, promptFile: this.prompt }, this.out, free);
+    const [cmd, ...rest] = build({ ...o, promptFile: this.prompt }, this.out, free);
     this.child = spawn('/bin/sh', ['-c', script, 'sh', cmd, ...rest], {
       cwd: folder,
       env: { ...env, ...(writer && writer.env), EXITFILE: this.exit, PROMPTFILE: this.prompt, DETAILED: this.detailed, WROTE: this.wrote, WRITERLOG: this.writerLog, PYTHONUNBUFFERED: '1' },
@@ -323,4 +325,4 @@ function runImage(args, io, shell) {
   return 0;
 }
 
-module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, progress, ready, show, dir, DEFAULTS, REPO, HELP };
+module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, show, dir, DEFAULTS, REPO, HELP };

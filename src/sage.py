@@ -16,9 +16,9 @@ takes about 9 GB (E2B about 5) and can run next to mx training.
                                JSON commands from the file CMDS as they're
                                appended, writes JSON events to stdout. MODE
                                is chat, or code (file tools, run by the app).
-  sage.py --image-prompt REQ OUT   for sage image: reads {prompt, edit,
-                               context} from the JSON file REQ, writes a
-                               detailed prompt for the image model to OUT.
+  sage.py --image-prompt REQ OUT   for sage image / sage video: reads
+                               {prompt, edit, context, kind} from the JSON
+                               file REQ, writes a detailed prompt to OUT.
 
 Colours come from maxshell's theme in $MAXSHELL_SAGE_COLORS.
 """
@@ -121,6 +121,21 @@ IMAGE_PROMPT = (
     "everything else by how it looks — a clock at three o'clock has its hands at 3:00. Write it as plain "
     "description, not a list. "
     "Reply with the prompt only: no title, no preamble, no quotes around it, no markdown.")
+VIDEO_PROMPT = (
+    "You write prompts for a video model that makes a short clip; you're told how long. Turn the user's request into one detailed "
+    "prompt in English, 60 to 120 words. Keep every detail they gave exactly — the subjects, how many, colours, "
+    "positions, actions — never drop, change or contradict one. Then make it concrete: what each subject looks like "
+    "and where it is, and above all what moves and how — one clear, continuous action that fills the clip's length, "
+    "its speed and direction — plus the camera (static, slow push in, pan left, tracking shot…), the setting, the "
+    "lighting and the style (cinematic live action if they didn't say). No cuts, no scene changes. Write it as "
+    "plain description in the present tense, not a list. Reply with the prompt only: no title, no preamble, no "
+    "quotes around it, no markdown.")
+VIDEO_FROM_IMAGE_PROMPT = (
+    "You write prompts for a video model that brings a still picture to life as a short clip; it sees the "
+    "picture. Turn the user's request into one prompt in English, 30 to 80 words, about motion: what moves and "
+    "how — one clear, continuous action, its speed and direction — and what the camera does (static if they didn't "
+    "say). Keep everything in the picture as it is; don't describe a different scene. Reply with the prompt only: "
+    "no title, no preamble, no quotes around it, no markdown.")
 IMAGE_EDIT_PROMPT = (
     "You write instructions for an image editing model, which sees the picture but follows instructions literally. "
     "Turn the user's request into a precise instruction of one to three sentences in English: exactly what to "
@@ -136,6 +151,10 @@ def system_prompt(mode):
         return IMAGE_PROMPT
     if mode == 'image-edit':
         return IMAGE_EDIT_PROMPT
+    if mode == 'video':
+        return VIDEO_PROMPT
+    if mode == 'video-from-image':
+        return VIDEO_FROM_IMAGE_PROMPT
     now = datetime.datetime.now()
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
@@ -339,7 +358,7 @@ class Chat:
 
         gen = self.gen
         coding = self.mode == 'code' or is_coding(self.turns)
-        temperature = CODE_TEMPERATURE if coding else 0.7 if self.mode.startswith('image') else gen.get('temperature', 1.0)
+        temperature = CODE_TEMPERATURE if coding else 0.7 if self.mode.startswith(('image', 'video')) else gen.get('temperature', 1.0)
         self.generated = 0
         self.seconds = 0.0
         for _ in range(MAX_CALLS + 1):
@@ -736,9 +755,18 @@ def clean_prompt(text):
 
 def write_image_prompt(new_chat, req):
     """Sage's detailed prompt (or edit instruction) for a request {prompt,
-    edit, context}, written in a conversation of its own; and whether Ctrl-C
-    stopped it."""
+    edit, context, kind: image | video}, written in a conversation of its
+    own; and whether Ctrl-C stopped it. For a video, edit means it starts
+    from a picture."""
     edit = bool(req.get('edit'))
+    if req.get('kind') == 'video':
+        chat = new_chat('video-from-image' if edit else 'video')
+        ask = req.get('prompt', '')
+        if req.get('seconds'):
+            ask += f"\n\n(The clip is {req['seconds']:g} seconds long.)"
+        parts = []
+        stopped = chat.reply(ask, parts.append)
+        return clean_prompt(''.join(parts)), stopped
     chat = new_chat('image-edit' if edit else 'image')
     ask = req.get('prompt', '')
     if edit and req.get('context'):

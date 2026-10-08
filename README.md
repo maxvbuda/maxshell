@@ -1155,6 +1155,29 @@ the other in proportion. Results are saved here as `sage-photo.png`,
 Qwen-Image 2.1 is under the **Qwen Research License** — research and
 evaluation, **not commercial use**; Qwen says the images you make are yours.
 
+**Sage films, too.** `sage video "a paper boat drifting down a rainy city
+street"` makes a 1280×704 MP4 at 24 fps in the current folder (named after
+your words, never over a file) and opens it. `--image photo.jpg` brings a
+picture to life — say what moves. Clips can be **any length**:
+`--seconds 30` films it 2 seconds at a time, each part carrying on from the
+last frame of the one before, and joins them, so memory stays that of one
+part and only the time grows. As with pictures, Sage Pro first writes a
+detailed prompt — what moves, how, and what the camera does (`--exact`
+skips it). `--size`, `--steps`, `--seed`, `-o`, `--no-open` work as for
+`sage image`. It's slow: on an M3 with 24 GB, each 2 seconds takes about 18
+minutes (7 to make, 10 to decode), so a 30-second clip is an afternoon; it
+says how long before it starts.
+The model is Wan 2.2 TI2V-5B **Turbo** (Alibaba's Wan, distilled by
+quanhaol to 4 steps with no guidance — a tenth of the base model's work),
+4-bit, run with [mlx-video](https://github.com/Blaizzy/mlx-video) on MLX in
+its own Python. `src/sagevideo.py` runs it with three fixes: the 11 GB text
+encoder stays in bfloat16 (mlx-video makes it float32 — 23 GB, which swaps
+for minutes on a 24 GB Mac), the decoder runs in bfloat16 (a quarter
+faster), and the MP4 is re-encoded so QuickTime plays it.
+`sage video --setup` installs it into `~/.maxshell/gemma/video`: a 24 GB
+download, converted on the spot, 17 GB kept. Wan is **Apache 2.0** —
+commercial use is fine.
+
 **Sage Ultra** is a 7-billion-parameter coding model — Alibaba's open
 Qwen2.5-Coder-7B-Instruct, 4-bit, run with Apple's MLX on the GPU (about
 6 GB; it starts with 30% of memory free). It's the strongest at code and,

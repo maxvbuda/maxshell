@@ -30,6 +30,7 @@ function paletteItems(shell) {
 
   add('tools', '✨', 'sage', 'ask Sage, the AI on your Mac (private, offline)', 'sage');
   add('tools', '🎨', 'sage image', 'draw a picture from a prompt, on this Mac', 'sage image ', { insert: true });
+  add('tools', '🎬', 'sage video', 'film a short clip from a prompt, on this Mac', 'sage video ', { insert: true });
   add('tools', '🛠', 'sage code', 'Sage Code: build and fix this project with AI', 'sage code');
   add('tools', '📊', 'dash', 'live dashboard: git, jobs, CPU, memory, recent commands', 'dash');
   add('tools', '🗂', 'files', 'browse this folder, Finder-style', 'files');

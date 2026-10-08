@@ -144,6 +144,7 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage                 chat, full screen (click the model to switch it)
   sage <question>      one answer, printed
   sage image <prompt>  a picture, made here (sage image --help)
+  sage video <prompt>  a short clip, made here (sage video --help)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
   sage code --ultra …  use Sage Ultra, the best at code (a 7B coding model; sage code only)
@@ -160,6 +161,7 @@ function runSage(args, io, shell, name = 'sage') {
   const err = (s) => shell.writeTo(io.stderr, s);
   let mode = 'chat';
   if (args[0] === 'image') return require('./sageimage').runImage(args.slice(1), io, shell);
+  if (args[0] === 'video') return require('./sagevideo').runVideo(args.slice(1), io, shell);
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   let { model: m, key, args: rest, chosen, flagged } = pick(args);
   if (!m) { err(`${name}: no model ${key} — pro, ultra or lite\n`); return 1; }

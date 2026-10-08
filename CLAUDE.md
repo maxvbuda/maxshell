@@ -96,7 +96,12 @@ and ask; replaced files go to the Trash. Tests use
 thumbnails) first has Sage Pro write a detailed prompt (`sage.py
 --image-prompt`, then it exits — the two don't fit in memory together);
 tests swap in `test/fake-mflux.js` and `test/fake-sage-writer.js`
-(`MAXSHELL_IMAGE_BIN`, `MAXSHELL_SAGE_WRITER`). Off a terminal, sage.py
+(`MAXSHELL_IMAGE_BIN`, `MAXSHELL_SAGE_WRITER`). `sage video`
+(`src/sagevideo.js` + `src/sagevideo.py`, run by its own venv in
+`~/.maxshell/gemma/video`) is Wan 2.2 TI2V-5B Turbo via mlx-video, which
+sagevideo.py patches (bf16 T5 and VAE, prompt file, QuickTime re-encode) and
+chains in 2 s segments for any length; tests use `test/fake-wan.js`
+(`MAXSHELL_VIDEO_BIN`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +
 `src/tex.js` math; NUL ends a reply and is acked on stderr).
 

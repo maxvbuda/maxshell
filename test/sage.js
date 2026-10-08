@@ -817,6 +817,81 @@ test('the engine writes /image prompts on request, apart from the chat', () => {
   } finally { e.close(); }
 });
 
+test('sage video: options, frames, the command line, progress', () => {
+  const video = require('../src/sagevideo');
+  const o = video.parseArgs(['--seconds', '3', '--size', '640x360', 'a', 'kite']);
+  assert.deepStrictEqual([o.prompt, o.width, o.height, o.seconds], ['a kite', 640, 352, 3]);
+  assert.deepStrictEqual([video.frames(2), video.frames(5), video.frames(0.1)], [49, 121, 5]);
+  // any length: made in segments of up to SEGMENT seconds
+  const at = (sec) => { const p = video.plan(sec); return [p.segments, p.frames, Math.round(p.seconds * 10) / 10]; };
+  assert.deepStrictEqual(at(2), [1, 49, 2]);
+  assert.deepStrictEqual(at(30), [15, 49, 30]); // 15 parts, sharing their joining frames
+  assert.strictEqual(video.plan(3).segments, 2);
+  assert.ok(Math.abs(video.plan(7).seconds - 7) < 0.4); // each part is a whole number of 4-frame steps
+  assert.strictEqual(video.parseArgs(['--seconds', '600', 'x']).seconds, 600);
+  assert.match(video.parseArgs(['--seconds', '0', 'x']).error, /how long/);
+  const long = video.argv({ ...video.parseArgs(['--seconds', '30', 'x']), seed: 1 }, '/tmp/o.mp4');
+  assert.strictEqual(long[long.indexOf('--segments') + 1], '15');
+  assert.ok(!video.argv({ ...video.parseArgs(['x']), seed: 1 }, '/tmp/o.mp4').includes('--segments'));
+  assert.deepStrictEqual(video.progress('segment 1/3\nDiffusion: 4/4 [00:01\nDecoding with VAE...\nsegment 2/3\nDiffusion:  50%| 2/4 [00:30'), { stage: 'denoise', step: 2, total: 4, segment: 2, segments: 3 });
+  assert.match(video.parseArgs([]).error, /say what to film/);
+  assert.match(video.parseArgs(['--size', '9000x10', 'x']).error, /256 to 1280/);
+  const a = video.argv({ ...o, seed: 3, promptFile: '/tmp/p.txt', images: ['/tmp/pic.png'] }, '/tmp/out.mp4');
+  assert.match(a[1], /sagevideo\.py$/); // the launcher, which reads --prompt-file
+  for (const [k, v] of [['--prompt-file', '/tmp/p.txt'], ['--num-frames', '37'], ['--segments', '2'], ['--seed', '3'], ['--output-path', '/tmp/out.mp4'], ['--image', '/tmp/pic.png'], ['--width', '640']]) assert.strictEqual(a[a.indexOf(k) + 1], v, k);
+  assert.deepStrictEqual(video.progress('Loading T5 encoder...'), { stage: 'prompt', segment: 1, segments: 1 });
+  assert.deepStrictEqual(video.progress('Diffusion:  25%|██| 3/12 [00:30'), { stage: 'denoise', step: 3, total: 12, segment: 1, segments: 1 });
+  assert.strictEqual(video.progress('12/12 [01:00]\nDecoding with VAE...').stage, 'decode');
+});
+
+test('sage video from the shell: Sage’s prompt, then a clip here', () => {
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-work-'));
+  fs.writeFileSync(path.join(work, 'pic.png'), makePng());
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_VIDEO_BIN: path.join(__dirname, 'fake-wan.js'), MAXSHELL_SAGE_WRITER: path.join(__dirname, 'fake-sage-writer.js'), MAXSHELL_SAGE_FREE: '80' };
+  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage video --steps 2 a paper boat`], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Sage Pro is writing a detailed prompt…\n {2}MOTION: a paper boat, the camera slowly pushes in\./);
+  assert.match(r.stdout, /prompt: MOTION: a paper boat[\s\S]*frames: 49/);
+  assert.match(r.stdout, /saved sage-a-paper-boat\.mp4/);
+  assert.ok(fs.existsSync(path.join(work, 'sage-a-paper-boat.mp4')));
+  const pic = spawnSync('node', [sh, '-c', `cd ${work} && sage video --exact --image pic.png --seconds 1 --steps 1 the leaves sway`], { env, encoding: 'utf8' });
+  assert.strictEqual(pic.status, 0, pic.stderr);
+  assert.ok(!/writing a detailed prompt/.test(pic.stdout));
+  assert.match(pic.stdout, /prompt: the leaves sway\nframes: 25\nimage: .*picture\.png/);
+  const long = spawnSync('node', [sh, '-c', `cd ${work} && sage video --exact --seconds 5 --steps 1 a long walk`], { env, encoding: 'utf8' });
+  assert.strictEqual(long.status, 0, long.stderr);
+  assert.match(long.stdout, /filming 1280×704, 5 s in 3 parts of 2 s, 1 step — about \d+ minutes on an M3/);
+  assert.match(long.stdout, /segment 1\/3[\s\S]*segment 3\/3/);
+  const missing = spawnSync('node', [sh, '-c', `cd ${work} && sage video --image nope.jpg x`], { env, encoding: 'utf8' });
+  assert.match(missing.stderr, /there’s no nope\.jpg/);
+  const unset = spawnSync('node', [sh, '-c', 'sage video a boat'], { env: { ...env, MAXSHELL_VIDEO_BIN: '' }, encoding: 'utf8' });
+  assert.match(unset.stderr, /sage video --setup/);
+  fs.rmSync(gem, { recursive: true });
+  fs.rmSync(work, { recursive: true });
+});
+
+test('a background video job: Sage writes about motion, then Wan films it', () => {
+  const video = require('../src/sagevideo');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-vjob-'));
+  process.env.MAXSHELL_VIDEO_BIN = path.join(__dirname, 'fake-wan.js');
+  const writer = { label: 'Sage Pro', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
+  try {
+    const job = video.job(video.parseArgs(['--steps', '3', 'a', 'kite']), dir, { writer });
+    let p;
+    for (let i = 0; i < 300; i++) { p = job.poll(); if (p.state !== 'running') break; sleepSync(20); }
+    assert.strictEqual(p.state, 'done');
+    assert.strictEqual(p.detailed, 'MOTION: a kite, the camera slowly pushes in.');
+    assert.strictEqual(job.out, path.join(dir, 'sage-a-kite.mp4'));
+    assert.match(fs.readFileSync(job.log, 'utf8'), /prompt: MOTION: a kite/);
+    job.cleanup();
+  } finally {
+    delete process.env.MAXSHELL_VIDEO_BIN;
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
 test('png: decodes a PNG and draws it in half blocks', () => {
   const png = require('../src/png');
   const PNG = makePng();
