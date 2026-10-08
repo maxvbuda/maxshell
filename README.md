@@ -1115,13 +1115,26 @@ conversation while you keep chatting; ^C stops it. On an M3 a picture takes abou
 low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
 
+**Sage writes the prompt.** The image model follows a detailed prompt much
+better than a short one, so Sage Pro goes first: it turns your words into a
+detailed prompt — every subject you named, how many, their colours and
+places in the frame, the setting, light, camera angle and style — and the
+image model draws from that. For an edit, it writes a precise instruction:
+exactly what to change, and what to keep (in image chat it knows what the
+picture shows and what's been changed so far). Sage's prompt is shown before
+the picture is drawn. Sage Pro and the image model don't fit in memory
+together, so Sage runs first and quits: it adds about 30 seconds (Sage Lite
+writes it when memory is short or Pro isn't set up; if neither can run, your
+words are used as they are). `--exact` (`/exact` in image chat) skips it. The
+file is still named after your words.
+
 **Talk to a picture to change it.** `sage image` on its own opens image
 chat, full screen: describe a picture, and once it's drawn — shown right in
 the conversation in coloured half blocks (click it to open it in Preview) —
 say how to change it: "make it night", "add a red umbrella", "now as a
 watercolour". Each message edits the latest version, keeping the rest of the
 picture, and every version is saved (`sage-a-cabin-in-the-snow.png`, then
-`-2`, `-3`…). `/new` starts a new picture, `/size 512` and `/steps 20` change
+`-2`, `-3`…). `/new` starts a new picture, `/exact` toggles Sage's prompt, `/size 512` and `/steps 20` change
 what comes next, `/open` opens the latest in Preview, ^C stops a drawing.
 Editing reads the picture as well as your words, so it's slower than
 drawing: here, at 512×512 a picture took about a minute and a change about

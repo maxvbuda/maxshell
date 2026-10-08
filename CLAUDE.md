@@ -91,7 +91,12 @@ JSON events read back from another (`Engine`), so it stays synchronous.
 generation at the call) that the app runs via `src/sagetools.js` — reads in
 the project are free; writes, edits and commands show a diff / the command
 and ask; replaced files go to the Trash. Tests use
-`test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). Off a terminal, sage.py
+`test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). `sage image`
+(`src/sageimage.js`, Qwen-Image 2.1 via mflux; `src/png.js` draws
+thumbnails) first has Sage Pro write a detailed prompt (`sage.py
+--image-prompt`, then it exits — the two don't fit in memory together);
+tests swap in `test/fake-mflux.js` and `test/fake-sage-writer.js`
+(`MAXSHELL_IMAGE_BIN`, `MAXSHELL_SAGE_WRITER`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +
 `src/tex.js` math; NUL ends a reply and is acked on stderr).
 

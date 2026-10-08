@@ -128,6 +128,18 @@ function engineEnv(m, shell) {
   return env;
 }
 
+// sage image's prompt writer: Sage Pro (Sage Lite when memory is short or
+// Pro isn't set up) as a command that turns a request into a detailed
+// prompt — { label, cmd, env } — or null when neither is set up.
+function promptWriter(shell) {
+  const fake = process.env.MAXSHELL_SAGE_WRITER; // tests: a stand-in for sage.py
+  if (fake) return { label: 'Sage Pro', cmd: [process.execPath, fake], env: {} };
+  let key = fallback(DEFAULT, false).key;
+  if (!ready(MODELS[key])) key = ['e4b', 'e2b'].find((k) => ready(MODELS[k]));
+  if (!key) return null;
+  return { label: MODELS[key].label, cmd: [python(), path.join(__dirname, 'sage.py')], env: engineEnv(MODELS[key], shell) };
+}
+
 const HELP = `sage — an AI that runs entirely on your Mac
   sage                 chat, full screen (click the model to switch it)
   sage <question>      one answer, printed
@@ -199,4 +211,4 @@ function runSage(args, io, shell, name = 'sage') {
   return shell.runExternal([python(), path.join(__dirname, 'sage.py'), ...args], io, env);
 }
 
-module.exports = { runSage, HELP, ready, pick, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };
+module.exports = { promptWriter, runSage, HELP, ready, pick, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };

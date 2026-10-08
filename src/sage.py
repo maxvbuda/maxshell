@@ -16,6 +16,9 @@ takes about 9 GB (E2B about 5) and can run next to mx training.
                                JSON commands from the file CMDS as they're
                                appended, writes JSON events to stdout. MODE
                                is chat, or code (file tools, run by the app).
+  sage.py --image-prompt REQ OUT   for sage image: reads {prompt, edit,
+                               context} from the JSON file REQ, writes a
+                               detailed prompt for the image model to OUT.
 
 Colours come from maxshell's theme in $MAXSHELL_SAGE_COLORS.
 """
@@ -108,7 +111,31 @@ def tool_response(name, result):
     return f'<|tool_response>response:{name}{{result:{QUOTE}{result}{QUOTE}}}<tool_response|>'
 
 
+IMAGE_PROMPT = (
+    "You write prompts for an image model. Turn the user's request into one detailed prompt in English, 60 to 120 "
+    "words. Keep every detail they gave exactly — the subjects, how many, colours, positions, any text — never drop, "
+    "change or contradict one. Then make it concrete: what each subject looks like and where it is in the frame "
+    "(left, right, foreground, background), the setting, the lighting and time of day, the camera angle and "
+    "framing, and the style or medium (photo, oil painting, 3D render… — a photo if they didn't say). Only words "
+    "to be written in the picture (a sign, a title, a label) go in double quotes, spelled exactly; describe "
+    "everything else by how it looks — a clock at three o'clock has its hands at 3:00. Write it as plain "
+    "description, not a list. "
+    "Reply with the prompt only: no title, no preamble, no quotes around it, no markdown.")
+IMAGE_EDIT_PROMPT = (
+    "You write instructions for an image editing model, which sees the picture but follows instructions literally. "
+    "Turn the user's request into a precise instruction of one to three sentences in English: exactly what to "
+    "change — which thing, where, its new colour, size, number or look — then what to keep: everything else "
+    "unchanged, naming the main subjects, the composition, the style and the lighting where it helps. If the "
+    "change is a whole new style or time of day, say so plainly. Only words to be written in the picture go in "
+    "double quotes. "
+    "Reply with the instruction only: no title, no preamble, no quotes around it, no markdown.")
+
+
 def system_prompt(mode):
+    if mode == 'image':
+        return IMAGE_PROMPT
+    if mode == 'image-edit':
+        return IMAGE_EDIT_PROMPT
     now = datetime.datetime.now()
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
@@ -312,7 +339,7 @@ class Chat:
 
         gen = self.gen
         coding = self.mode == 'code' or is_coding(self.turns)
-        temperature = CODE_TEMPERATURE if coding else gen.get('temperature', 1.0)
+        temperature = CODE_TEMPERATURE if coding else 0.7 if self.mode.startswith('image') else gen.get('temperature', 1.0)
         self.generated = 0
         self.seconds = 0.0
         for _ in range(MAX_CALLS + 1):
@@ -693,8 +720,52 @@ def serve(cmd_path, mode):
             emit(ev='done', stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
 
 
+def clean_prompt(text):
+    """The prompt alone: no fences, labels or quotes around it."""
+    text = re.sub(r'```\w*', '', text).strip()
+    text = re.sub(r'^(\*\*)?(detailed |image |edit )?(prompt|instruction)s?:?(\*\*)?:?\s*', '', text, flags=re.I).strip()
+    if len(text) > 1 and text[0] in '"“' and text[-1] in '"”':
+        text = text[1:-1].strip()
+    return re.sub(r'\s+', ' ', text)
+
+
+def image_prompt(req_path, out_path):
+    """sage image: Sage turns a request into the detailed prompt the image
+    model draws from, then exits, so the two never share memory."""
+    with open(req_path, encoding='utf-8') as f:
+        req = json.load(f)
+    if ULTRA:
+        sys.stderr.write('Sage Ultra writes code, not image prompts\n')
+        return 1
+    why = problem()
+    if why:
+        sys.stderr.write(f'{why}\n')
+        return 1
+    quiet()
+    model, tok, gen, device = load()
+    edit = bool(req.get('edit'))
+    chat = Chat(model, tok, gen, device, 'image-edit' if edit else 'image')
+    ask = req.get('prompt', '')
+    if edit and req.get('context'):
+        ask = f"The picture now shows: {req['context']}\n\nThe change the user wants: {ask}"
+    elif edit:
+        ask = f'The change the user wants: {ask}'
+    parts = []
+    chat.reply(ask, parts.append)
+    text = clean_prompt(''.join(parts))
+    if not text:
+        sys.stderr.write('Sage wrote nothing\n')
+        return 1
+    with open(out_path + '.part', 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(out_path + '.part', out_path)
+    return 0
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ['--image-prompt']:
+        return image_prompt(args[1], args[2])
     if args[:1] == ['--serve']:
         return serve(args[1], args[2] if len(args) > 2 else 'chat')
     why = problem()

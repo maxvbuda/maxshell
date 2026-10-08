@@ -15,6 +15,13 @@
 // how to change it — each message edits the latest version (the edit
 // pipeline, given that picture), and every version is kept. A picture of
 // your own (--edit, /edit, or a file dragged in) can be the starting point.
+//
+// The image model follows a detailed prompt far better than a short one, so
+// first Sage Pro (src/sage.py --image-prompt) turns your words into one —
+// the subjects, their places, setting, light, framing and style — or, for an
+// edit, into a precise instruction of what to change and what to keep. It
+// runs before the image model and exits, so the two never share memory.
+// --exact (/exact in image chat) draws from your words as they are.
 
 const fs = require('fs');
 const os = require('os');
@@ -99,6 +106,7 @@ function parseArgs(args, { chat = false } = {}) {
     else if (a === '--seed') o.seed = Number(next());
     else if (a === '-o' || a === '--output') o.output = next();
     else if (a === '--no-open') o.open = false;
+    else if (a === '--exact') o.exact = true;
     else words.push(a);
   }
   o.prompt = words.join(' ').trim();
@@ -115,7 +123,7 @@ function parseArgs(args, { chat = false } = {}) {
 // The mflux command line for a picture.
 function argv(o, out, free = 100) {
   const seed = o.seed ?? Math.floor(Math.random() * 1e9);
-  const a = [bin(), '--model', dir(), '--prompt', o.prompt,
+  const a = [bin(), '--model', dir(), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
   if (o.images && o.images.length) a.push('--image-paths', ...o.images); // edit these
@@ -147,35 +155,60 @@ function show(file, write) {
   return null;
 }
 
-// A generation running in the background (for the Sage app).
+const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+
+// What Sage is asked to write from: the words, and for an edit, what the
+// picture shows so far.
+const request = (o) => JSON.stringify({ prompt: o.prompt, edit: !!(o.images && o.images.length), context: o.context || null });
+
+// The last thing a failed prompt writer said.
+const lastLine = (text) => String(text).trim().split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
+
+// A generation running in the background (for the Sage app). With a writer
+// (gemma.promptWriter), Sage writes the prompt first.
 class Job {
-  constructor(o, folder, { env = process.env, free = 100 } = {}) {
+  constructor(o, folder, { env = process.env, free = 100, writer = null } = {}) {
     this.options = o;
+    this.writer = writer;
     this.out = o.output ? path.resolve(folder, o.output) : outputPath(o.prompt, folder);
     this.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-image-'));
-    this.log = path.join(this.tmp, 'log');
-    this.exit = path.join(this.tmp, 'exit');
+    const at = (name) => path.join(this.tmp, name);
+    [this.log, this.exit, this.prompt, this.detailed, this.wrote, this.writerLog] = ['log', 'exit', 'prompt.txt', 'detailed.txt', 'wrote', 'writer.log'].map(at);
     this.started = Date.now();
+    fs.writeFileSync(this.prompt, o.prompt); // the image model's prompt, unless Sage writes a better one
+    let first = '';
+    if (writer) {
+      fs.writeFileSync(at('request.json'), request(o));
+      first = `${[...writer.cmd, '--image-prompt', at('request.json'), this.detailed].map(quote).join(' ')} > "$WRITERLOG" 2>&1 && cp "$DETAILED" "$PROMPTFILE"; : > "$WROTE"; `;
+    }
     const fd = fs.openSync(this.log, 'w');
-    const script = 'trap "" INT; "$@"; echo $? > "$EXITFILE"';
-    const [cmd, ...rest] = argv(o, this.out, free);
+    const script = `trap "" INT; ${first}"$@"; echo $? > "$EXITFILE"`;
+    const [cmd, ...rest] = argv({ ...o, promptFile: this.prompt }, this.out, free);
     this.child = spawn('/bin/sh', ['-c', script, 'sh', cmd, ...rest], {
-      cwd: folder, env: { ...env, EXITFILE: this.exit, PYTHONUNBUFFERED: '1' }, stdio: ['ignore', fd, fd], detached: true,
+      cwd: folder,
+      env: { ...env, ...(writer && writer.env), EXITFILE: this.exit, PROMPTFILE: this.prompt, DETAILED: this.detailed, WROTE: this.wrote, WRITERLOG: this.writerLog, PYTHONUNBUFFERED: '1' },
+      stdio: ['ignore', fd, fd], detached: true,
     });
     fs.closeSync(fd);
     this.child.unref();
   }
 
-  // { state: 'running' | 'done' | 'failed', step, total, error }
+  // { state: 'running' | 'done' | 'failed', phase: 'prompt' | 'draw', step,
+  // total, detailed (Sage's prompt), unwritten (why Sage couldn't), error }
   poll() {
-    let text = '';
-    try { text = fs.readFileSync(this.log, 'utf8'); } catch { /* not yet */ }
+    const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+    const text = read(this.log) || '';
     const p = progress(text) || { step: 0, total: this.options.steps };
-    if (!fs.existsSync(this.exit)) return { state: 'running', ...p };
-    const code = Number(fs.readFileSync(this.exit, 'utf8').trim());
-    if (code === 0 && fs.existsSync(this.out)) return { state: 'done', ...p };
+    const finished = fs.existsSync(this.exit);
+    const writing = this.writer && !finished && !fs.existsSync(this.wrote);
+    const detailed = read(this.detailed);
+    const sage = { phase: writing ? 'prompt' : 'draw', detailed: detailed && detailed.trim() };
+    if (this.writer && !writing && !detailed) sage.unwritten = lastLine(read(this.writerLog)) || 'Sage didn’t answer';
+    if (!finished) return { state: 'running', ...p, ...sage };
+    const code = Number(read(this.exit).trim());
+    if (code === 0 && fs.existsSync(this.out)) return { state: 'done', ...p, ...sage };
     const lines = text.replace(/\r/g, '\n').split('\n').map((l) => l.trim()).filter((l) => l && !/\d+\/\d+ \[/.test(l));
-    return { state: 'failed', ...p, error: lines.slice(-2).join(' ') || `exit ${code}` };
+    return { state: 'failed', ...p, ...sage, error: lines.slice(-2).join(' ') || `exit ${code}` };
   }
 
   stop() {
@@ -185,6 +218,16 @@ class Job {
   cleanup() {
     try { fs.rmSync(this.tmp, { recursive: true, force: true }); } catch { /* fine */ }
   }
+}
+
+function wrapText(text, w) {
+  const lines = [];
+  let line = '';
+  for (const word of String(text).split(/\s+/)) {
+    if (line && (line + ' ' + word).length > w) { lines.push(line); line = word; } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function setup(write, err) {
@@ -213,6 +256,8 @@ const HELP = `sage image — pictures from a prompt, made on your Mac
   sage image --seed 7 …          the same seed and prompt make the same picture
   sage image -o name.png …       choose the file name (never over an existing file)
   sage image --no-open …         don't open it
+  sage image --exact …           draw from your words as they are (Sage Pro writes a
+                                 detailed prompt from them first, by default)
   sage image --setup             install it (~${SIZE})
 Qwen-Image 2.1 — Qwen Research License: research and evaluation, not commercial use.
 `;
@@ -242,15 +287,30 @@ function runImage(args, io, shell) {
     const free = () => require('./gemma').freeMemory();
     const app = new sage.SageApp({
       mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE,
-      startImage: (opts) => new Job(opts, shell.cwd, { env: shell.env, free: free() }),
+      startImage: (opts) => new Job(opts, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell) }),
     });
     if (mine) app.load(mine);
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
   if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
-  const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd);
+  const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd); // named after your words
   if (fs.existsSync(out)) { err(`sage image: ${o.output} is already there — pick another name\n`); return 1; }
   const muted = theme.style(theme.current().ui.muted);
+  const writer = o.exact ? null : require('./gemma').promptWriter(shell);
+  if (writer) { // Sage turns the words into a detailed prompt first
+    write(`${muted}✦ ${writer.label} is writing a detailed prompt…${ansi.reset()}\n`);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-prompt-'));
+    fs.writeFileSync(path.join(tmp, 'request.json'), request(o));
+    const [cmd, ...rest] = writer.cmd;
+    const r = spawnSync(cmd, [...rest, '--image-prompt', path.join(tmp, 'request.json'), path.join(tmp, 'detailed.txt')], { env: { ...shell.env, ...writer.env }, encoding: 'utf8' });
+    let detailed = null;
+    try { detailed = fs.readFileSync(path.join(tmp, 'detailed.txt'), 'utf8').trim(); } catch { /* it couldn't */ }
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (detailed) {
+      o.prompt = detailed;
+      for (const l of wrapText(detailed, Math.max(20, (process.stdout.columns || 80) - 4))) write(`${muted}  ${l}${ansi.reset()}\n`);
+    } else write(`${muted}  (${lastLine(r.stderr) || 'Sage didn’t answer'} — drawing from your words)${ansi.reset()}\n`);
+  }
   write(`${muted}✦ ${mine ? 'editing' : 'drawing'} ${o.width}×${o.height}, ${o.steps} steps — usually a few minutes${ansi.reset()}\n`);
   const began = Date.now();
   const free = require('./gemma').freeMemory();

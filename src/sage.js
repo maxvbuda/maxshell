@@ -122,6 +122,9 @@ class SageApp {
     this.picture = null;          // image chat: the latest version, which the next message edits
     this.pictureName = null;      // …and the first prompt, which names every version
     this.fitted = null;           // a picture of yours: its shape, which edits keep
+    this.scene = null;            // what the picture shows (Sage's prompt for it), and…
+    this.changes = [];            // …the changes asked for since: what Sage writes edits from
+    this.exact = false;           // /exact: draw from the words as they are, not Sage's prompt
     this.drawOpts = { width: 768, height: 768, steps: 8 };
     this.mode = mode;
     this.root = root;
@@ -383,6 +386,11 @@ class SageApp {
         this.load(require('./sageimage').droppedPath(file, this.root) || file);
         return true;
       }
+      case 'exact':
+        if (this.mode !== 'image') return false;
+        this.exact = !this.exact;
+        this.note(this.exact ? 'Drawing from your words exactly as you write them.' : 'Sage writes a detailed prompt from your words first.');
+        return true;
       case 'open':
         if (this.picture) {
           const last = [...this.items].reverse().find((i) => i.type === 'image' && i.out === this.picture);
@@ -391,7 +399,7 @@ class SageApp {
         else this.note('No picture yet.');
         return true;
       case 'help':
-        if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
+        if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
         this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
@@ -405,6 +413,8 @@ class SageApp {
       this.picture = null;
       this.pictureName = null;
       this.fitted = null;
+      this.scene = null;
+      this.changes = [];
       this.items = [];
       this.changed();
       return;
@@ -466,6 +476,8 @@ class SageApp {
     this.picture = p.file;
     this.pictureName = path.basename(p.source).replace(/\.[^.]+$/, '');
     this.fitted = img.fitSize(p.width, p.height, Math.max(this.drawOpts.width, this.drawOpts.height));
+    this.scene = null; // Sage can't see it: edits are written from your words alone
+    this.changes = [];
     this.items.push({ type: 'image', loaded: true, state: 'done', out: p.file, source: p.source, size: `${this.fitted.width}×${this.fitted.height}` });
     this.scroll = 0;
     this.changed();
@@ -477,11 +489,14 @@ class SageApp {
     const img = require('./sageimage');
     const edit = !!this.picture;
     if (!edit) this.pictureName = text;
-    const o = { ...this.drawOpts, ...(edit && this.fitted), prompt: text, seed: null, open: false, images: edit ? [this.picture] : null };
+    const o = { ...this.drawOpts, ...(edit && this.fitted), prompt: text, seed: null, open: false, images: edit ? [this.picture] : null, exact: this.exact };
+    if (edit && (this.scene || this.changes.length)) {
+      o.context = [this.scene, this.changes.length && `It has since been changed: ${this.changes.join('; ')}.`].filter(Boolean).join(' ');
+    }
     o.output = path.basename(img.outputPath(this.pictureName, this.root));
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
-    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
+    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
     this.scroll = 0;
     this.changed();
   }
@@ -493,15 +508,19 @@ class SageApp {
     const item = this.drawing();
     if (!item) return;
     const p = item.job.poll();
-    if (p.state === 'running' && p.step === item.step && p.total === item.total) return;
-    Object.assign(item, { step: p.step, total: p.total });
+    if (p.state === 'running' && p.step === item.step && p.total === item.total && p.phase === item.phase && p.detailed === item.detailed) return;
+    Object.assign(item, { step: p.step, total: p.total, phase: p.phase, detailed: p.detailed, unwritten: p.unwritten });
     if (p.state !== 'running') {
       item.state = p.state;
       item.seconds = Math.round((Date.now() - item.started) / 1000);
       item.out = item.job.out;
       item.error = p.error;
       item.job.cleanup();
-      if (p.state === 'done' && this.mode === 'image') this.picture = item.out; // the next message edits this
+      if (p.state === 'done' && this.mode === 'image') {
+        this.picture = item.out; // the next message edits this
+        if (item.edit) this.changes.push(item.prompt);
+        else { this.scene = item.detailed || item.prompt; this.changes = []; }
+      }
       else if (p.state === 'done') item.shown = require('./sageimage').show(item.out, () => {});
     }
     item.v = (item.v || 0) + 1;
@@ -681,7 +700,8 @@ function itemLines(item, w, app) {
     const color = { running: theme.fg('accent'), done: theme.fg('ok'), failed: theme.fg('err') }[item.state] || muted;
     const time = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
     let detail;
-    if (item.state === 'running') {
+    if (item.state === 'running' && item.phase === 'prompt') detail = `${item.writer} is writing a detailed prompt…`;
+    else if (item.state === 'running') {
       const barW = Math.max(4, Math.min(20, w - 30));
       const f = item.total ? item.step / item.total : 0;
       const filled = Math.round(f * barW);
@@ -692,6 +712,11 @@ function itemLines(item, w, app) {
     if (item.loaded) detail = `${path.basename(item.source)} · say how to change it`;
     lines.push({ s: `${color}●${RESET()} ${ansi.bold()}${item.loaded ? 'Your picture' : item.edit ? 'Edit' : 'Image'}${RESET()} ${muted}${item.size}${RESET()}  ${muted}${detail}${RESET()}` });
     if (!item.edit && !item.loaded) for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
+    if (item.detailed) { // what Sage wrote for the image model
+      const said = wrap(item.detailed, w - 4);
+      const shown = said.length > 4 ? [...said.slice(0, 3), `${said[3].slice(0, Math.max(0, w - 6))}…`] : said;
+      shown.forEach((l, i) => lines.push({ s: `  ${muted}${i ? ' ' : '✎'} ${l}${RESET()}` }));
+    } else if (item.unwritten) lines.push({ s: `  ${muted}✎ from your words — ${item.unwritten}${RESET()}` });
     const fitted = lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
     if (item.state === 'done' && app && app.mode === 'image') {
       // the picture itself, in half blocks; click it to open it in Preview

@@ -674,6 +674,114 @@ test('sage image --edit changes a picture of yours from the shell', () => {
   fs.rmSync(work, { recursive: true });
 });
 
+test('Sage writes a detailed prompt first, and the image model draws from it', () => {
+  const img = require('../src/sageimage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-writer-'));
+  const writer = { label: 'Sage Pro', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
+  process.env.MAXSHELL_IMAGE_BIN = path.join(__dirname, 'fake-mflux.js');
+  const finish = (job) => { let p; for (let i = 0; i < 300; i++) { p = job.poll(); if (p.state !== 'running') break; sleepSync(20); } return p; };
+  try {
+    const job = new img.Job(img.parseArgs(['--steps', '2', 'a', 'cat']), dir, { writer });
+    assert.strictEqual(job.poll().phase, 'prompt');
+    let p = finish(job);
+    assert.strictEqual(p.state, 'done');
+    assert.strictEqual(p.detailed, 'DETAILED: a cat, in warm evening light, a wide shot, a photo.');
+    assert.match(fs.readFileSync(job.log, 'utf8'), /prompt: DETAILED: a cat/); // what the image model was given
+    assert.ok(fs.existsSync(path.join(dir, 'sage-a-cat.png'))); // named after your words
+    job.cleanup();
+    // Sage can't run: the picture is drawn from your words, and says why
+    const mute = new img.Job(img.parseArgs(['--steps', '1', 'a', 'mute', 'swan']), dir, { writer });
+    p = finish(mute);
+    assert.strictEqual(p.state, 'done');
+    assert.match(p.unwritten, /only 12% of memory is free/);
+    assert.match(fs.readFileSync(mute.log, 'utf8'), /prompt: a mute swan\n/);
+    mute.cleanup();
+    // an edit tells Sage what the picture shows
+    const edit = new img.Job({ ...img.parseArgs(['--steps', '1', 'make', 'it', 'night']), images: [path.join(dir, 'sage-a-cat.png')], context: 'a cat on a mat' }, dir, { writer });
+    p = finish(edit);
+    assert.strictEqual(p.detailed, 'EDIT: make it night; keep everything else. [context: a cat on a mat]');
+    edit.cleanup();
+  } finally {
+    delete process.env.MAXSHELL_IMAGE_BIN;
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('sage image from the shell: Sage’s prompt first, --exact skips it', () => {
+  const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
+  for (const p of ['transformer', 'text_encoder', 'vae']) fs.mkdirSync(path.join(gem, 'image', p), { recursive: true });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-work-'));
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_IMAGE_BIN: path.join(__dirname, 'fake-mflux.js'), MAXSHELL_SAGE_WRITER: path.join(__dirname, 'fake-sage-writer.js'), MAXSHELL_SAGE_FREE: '80' };
+  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage image --steps 1 a tiny boat`], { env, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Sage Pro is writing a detailed prompt…\n {2}DETAILED: a tiny boat, in warm evening light/);
+  assert.match(r.stderr, /prompt: DETAILED: a tiny boat/);
+  assert.match(r.stdout, /saved sage-a-tiny-boat\.png/);
+  const exact = spawnSync('node', [sh, '-c', `cd ${work} && sage image --exact --steps 1 a tiny boat`], { env, encoding: 'utf8' });
+  assert.ok(!/writing a detailed prompt/.test(exact.stdout));
+  assert.match(exact.stderr, /prompt: a tiny boat\n/);
+  const mute = spawnSync('node', [sh, '-c', `cd ${work} && sage image --steps 1 a mute swan`], { env, encoding: 'utf8' });
+  assert.match(mute.stdout, /\(only 12% of memory is free — drawing from your words\)/);
+  fs.rmSync(gem, { recursive: true });
+  fs.rmSync(work, { recursive: true });
+});
+
+test('image chat shows Sage’s prompt, and edits are written knowing the picture', () => {
+  const { IDLE } = require('../src/sage');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-scene-'));
+  const PNG = makePng();
+  const started = [];
+  let polled = { phase: 'prompt' };
+  const startImage = (o) => {
+    const out = path.join(root, o.output);
+    started.push(o);
+    return {
+      out, writer: o.exact ? null : { label: 'Sage Pro' }, stop() {}, cleanup() {},
+      poll: () => {
+        if (polled.phase === 'prompt') return { state: 'running', phase: 'prompt', step: 0, total: 8 };
+        fs.writeFileSync(out, PNG);
+        return { state: 'done', phase: 'draw', step: 8, total: 8, detailed: o.exact ? null : `DETAILED ${o.prompt}` };
+      },
+    };
+  };
+  const a = new SageApp({ mode: 'image', root, model: 'image', models: [], start: () => IDLE, startImage });
+  a.setInput('a fox');
+  a.submit();
+  a.tick();
+  assert.match(text(render(a, 90, 30, 0)), /● Image 768×768 {2}Sage Pro is writing a detailed prompt…/);
+  polled = { phase: 'draw' };
+  a.tick();
+  let r = text(render(a, 90, 40, 0));
+  assert.match(r, /✎ DETAILED a fox/);
+  assert.strictEqual(a.scene, 'DETAILED a fox');
+  a.setInput('make it night');
+  a.submit();
+  assert.strictEqual(started[1].context, 'DETAILED a fox');
+  a.tick();
+  a.setInput('add snow');
+  a.submit();
+  assert.strictEqual(started[2].context, 'DETAILED a fox It has since been changed: make it night.');
+  a.tick();
+  a.setInput('/exact');
+  a.submit();
+  a.setInput('/new');
+  a.submit();
+  assert.deepStrictEqual([a.scene, a.changes], [null, []]);
+  a.setInput('a heron');
+  a.submit();
+  assert.strictEqual(started[3].exact, true);
+  // a long prompt is cut to four lines
+  a.items.push({ type: 'image', state: 'done', size: '768×768', prompt: 'x', out: path.join(root, 'none.png'), seconds: 1, detailed: 'word '.repeat(200) });
+  r = text(render(a, 60, 200, 0));
+  const said = r.split('\n').filter((l) => /word word/.test(l));
+  assert.strictEqual(said.length, 4);
+  assert.match(said[0], /✎ word/);
+  assert.match(said[3], /…$/);
+  for (const [c, rr] of [[90, 30], [40, 14], [24, 10]]) fits(render(a, c, rr, 0), c);
+  fs.rmSync(root, { recursive: true });
+});
+
 test('png: decodes a PNG and draws it in half blocks', () => {
   const png = require('../src/png');
   const PNG = makePng();
