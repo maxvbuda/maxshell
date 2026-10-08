@@ -484,6 +484,14 @@ test('/image draws in the background while the chat goes on', () => {
   a.setInput('/image a fox in the snow');
   a.submit();
   assert.ok(a.drawing());
+  // the model that's chatting writes the detailed prompt first, apart from the chat
+  assert.match(text(render(a, 90, 24, 0)), /Sage Pro is writing a detailed prompt…/);
+  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /writing a prompt/);
+  const sent = a.engine.sent.find((c) => c.op === 'image-prompt');
+  assert.deepStrictEqual([sent.prompt, sent.edit], ['a fox in the snow', false]);
+  a.tick(); // nothing to poll yet
+  a.onEvent({ ev: 'image-prompt', id: sent.id, text: 'A red fox in deep snow, soft morning light, a photo.' });
+  assert.strictEqual(a.items.find((i) => i.type === 'image').detailed, 'A red fox in deep snow, soft morning light, a photo.');
   a.tick();
   a.tick();
   let r = render(a, 90, 24, 0);
@@ -498,7 +506,24 @@ test('/image draws in the background while the chat goes on', () => {
   a.tick();
   r = render(a, 90, 24, 0);
   assert.match(text(r), /saved .*sage-a-fox\.png · 0s/);
+  assert.match(text(r), /✎ A red fox in deep snow/);
   assert.strictEqual(a.drawing(), null);
+  // /image --exact draws from the words at once
+  const d = app({ startImage: (o) => { d.got = o; return job; } });
+  d.onEvent({ ev: 'ready' });
+  d.image('--exact a heron');
+  assert.strictEqual(d.got.prompt, 'a heron');
+  // Ctrl-C while Sage writes the prompt stops it, and nothing is drawn
+  const e = app({ startImage: () => { throw new Error('should not draw'); } });
+  e.onEvent({ ev: 'ready' });
+  let interrupted = false;
+  e.engine.interrupt = () => { interrupted = true; };
+  e.image('a moth');
+  e.key({ name: 'c', ctrl: true });
+  assert.ok(interrupted);
+  assert.strictEqual(e.items[0].state, 'stopped');
+  e.onEvent({ ev: 'image-prompt', id: 1, text: 'late', stopped: true });
+  assert.strictEqual(e.items[0].state, 'stopped');
   // not set up: says how
   const b = app();
   b.setInput('/image x');
@@ -507,7 +532,7 @@ test('/image draws in the background while the chat goes on', () => {
   // ^C stops a picture being drawn
   const c = app({ startImage: () => ({ ...job, poll: () => ({ state: 'running', step: 1, total: 20 }) }) });
   c.onEvent({ ev: 'ready' });
-  c.image('a boat');
+  c.image('--exact a boat');
   c.key({ name: 'c', ctrl: true });
   assert.strictEqual(c.items[0].state, 'stopped');
   assert.strictEqual(c.done, false);
@@ -780,6 +805,16 @@ test('image chat shows Sage’s prompt, and edits are written knowing the pictur
   assert.match(said[3], /…$/);
   for (const [c, rr] of [[90, 30], [40, 14], [24, 10]]) fits(render(a, c, rr, 0), c);
   fs.rmSync(root, { recursive: true });
+});
+
+test('the engine writes /image prompts on request, apart from the chat', () => {
+  const e = new Engine([process.execPath, path.join(__dirname, 'fake-sage-engine.js'), '{commands}', 'chat'], { cwd: os.tmpdir(), env: process.env });
+  try {
+    e.send({ op: 'image-prompt', id: 3, prompt: 'a kite', edit: false, context: null });
+    let got = null;
+    for (let i = 0; i < 200 && !got; i++) { got = e.poll().find((ev) => ev.ev === 'image-prompt'); if (!got) sleepSync(20); }
+    assert.deepStrictEqual(got, { ev: 'image-prompt', id: 3, text: 'DETAILED a kite', stopped: false });
+  } finally { e.close(); }
 });
 
 test('png: decodes a PNG and draws it in half blocks', () => {

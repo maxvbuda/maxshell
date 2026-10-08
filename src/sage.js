@@ -197,6 +197,7 @@ class SageApp {
         break;
       }
       case 'tool': this.onTool(ev.name, ev.args || {}); break;
+      case 'image-prompt': this.onImagePrompt(ev); break;
       case 'done': {
         const item = this.lastSage();
         if (item) { item.done = true; item.v = (item.v || 0) + 1; }
@@ -460,10 +461,45 @@ class SageApp {
       o.images = [p.file];
       if (!o.sized) Object.assign(o, img.fitSize(p.width, p.height, Math.max(o.width, o.height)));
     }
-    let job;
-    try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
-    this.items.push({ type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now() });
+    o.output = path.basename(img.outputPath(o.output || o.prompt, this.root)); // named after your words
+    const item = { type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job: null, state: 'running', step: 0, total: o.steps, started: Date.now() };
+    this.items.push(item);
     this.scroll = 0;
+    if (!o.exact && this.status !== 'error') {
+      // The model that's chatting writes the detailed prompt (apart from the
+      // conversation) — no second copy of it in memory next to the image model.
+      item.id = (this.imageIds = (this.imageIds || 0) + 1);
+      item.options = o;
+      item.phase = 'prompt';
+      item.writer = MODEL_INFO[this.model].label;
+      this.engine.send({ op: 'image-prompt', id: item.id, prompt: o.prompt, edit: o.images.length > 0, context: null });
+      this.changed();
+      return;
+    }
+    this.startDrawing(item, o);
+  }
+
+  // Sage's prompt for /image is back: draw from it (or from the words).
+  onImagePrompt(ev) {
+    const item = this.items.find((i) => i.type === 'image' && i.id === ev.id);
+    if (!item || item.state !== 'running' || item.job) return;
+    if (ev.stopped) { item.state = 'stopped'; item.v = (item.v || 0) + 1; return; }
+    item.detailed = ev.text || null;
+    if (!ev.text) item.unwritten = 'Sage wrote nothing';
+    this.startDrawing(item, { ...item.options, prompt: ev.text || item.options.prompt });
+  }
+
+  startDrawing(item, o) {
+    try { item.job = this.startImage(o); } catch (e) {
+      item.state = 'failed';
+      item.error = e.message;
+      item.v = (item.v || 0) + 1;
+      this.changed();
+      return;
+    }
+    item.phase = 'draw';
+    item.started = Date.now();
+    item.v = (item.v || 0) + 1;
     this.changed();
   }
 
@@ -506,10 +542,11 @@ class SageApp {
   // Checks on a picture being drawn; the loop calls it between keys.
   tick() {
     const item = this.drawing();
-    if (!item) return;
+    if (!item || !item.job) return; // no job yet: Sage is writing its prompt
     const p = item.job.poll();
-    if (p.state === 'running' && p.step === item.step && p.total === item.total && p.phase === item.phase && p.detailed === item.detailed) return;
-    Object.assign(item, { step: p.step, total: p.total, phase: p.phase, detailed: p.detailed, unwritten: p.unwritten });
+    const detailed = p.detailed || item.detailed; // from the job's writer, or from the chat's model
+    if (p.state === 'running' && p.step === item.step && p.total === item.total && p.phase === item.phase && detailed === item.detailed) return;
+    Object.assign(item, { step: p.step, total: p.total, phase: p.phase, detailed, unwritten: p.unwritten || item.unwritten });
     if (p.state !== 'running') {
       item.state = p.state;
       item.seconds = Math.round((Date.now() - item.started) / 1000);
@@ -531,9 +568,8 @@ class SageApp {
     if (this.menu) { this.menu = null; this.changed(); return; }
     const drawing = this.drawing();
     if (drawing && !this.busy && !this.approval) { // ^C stops the picture first
-      drawing.job.stop();
+      if (drawing.job) { drawing.job.stop(); drawing.job.cleanup(); } else this.engine.interrupt(); // or Sage's prompt for it
       drawing.state = 'stopped';
-      drawing.job.cleanup();
       drawing.v = (drawing.v || 0) + 1;
       this.changed();
       return;
@@ -831,7 +867,7 @@ function render(app, cols, rows, now = Date.now()) {
   const drop = app.mode === 'image' ? ' ◆ Sage Image ' : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
-    loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} drawing ${app.drawing().step}/${app.drawing().total}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
+    loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? (app.drawing().phase === 'prompt' ? `${spin} writing a prompt` : `${spin} drawing ${app.drawing().step}/${app.drawing().total}`) : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
     thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';

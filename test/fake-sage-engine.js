@@ -2,7 +2,8 @@
 
 // A stand-in for sage.py --serve in tests: the same protocol, no model.
 // "edit" asks for an edit_file of a.py (return 1 → return 2); anything else
-// is echoed back in two pieces.
+// is echoed back in two pieces. An image-prompt comes back as "DETAILED …"
+// (empty for a prompt with "mute").
 
 const fs = require('fs');
 const { sleepSync } = require('../src/keys');
@@ -35,6 +36,7 @@ for (;;) {
   const cmd = next();
   if (cmd.op === 'quit') process.exit(0);
   if (cmd.op === 'reset') { emit({ ev: 'ready' }); continue; }
+  if (cmd.op === 'image-prompt') { emit({ ev: 'image-prompt', id: cmd.id, text: /mute/.test(cmd.prompt) ? '' : `DETAILED ${cmd.prompt}`, stopped: false }); continue; }
   if (cmd.op !== 'ask') continue;
   if (mode === 'code' && /edit/.test(cmd.text)) {
     emit({ ev: 'text', s: 'Changing it.' });

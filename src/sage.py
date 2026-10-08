@@ -662,9 +662,11 @@ def quiet():
 def serve(cmd_path, mode):
     """The engine for sage's app. Commands (one JSON object a line, appended to
     cmd_path): {"op": "ask", "text"}, {"op": "result", "text"} answering a
-    tool event, {"op": "reset"}, {"op": "quit"}. Events on stdout: loading,
-    ready, text {s}, tool {name, args}, done {stopped, tokens, seconds},
-    error {text}. SIGINT stops an answer."""
+    tool event, {"op": "image-prompt", "id", "prompt", "edit", "context"}
+    (/image: a detailed prompt, written apart from the conversation),
+    {"op": "reset"}, {"op": "quit"}. Events on stdout: loading, ready, text
+    {s}, tool {name, args}, done {stopped, tokens, seconds}, image-prompt {id,
+    text, stopped}, error {text}. SIGINT stops an answer."""
     def emit(**ev):
         sys.stdout.write(json.dumps(ev) + '\n')
         sys.stdout.flush()
@@ -715,6 +717,9 @@ def serve(cmd_path, mode):
         if op == 'reset':
             chat = new_chat(mode)
             emit(ev='ready', model=NAME, device=device)
+        elif op == 'image-prompt':
+            text, stopped = write_image_prompt(new_chat, cmd)
+            emit(ev='image-prompt', id=cmd.get('id'), text=text, stopped=stopped)
         elif op == 'ask':
             stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', s=s), tools)
             emit(ev='done', stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
@@ -727,6 +732,22 @@ def clean_prompt(text):
     if len(text) > 1 and text[0] in '"“' and text[-1] in '"”':
         text = text[1:-1].strip()
     return re.sub(r'\s+', ' ', text)
+
+
+def write_image_prompt(new_chat, req):
+    """Sage's detailed prompt (or edit instruction) for a request {prompt,
+    edit, context}, written in a conversation of its own; and whether Ctrl-C
+    stopped it."""
+    edit = bool(req.get('edit'))
+    chat = new_chat('image-edit' if edit else 'image')
+    ask = req.get('prompt', '')
+    if edit and req.get('context'):
+        ask = f"The picture now shows: {req['context']}\n\nThe change the user wants: {ask}"
+    elif edit:
+        ask = f'The change the user wants: {ask}'
+    parts = []
+    stopped = chat.reply(ask, parts.append)
+    return clean_prompt(''.join(parts)), stopped
 
 
 def image_prompt(req_path, out_path):
@@ -742,17 +763,8 @@ def image_prompt(req_path, out_path):
         sys.stderr.write(f'{why}\n')
         return 1
     quiet()
-    model, tok, gen, device = load()
-    edit = bool(req.get('edit'))
-    chat = Chat(model, tok, gen, device, 'image-edit' if edit else 'image')
-    ask = req.get('prompt', '')
-    if edit and req.get('context'):
-        ask = f"The picture now shows: {req['context']}\n\nThe change the user wants: {ask}"
-    elif edit:
-        ask = f'The change the user wants: {ask}'
-    parts = []
-    chat.reply(ask, parts.append)
-    text = clean_prompt(''.join(parts))
+    new_chat, _ = open_engine()
+    text, _ = write_image_prompt(new_chat, req)
     if not text:
         sys.stderr.write('Sage wrote nothing\n')
         return 1

@@ -1126,7 +1126,9 @@ the picture is drawn. Sage Pro and the image model don't fit in memory
 together, so Sage runs first and quits: it adds about 30 seconds (Sage Lite
 writes it when memory is short or Pro isn't set up; if neither can run, your
 words are used as they are). `--exact` (`/exact` in image chat) skips it. The
-file is still named after your words.
+file is still named after your words. `/image` in a Sage chat does the same
+with the model you're chatting with — it writes the prompt on the side, so
+the conversation isn't touched (`/image --exact …` skips it).
 
 **Talk to a picture to change it.** `sage image` on its own opens image
 chat, full screen: describe a picture, and once it's drawn — shown right in
