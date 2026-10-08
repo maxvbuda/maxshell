@@ -75,6 +75,10 @@ const PYTHONS = ['python3.13', 'python3.12', 'python3.11', 'python3.10', 'python
   '/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/Library/Frameworks/Python.framework/Versions/Current/bin/python3'];
 const findPython = () => PYTHONS.find(recent);
 
+// Downloads without Hugging Face's "set a HF_TOKEN for higher rate limits"
+// warning: public models need no account.
+const hubEnv = () => ({ HF_HUB_VERBOSITY: 'error', ...process.env });
+
 function setup(m, write, err) {
   const d = dir(m);
   fs.mkdirSync(d, { recursive: true });
@@ -100,17 +104,17 @@ function setup(m, write, err) {
     if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm'])) { err('sage: pip install failed\n'); return 1; }
     write(`Downloading ${m.repo} (${m.size}) into ${d}…\n`);
     const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
-    if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...process.env, HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
+    if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
     write(`${m.label} is ready — try: sage --${m.flag}\n`);
     return 0;
   }
   write(`Fetching the config and tokenizer from ${m.repo}…\n`);
   const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
-  if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
+  if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit', env: hubEnv() }).status !== 0) { err('sage: download failed\n'); return 1; }
   const model = path.join(d, 'model.safetensors');
   if (!fs.existsSync(model)) {
     write(`Downloading ${m.repo}'s model.safetensors (${m.size}) into ${d}…\n`);
-    if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit' }).status !== 0) { err('sage: download failed\n'); return 1; }
+    if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit', env: hubEnv() }).status !== 0) { err('sage: download failed\n'); return 1; }
   }
   write(`${m.label} is ready — try: sage${m === MODELS[DEFAULT] ? '' : ` --${m.flag}`}\n`);
   return 0;

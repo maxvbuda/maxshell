@@ -196,7 +196,8 @@ function setup(write, err) {
   fs.mkdirSync(dir(), { recursive: true });
   write(`Downloading ${REPO} (${SIZE}) into ${dir()}…\n`);
   const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(REPO)}, local_dir='.')\n`;
-  if (!run(python(), ['-c', snap], { cwd: dir(), env: { ...process.env, HF_HUB_DISABLE_XET: '1' } })) { err('sage image: download failed\n'); return 1; }
+  // HF_HUB_VERBOSITY: no "set a HF_TOKEN" warning — public models need no account
+  if (!run(python(), ['-c', snap], { cwd: dir(), env: { HF_HUB_VERBOSITY: 'error', ...process.env, HF_HUB_DISABLE_XET: '1' } })) { err('sage image: download failed\n'); return 1; }
   write('Sage can draw now — try: sage image "a lighthouse at dusk, oil painting"\n');
   return 0;
 }
