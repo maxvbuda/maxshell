@@ -30,8 +30,16 @@ const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '�
 const MODEL_INFO = {
   ultra: { label: 'Sage Ultra', blurb: 'best at code · ~6 GB', flag: 'ultra' },
   e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~9 GB', flag: 'pro' },
-  e2b: { label: 'Sage Lite', blurb: 'fastest · ~5 GB', flag: 'lite' },
+  e2b: { label: 'Sage Flash', blurb: 'fast · ~5 GB', flag: 'flash' },
+  lite: { label: 'Sage Lite', blurb: 'fastest · ~2 GB', flag: 'lite' },
 };
+// In a chat (not sage code), Sage Ultra is the big chat model, Gemma 4 26B,
+// and Sage Lite is SmolLM2; in sage code they're coding models.
+const CHAT_INFO = {
+  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~15 GB', flag: 'ultra' },
+  lite: { label: 'Sage Lite', blurb: 'fastest · ~1 GB', flag: 'lite' },
+};
+const modelInfo = (mode, key) => (mode !== 'code' && CHAT_INFO[key]) || MODEL_INFO[key];
 
 // --- the engine -----------------------------------------------------------------
 
@@ -379,9 +387,11 @@ class SageApp {
     const [cmd, arg] = text.slice(1).split(/\s+/);
     switch (cmd) {
       case 'new': case 'clear': this.newChat(); return true;
-      case 'model':
-        if (arg && MODEL_INFO[arg.toLowerCase()]) this.switchModel(arg.toLowerCase()); else this.openMenu();
+      case 'model': {
+        const key = arg && ({ pro: 'e4b', flash: 'e2b' }[arg.toLowerCase()] || arg.toLowerCase());
+        if (key && modelInfo(this.mode, key)) this.switchModel(key); else this.openMenu();
         return true;
+      }
       case 'exit': case 'quit': case 'bye': this.done = true; return true;
       case 'image': case 'draw': this.image(text.slice(cmd.length + 1).trim()); return true;
       case 'size': case 'steps': {
@@ -424,19 +434,19 @@ class SageApp {
         return true;
       case 'open':
         if (this.mode === 'video') {
-          if (this.clip) require('child_process').spawnSync('open', [this.clip], { stdio: 'ignore' }); else this.note('No clip yet.');
+          if (this.clip) require('./sageimage').openFile(this.clip); else this.note('No clip yet.');
           return true;
         }
         if (this.picture) {
           const last = [...this.items].reverse().find((i) => i.type === 'image' && i.out === this.picture);
-          require('child_process').spawnSync('open', [(last && last.source) || this.picture], { stdio: 'ignore' });
+          require('./sageimage').openFile((last && last.source) || this.picture);
         }
         else this.note('No picture yet.');
         return true;
       case 'help':
         if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
-        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
@@ -467,15 +477,13 @@ class SageApp {
   switchModel(key) {
     this.menu = null;
     const m = this.models.find((x) => x.key === key);
-    if (!m) {
-      if (key === 'ultra') this.note('Sage Ultra is for coding — it’s in sage code (sage code --ultra).');
-      return;
-    }
+    if (!m) return;
     if (key === this.model && this.status !== 'error') { this.changed(); return; }
-    if (!m.ready) { this.note(`${MODEL_INFO[key].label} isn’t set up — run: sage --${MODEL_INFO[key].flag} --setup`, 'err'); return; }
+    const mi = modelInfo(this.mode, key);
+    if (!m.ready) { this.note(`${mi.label} isn’t set up — run: sage --${mi.flag} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
     this.engine.close();
-    if (this.items.length) this.note(`Switched to ${MODEL_INFO[key].label} — a fresh conversation.`);
+    if (this.items.length) this.note(`Switched to ${mi.label} — a fresh conversation.`);
     this.useModel(key);
   }
 
@@ -508,7 +516,7 @@ class SageApp {
       item.id = (this.imageIds = (this.imageIds || 0) + 1);
       item.options = o;
       item.phase = 'prompt';
-      item.writer = MODEL_INFO[this.model].label;
+      item.writer = modelInfo(this.mode, this.model).label;
       this.engine.send({ op: 'image-prompt', id: item.id, prompt: o.prompt, edit: o.images.length > 0, context: null });
       this.changed();
       return;
@@ -728,7 +736,7 @@ class SageApp {
     if (hit && hit.action === 'model') { this.switchModel(hit.key); return; }
     if (hit && hit.action === 'answer') { this.answer(hit.choice); return; }
     if (hit && hit.action === 'try') { this.setInput(hit.text); return; }
-    if (hit && hit.action === 'open') { require('child_process').spawnSync('open', [hit.file], { stdio: 'ignore' }); return; }
+    if (hit && hit.action === 'open') { require('./sageimage').openFile(hit.file); return; }
     if (this.menu) { this.menu = null; this.changed(); }
   }
 
@@ -971,7 +979,7 @@ function render(app, cols, rows, now = Date.now()) {
   // header: brand, mode, folder · status, model dropdown
   const barBg = theme.bg(ui.bar.bg);
   const barFg = ansi.fg(ui.bar.fg);
-  const info = MODEL_INFO[app.model] || { label: app.model };
+  const info = modelInfo(app.mode, app.model) || { label: app.model };
   const working = (d) => (d.phase === 'prompt' ? 'writing a prompt'
     : d.type !== 'video' ? `drawing ${d.step}/${d.total}`
     : d.stage === 'sound' ? 'adding sound'
@@ -1082,7 +1090,7 @@ function render(app, cols, rows, now = Date.now()) {
   // the dropdown, over the transcript at the right
   if (app.menu) {
     const entries = app.models.map((m) => {
-      const mi = MODEL_INFO[m.key] || { label: m.key, blurb: '' };
+      const mi = modelInfo(app.mode, m.key) || { label: m.key, blurb: '' };
       return { m, text: ` ${m.key === app.model ? '✓' : ' '} ${mi.label}  `, blurb: m.ready ? `${mi.blurb} ` : 'not set up ' };
     });
     const mw = Math.min(W - 2, Math.max(...entries.map((e) => tui.textWidth(e.text) + tui.textWidth(e.blurb))) + 2);
@@ -1151,4 +1159,4 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
   return 0;
 }
 
-module.exports = { IDLE, Engine, SageApp, render, wrap, itemLines, loop, MODEL_INFO };
+module.exports = { IDLE, Engine, SageApp, render, wrap, itemLines, loop, MODEL_INFO, modelInfo };

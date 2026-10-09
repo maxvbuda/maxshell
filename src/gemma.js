@@ -1,13 +1,15 @@
 'use strict';
 
-// sage: Sage, maxshell's AI, on this Mac — Sage Pro and Sage Lite are Gemma 4
-// E4B and E2B (Google's open models, run with transformers), Sage Ultra is
-// Qwen2.5-Coder-7B (Alibaba's, run with MLX). The full-screen app is
-// src/sage.js; the models run in src/sage.py under Sage's own Python
-// (~/.maxshell/gemma/venv: the system PyTorch plus transformers, and mlx-lm
-// for Ultra); `sage --setup` makes that Python and downloads the model into
-// its folder. While mx training has the GPU, Gemma runs on the CPU, which is
-// as fast then and doesn't slow the training.
+// sage: Sage, maxshell's AI, on this Mac — Sage Pro and Sage Flash are Gemma
+// 4 E4B and E2B (Google's open models, run with transformers), Sage Lite is
+// SmolLM2-1.7B (Hugging Face's, run with MLX: tiny and very fast), Sage Ultra is
+// Gemma 4 26B-A4B in a chat and Qwen2.5-Coder-7B (Alibaba's) in sage code,
+// both run with MLX. The full-screen app is src/sage.js; the models run in
+// src/sage.py under Sage's own Python (~/.maxshell/gemma/venv: the system
+// PyTorch plus transformers, and mlx-lm for Ultra); `sage --setup` makes that
+// Python and downloads the model into its folder. While mx training has the
+// GPU, Gemma runs on the CPU, which is as fast then and doesn't slow the
+// training.
 
 const fs = require('fs');
 const os = require('os');
@@ -16,13 +18,35 @@ const { spawnSync } = require('child_process');
 
 // The FP8 builds of Gemma 4 (instruction-tuned). E2B lives in the gemma
 // folder itself; E4B, about twice the compute and memory, in gemma/e4b.
-// Ultra, a 4-bit MLX build of Qwen2.5-Coder-7B-Instruct, in gemma/ultra.
+// Ultra, a 4-bit MLX build of Qwen2.5-Coder-7B-Instruct, in gemma/ultra;
+// in a chat, Ultra is a 4-bit MLX build of Gemma 4 26B-A4B (a mixture of
+// experts: 26B parameters, about 4B used for each token, so it's quick), in
+// gemma/ultra-chat.
 const MODELS = {
   ultra: {
     name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit', sub: 'ultra',
     size: '4.3 GB', needFree: 30, mlx: true, files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
+    try: 'sage code --ultra',
   },
-  e2b: { name: 'E2B', label: 'Sage Lite', flag: 'lite', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
+  ultrachat: {
+    name: 'ULTRA-CHAT', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/gemma-4-26b-a4b-it-4bit', sub: 'ultra-chat',
+    size: '15 GB', needFree: 60, mlx: true, sharded: true, try: 'sage --ultra',
+    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'chat_template.jinja', 'model.safetensors.index.json'],
+  },
+  e2b: { name: 'E2B', label: 'Sage Flash', flag: 'flash', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
+  // Lite: SmolLM2-1.7B-Instruct, made 4-bit for MLX here (in gemma/lite):
+  // about 70 tokens a second, nearly three times its 8-bit build.
+  lite: {
+    name: 'LITE', label: 'Sage Lite', flag: 'lite', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', sub: 'lite',
+    size: '3.4 GB', needFree: 15, mlx: true, quantize: true, try: 'sage --lite',
+    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
+  },
+  // Lite in sage code: Qwen2.5-Coder-3B-Instruct, 4-bit MLX, in gemma/lite-code.
+  litecode: {
+    name: 'LITE-CODE', label: 'Sage Lite', flag: 'lite', repo: 'mlx-community/Qwen2.5-Coder-3B-Instruct-4bit', sub: 'lite-code',
+    size: '1.8 GB', needFree: 15, mlx: true, try: 'sage code --lite',
+    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
+  },
   e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB', needFree: 40 },
 };
 const DEFAULT = 'e4b';
@@ -37,18 +61,32 @@ function hasMlx() {
   const lib = path.join(path.dirname(path.dirname(python())), 'lib');
   try { return fs.readdirSync(lib).some((v) => fs.existsSync(path.join(lib, v, 'site-packages', 'mlx_lm'))); } catch { return false; }
 }
-const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && fs.existsSync(path.join(dir(m), 'model.safetensors'))
+// The weights: one file, or the shards the index lists.
+function weights(m) {
+  if (!m.sharded) return ['model.safetensors'];
+  try {
+    return [...new Set(Object.values(JSON.parse(fs.readFileSync(path.join(dir(m), 'model.safetensors.index.json'), 'utf8')).weight_map))];
+  } catch { return ['model.safetensors.index.json']; }
+}
+const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && weights(m).every((f) => fs.existsSync(path.join(dir(m), f)))
   && (m.files || FILES).every((f) => fs.existsSync(path.join(dir(m), f))) && (!m.mlx || !!process.env.MAXSHELL_GEMMA_PYTHON || hasMlx());
 
-// --pro / --lite / --ultra (or --e4b / --e2b) at the front of the arguments,
+// --pro / --flash / --lite / --ultra (or --e4b / --e2b) at the front of the arguments,
 // else $MAXSHELL_SAGE_MODEL, else Pro.
-const ALIASES = { lite: 'e2b', pro: 'e4b' };
+const ALIASES = { flash: 'e2b', pro: 'e4b' };
 function pick(args) {
-  const flag = /^--(e2b|e4b|lite|pro|ultra)$/i.exec(args[0] || '');
+  const flag = /^--(e2b|e4b|flash|lite|pro|ultra)$/i.exec(args[0] || '');
   if (flag) args = args.slice(1);
   let key = (flag ? flag[1] : process.env.MAXSHELL_SAGE_MODEL || DEFAULT).toLowerCase();
   key = ALIASES[key] || key;
   return { model: MODELS[key], key, args, chosen: !!(flag || process.env.MAXSHELL_SAGE_MODEL), flagged: !!flag };
+}
+// Sage Ultra and Sage Lite are chat models in a chat and coding models in
+// sage code.
+function modelFor(key, mode) {
+  if (key === 'ultra') return mode === 'code' ? MODELS.ultra : MODELS.ultrachat;
+  if (key === 'lite') return mode === 'code' ? MODELS.litecode : MODELS.lite;
+  return MODELS[key];
 }
 
 // % of memory free — on a Mac the GPU's memory is the same memory.
@@ -65,7 +103,7 @@ function fallback(key, chosen) {
   if (chosen || key !== 'e4b' || !ready(MODELS.e2b)) return { key };
   const free = freeMemory();
   if (free >= MODELS.e4b.needFree) return { key };
-  return { key: 'e2b', why: `Only ${free}% of memory is free and Sage Pro needs ${MODELS.e4b.needFree}%, so this is Sage Lite, the lighter model.` };
+  return { key: 'e2b', why: `Only ${free}% of memory is free and Sage Pro needs ${MODELS.e4b.needFree}%, so this is Sage Flash, the lighter model.` };
 }
 const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
 
@@ -101,11 +139,12 @@ function setup(m, write, err) {
   if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('sage: pip install failed\n'); return 1; }
   if (m.mlx) {
     write('Installing mlx-lm…\n');
-    if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm'])) { err('sage: pip install failed\n'); return 1; }
+    if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm>=0.32'])) { err('sage: pip install failed\n'); return 1; }
+    if (m.quantize) return quantize(m, d, write, err);
     write(`Downloading ${m.repo} (${m.size}) into ${d}…\n`);
     const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
     if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
-    write(`${m.label} is ready — try: sage --${m.flag}\n`);
+    write(`${m.label} is ready — try: ${m.try}\n`);
     return 0;
   }
   write(`Fetching the config and tokenizer from ${m.repo}…\n`);
@@ -120,6 +159,26 @@ function setup(m, write, err) {
   return 0;
 }
 
+// Downloads the full model into a folder of its own, makes the 4-bit MLX
+// build from it into the model's folder, and removes the download.
+function quantize(m, d, write, err) {
+  if (ready(m)) { write(`${m.label} is ready — try: ${m.try}\n`); return 0; }
+  const src = `${d}.download`;
+  const out = `${d}.part`;
+  for (const p of [src, out]) fs.rmSync(p, { recursive: true, force: true }); // ours, from a setup cut short
+  write(`Downloading ${m.repo} (${m.size})…\n`);
+  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir=${JSON.stringify(src)}, allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
+  if (spawnSync(python(), ['-c', snap], { stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
+  write(`Making it 4-bit, into ${d}…\n`);
+  const ok = spawnSync(python(), ['-m', 'mlx_lm', 'convert', '--hf-path', src, '-q', '--q-bits', '4', '--q-group-size', '64', '--mlx-path', out], { stdio: 'inherit', env: hubEnv() }).status === 0;
+  fs.rmSync(src, { recursive: true, force: true });
+  if (!ok) { fs.rmSync(out, { recursive: true, force: true }); err('sage: converting the model failed\n'); return 1; }
+  fs.rmSync(d, { recursive: true, force: true }); // the empty folder setup made
+  fs.renameSync(out, d);
+  write(`${m.label} is ready — try: ${m.try}\n`);
+  return 0;
+}
+
 // Where the engine runs and what it's told: the model folder, and the CPU
 // while mx training has the GPU.
 function engineEnv(m, shell) {
@@ -128,7 +187,7 @@ function engineEnv(m, shell) {
   return env;
 }
 
-// sage image's prompt writer: Sage Pro (Sage Lite when memory is short or
+// sage image's prompt writer: Sage Pro (Sage Flash when memory is short or
 // Pro isn't set up) as a command that turns a request into a detailed
 // prompt — { label, cmd, env } — or null when neither is set up.
 function promptWriter(shell) {
@@ -147,11 +206,16 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage video <prompt>  a short clip, made here (sage video --help)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
-  sage code --ultra …  use Sage Ultra, the best at code (a 7B coding model; sage code only)
-  sage --lite …        use Sage Lite, twice as fast (MAXSHELL_SAGE_MODEL=lite makes
-                       it the default; Sage Pro is, unless memory is short)
+  sage --ultra …       use Sage Ultra, the smartest (needs ~15 GB of memory) —
+                       in sage code, a coding model, the best at code
+  sage --flash …       use Sage Flash, twice as fast as Pro (MAXSHELL_SAGE_MODEL=flash
+                       makes it the default; Sage Pro is, unless memory is short)
+  sage --lite …        use Sage Lite, tiny and the fastest of all — in sage code,
+                       a small coding model
   sage --setup         install what it needs (sage --ultra --setup for Sage Ultra,
-                       sage --lite --setup for Sage Lite)
+                       sage code --ultra --setup for the coding one,
+                       sage --flash --setup, sage --lite --setup,
+                       sage code --lite --setup)
 `;
 
 function runSage(args, io, shell, name = 'sage') {
@@ -163,36 +227,29 @@ function runSage(args, io, shell, name = 'sage') {
   if (args[0] === 'image') return require('./sageimage').runImage(args.slice(1), io, shell);
   if (args[0] === 'video') return require('./sagevideo').runVideo(args.slice(1), io, shell);
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
-  let { model: m, key, args: rest, chosen, flagged } = pick(args);
-  if (!m) { err(`${name}: no model ${key} — pro, ultra or lite\n`); return 1; }
+  let { model: m, key, args: rest, chosen } = pick(args);
+  if (!m) { err(`${name}: no model ${key} — ultra, pro, flash or lite\n`); return 1; }
   args = rest;
   if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
+  m = modelFor(key, mode);
   const flag = m === MODELS[DEFAULT] ? '' : ` --${m.flag}`;
   if (args[0] === '--setup') return setup(m, write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
-  // Sage Ultra is a coding model, for sage code only: asked for by name in a
-  // chat, say so; set as the default, chats use Sage Pro.
-  if (mode === 'chat' && key === 'ultra') {
-    if (flagged) { err(`${name}: Sage Ultra is for coding — use: sage code --ultra\n`); return 1; }
-    key = DEFAULT;
-    m = MODELS[key];
-    chosen = false;
-  }
   const auto = fallback(key, chosen);
   if (auto.key !== key) { key = auto.key; m = MODELS[key]; }
-  if (!ready(m)) { err(`${name}: ${m.label} isn’t set up — run: sage${flag} --setup\n`); return 1; }
+  if (!ready(m)) { err(`${name}: ${m.label} isn’t set up — run: sage${mode === 'code' ? ' code' : ''}${flag} --setup\n`); return 1; }
   const env = engineEnv(m, shell);
   const tty = process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term' && io.stdin.kind !== 'string';
 
   if (tty && (mode === 'code' || !args.length)) {
     const sage = require('./sage');
     const tui = require('./tui');
-    const keys = mode === 'code' ? ['ultra', 'e4b', 'e2b'] : ['e4b', 'e2b']; // the dropdown, best first; Ultra codes only
-    const models = keys.map((k) => ({ key: k, ready: ready(MODELS[k]) }));
+    const keys = ['ultra', 'e4b', 'e2b', 'lite']; // the dropdown, best first
+    const models = keys.map((k) => ({ key: k, ready: ready(modelFor(k, mode)) }));
     const fake = process.env.MAXSHELL_SAGE_ENGINE; // tests: a stand-in for sage.py
     const start = (k, md) => new sage.Engine(
       fake ? [process.execPath, fake, '{commands}', md] : [python(), path.join(__dirname, 'sage.py'), '--serve', '{commands}', md],
-      { cwd: shell.cwd, env: engineEnv(MODELS[k], shell) },
+      { cwd: shell.cwd, env: engineEnv(modelFor(k, mode), shell) },
     );
     const img = require('./sageimage');
     const startImage = img.ready() ? (o) => new img.Job(o, shell.cwd, { env: shell.env, free: freeMemory() }) : null;
@@ -213,4 +270,4 @@ function runSage(args, io, shell, name = 'sage') {
   return shell.runExternal([python(), path.join(__dirname, 'sage.py'), ...args], io, env);
 }
 
-module.exports = { promptWriter, runSage, HELP, ready, pick, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };
+module.exports = { promptWriter, runSage, HELP, ready, pick, modelFor, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };

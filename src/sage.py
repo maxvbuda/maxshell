@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Sage's engine: Sage Pro and Lite (Gemma 4 E4B / E2B, with transformers) and
-Sage Ultra (Qwen2.5-Coder-7B, with MLX), running on this Mac. Run by
+"""Sage's engine: Sage Pro and Flash (Gemma 4 E4B / E2B, with transformers),
+Sage Lite (SmolLM2-1.7B in a chat, Qwen2.5-Coder-3B in sage code, with MLX)
+and Sage Ultra (Gemma 4 26B-A4B in a chat, Qwen2.5-Coder-7B in sage code,
+with MLX), running on this Mac. Run by
 maxshell's `sage`.
 
 The model folder (~/.maxshell/gemma/e4b or ~/.maxshell/gemma, or
@@ -37,11 +39,15 @@ import time
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
 ULTRA = NAME == 'ULTRA'  # Qwen2.5-Coder-7B on MLX (below), not Gemma
-LABEL = {'E2B': 'Lite', 'ULTRA': 'Ultra'}.get(NAME, 'Pro')
-FLAG = {'E2B': ' --lite', 'ULTRA': ' --ultra'}.get(NAME, '')
-NEED_GB = {'E4B': 9, 'E2B': 5, 'ULTRA': 6}.get(NAME, 9)
-NEED_FREE = {'E4B': 40, 'E2B': 25, 'ULTRA': 30}.get(NAME, 40)  # % of memory free before loading (training pauses below 15)
-MAKER = 'Alibaba' if ULTRA else 'Google'
+ULTRA_CHAT = NAME == 'ULTRA-CHAT'  # Gemma 4 26B-A4B on MLX: Sage Ultra in a chat
+LITE = NAME == 'LITE'  # SmolLM2-1.7B on MLX
+LITE_CODE = NAME == 'LITE-CODE'  # Qwen2.5-Coder-3B on MLX: Sage Lite in sage code
+LABEL = {'E2B': 'Flash', 'LITE': 'Lite', 'LITE-CODE': 'Lite', 'ULTRA': 'Ultra', 'ULTRA-CHAT': 'Ultra'}.get(NAME, 'Pro')
+FLAG = {'E2B': ' --flash', 'LITE': ' --lite', 'LITE-CODE': ' code --lite', 'ULTRA': ' code --ultra',
+        'ULTRA-CHAT': ' --ultra'}.get(NAME, '')
+NEED_GB = {'E4B': 9, 'E2B': 5, 'LITE': 2, 'LITE-CODE': 2, 'ULTRA': 6, 'ULTRA-CHAT': 15}.get(NAME, 9)
+NEED_FREE = {'E4B': 40, 'E2B': 25, 'LITE': 15, 'LITE-CODE': 15, 'ULTRA': 30, 'ULTRA-CHAT': 60}.get(NAME, 40)  # % of memory free before loading (training pauses below 15)
+MAKER = 'Alibaba' if ULTRA or LITE_CODE else 'Hugging Face' if LITE else 'Google'
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
 C = type('C', (), COLORS)
@@ -86,7 +92,9 @@ CODE_TOOLS = [
 ]
 QUOTE = '<|"|>'
 CALL = re.compile(r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>', re.S)
-HIDDEN = re.compile(r'<\|tool_call>.*?(<tool_call\|>|$)|<\|tool_response>.*?(<tool_response\|>|$)|<\|[^<>|\s]*>|<[^<>|\s]*\|>', re.S)
+# Hidden too: Gemma's thinking (Sage Ultra thinks before it answers).
+HIDDEN = re.compile(r'<\|tool_call>.*?(<tool_call\|>|\Z)|<\|tool_response>.*?(<tool_response\|>|\Z)|<\|channel>.*?(<channel\|>|\Z)|'
+                    r'<\|[^<>|\s]*>|<[^<>|\s]*\|>', re.S)
 MAX_CALLS = 40  # tool calls in one answer
 
 
@@ -533,15 +541,19 @@ class UltraEngine:
         self.device = 'cpu' if device == 'cpu' else 'gpu'
 
     def chat(self, mode, system, tools=None, max_calls=40, max_tokens=8192):
-        return UltraChat(self, mode, system, tools, max_calls, max_tokens)
+        return (GemmaMlxChat if ULTRA_CHAT else SmolChat if LITE else UltraChat)(self, mode, system, tools, max_calls, max_tokens)
 
 
 class UltraChat:
+    END = '<|im_end|>'  # ends a turn
+    SAMPLING = {'top_p': 0.8, 'top_k': 20}
+    REPEAT = 1.05  # repetition penalty
+
     def __init__(self, engine, mode, system, tools, max_calls, max_tokens):
         from mlx_lm.models.cache import make_prompt_cache
         self.e, self.mode, self.max_calls, self.max_tokens = engine, mode, max_calls, max_tokens
         self.tok = engine.tok
-        self.im_end = self.tok.convert_tokens_to_ids('<|im_end|>')
+        self.im_end = self.tok.convert_tokens_to_ids(self.END)
         self.turns = []
         self.generated = 0
         self.seconds = 0.0
@@ -567,15 +579,15 @@ class UltraChat:
         return self.tokens[self.fed():]
 
     def generate(self, text_after, show, stop, temperature):
-        """Adds text_after to the conversation and lets Qwen write; returns
+        """Adds text_after to the conversation and lets the model write; returns
         its raw output."""
         from mlx_lm import stream_generate
         from mlx_lm.sample_utils import make_sampler, make_logits_processors
         new = self.encode(text_after)
         prompt = self.pending() + new
         self.tokens += new
-        sampler = make_sampler(temp=temperature, top_p=0.8, top_k=20)
-        processors = make_logits_processors(repetition_penalty=1.05)
+        sampler = make_sampler(temp=temperature, **self.SAMPLING)
+        processors = make_logits_processors(repetition_penalty=self.REPEAT)
         raw, shown, out, cut = '', 0, [], None
         base = len(self.tokens)
         began = time.time()
@@ -586,7 +598,7 @@ class UltraChat:
             elif r.finish_reason in ('stop', 'length'):
                 out.append(r.token)
             raw += r.text
-            seen, _, cut = ultra_scan(raw)
+            seen, _, cut = self.scan(raw)
             if len(seen) > shown:
                 show(seen[shown:])
                 shown = len(seen)
@@ -606,6 +618,16 @@ class UltraChat:
         self.tokens = self.tokens[:base] + self.encode(raw)
         return raw
 
+    @staticmethod
+    def scan(raw):
+        return ultra_scan(raw)
+
+    def temperature(self):
+        return 0.3 if self.mode == 'code' else 0.7
+
+    def user_turn(self, question):
+        return f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
+
     def close_turn(self):
         if not self.tokens or self.tokens[-1] != self.im_end:
             self.tokens.append(self.im_end)
@@ -617,8 +639,8 @@ class UltraChat:
         self.turns.append(('user', question))
         self.generated, self.seconds = 0, 0.0
         stop = {'hit': False}
-        temperature = 0.3 if self.mode == 'code' else 0.7
-        text_after = f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
+        temperature = self.temperature()
+        text_after = self.user_turn(question)
         said = []
         for _ in range(self.max_calls + 1):
             old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
@@ -626,7 +648,7 @@ class UltraChat:
                 raw = self.generate(text_after, show, stop, temperature)
             finally:
                 signal.signal(signal.SIGINT, old)
-            shown, calls, _ = ultra_scan(raw)
+            shown, calls, _ = self.scan(raw)
             said.append(shown)
             calls = calls[:1] if not stop['hit'] else []  # one at a time: it sees each result
             if not calls:
@@ -650,9 +672,43 @@ class UltraChat:
         return stop['hit']
 
 
+class GemmaMlxChat(UltraChat):
+    """Sage Ultra in a chat: Gemma 4 26B-A4B on MLX. Gemma's turns and
+    sampling; no tools (sage code's Ultra is Qwen)."""
+    END = '<turn|>'
+    SAMPLING = {'top_p': 0.95, 'top_k': 64}  # Google's settings, with temperature 1
+    REPEAT = None
+
+    @staticmethod
+    def scan(raw):
+        return visible(raw), [], None
+
+    def temperature(self):
+        if self.mode.startswith(('image', 'video')):
+            return 0.7
+        return CODE_TEMPERATURE if is_coding(self.turns) else 1.0
+
+    def user_turn(self, question):
+        return f'<|turn>user\n{question}<turn|>\n<|turn>model\n'
+
+
+class SmolChat(UltraChat):
+    """Sage Lite: SmolLM2-1.7B on MLX. The same turns as Qwen's (ChatML), with
+    Hugging Face's suggested sampling; no tools."""
+    SAMPLING = {'top_p': 0.9}
+    REPEAT = 1.1  # a small model loops without it
+
+    @staticmethod
+    def scan(raw):
+        return ULTRA_SPECIAL.sub('', raw), [], None
+
+    def temperature(self):
+        return 0.7 if self.mode.startswith(('image', 'video')) else 0.3
+
+
 def problem():
     """Why the model can't start now, or None."""
-    if not os.path.exists(os.path.join(DIR, 'model.safetensors')):
+    if not any(os.path.exists(os.path.join(DIR, f)) for f in ('model.safetensors', 'model.safetensors.index.json')):
         return f"Sage {LABEL} isn't set up — run: sage{FLAG} --setup"
     free = free_memory()
     if free < NEED_FREE:
@@ -663,7 +719,7 @@ def problem():
 
 def open_engine():
     """Loads the model once; returns new_chat(mode) and the device it runs on."""
-    if ULTRA:
+    if ULTRA or ULTRA_CHAT or LITE or LITE_CODE:  # MLX
         engine = UltraEngine(DIR, os.environ.get('MAXSHELL_SAGE_DEVICE'))
         new_chat = lambda mode: engine.chat(mode, system_prompt(mode), CODE_TOOLS if mode == 'code' else None,  # noqa: E731
                                             MAX_CALLS, MAX_TOKENS)

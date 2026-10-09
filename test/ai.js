@@ -315,7 +315,11 @@ test('sage without its model set up points to sage --setup', () => {
   assert.strictEqual(require('../src/gemma').ready(), false);
   const e2b = spawnSync('node', [sh, '-c', 'sage --e2b hello'], { env, encoding: 'utf8' });
   assert.strictEqual(e2b.status, 1);
-  assert.match(e2b.stderr, /Sage Lite.*sage --lite --setup/);
+  assert.match(e2b.stderr, /Sage Flash.*sage --flash --setup/);
+  const lite = spawnSync('node', [sh, '-c', 'sage --lite hello'], { env, encoding: 'utf8' });
+  assert.match(lite.stderr, /Sage Lite.*sage --lite --setup/);
+  const code = spawnSync('node', [sh, '-c', 'sage code --lite'], { env, encoding: 'utf8' });
+  assert.match(code.stderr, /Sage Lite.*sage code --lite --setup/);
   const { pick, MODELS } = require('../src/gemma');
   assert.deepStrictEqual(pick(['--e4b', 'hi']), { model: MODELS.e4b, key: 'e4b', args: ['hi'], chosen: true, flagged: true });
   assert.strictEqual(require('../src/gemma').recent('/no/such/python'), false);

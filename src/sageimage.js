@@ -139,6 +139,14 @@ function progress(text) {
   return { step: Number(m[1]), total: Number(m[2]) };
 }
 
+// Opens a file in its Mac app (Preview, QuickTime Player) — never in tests
+// (MAXSHELL_IMAGE_NO_OPEN).
+function openFile(file) {
+  if (process.platform !== 'darwin' || process.env.MAXSHELL_IMAGE_NO_OPEN) return false;
+  spawnSync('open', [file], { stdio: 'ignore' });
+  return true;
+}
+
 // Shows a finished picture: inline in terminals that can (iTerm2, WezTerm),
 // else in Preview.
 function show(file, write) {
@@ -148,11 +156,7 @@ function show(file, write) {
     write(`\x1b]1337;File=inline=1;width=40%;preserveAspectRatio=1:${data}\x07\n`);
     return 'inline';
   }
-  if (process.platform === 'darwin' && !process.env.MAXSHELL_IMAGE_NO_OPEN) {
-    spawnSync('open', [file], { stdio: 'ignore' });
-    return 'preview';
-  }
-  return null;
+  return openFile(file) ? 'preview' : null;
 }
 
 const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
@@ -328,4 +332,4 @@ function runImage(args, io, shell) {
   return 0;
 }
 
-module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, show, dir, DEFAULTS, REPO, HELP };
+module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, show, openFile, dir, DEFAULTS, REPO, HELP };

@@ -275,7 +275,7 @@ function runVideo(args, io, shell) {
   const secs = Math.round((Date.now() - began) / 1000);
   const where = path.relative(shell.cwd, out) || out;
   write(`${theme.style(theme.current().ui.ok)}✓${ansi.reset()} saved ${where} ${muted}(${secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`})${ansi.reset()}\n`);
-  if (o.open && io.stdout.kind === 'term' && process.platform === 'darwin' && !process.env.MAXSHELL_IMAGE_NO_OPEN) spawnSync('open', [out], { stdio: 'ignore' });
+  if (o.open && io.stdout.kind === 'term') img.openFile(out);
   return 0;
 }
 

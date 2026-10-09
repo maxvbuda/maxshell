@@ -10,6 +10,9 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const ansi = require('../src/ansi');
+
+// Never open Preview or QuickTime Player from a test (children inherit it).
+process.env.MAXSHELL_IMAGE_NO_OPEN = '1';
 const tools = require('../src/sagetools');
 const { SageApp, Engine, render } = require('../src/sage');
 const { sleepSync } = require('../src/keys');
@@ -67,7 +70,7 @@ function app(opts = {}) {
   const started = [];
   const a = new SageApp({
     mode: 'chat', root: os.tmpdir(), model: 'e4b',
-    models: [{ key: 'ultra', ready: true }, { key: 'e4b', ready: true }, { key: 'e2b', ready: true }],
+    models: [{ key: 'ultra', ready: true }, { key: 'e4b', ready: true }, { key: 'e2b', ready: true }, { key: 'lite', ready: true }],
     start: (key, mode) => { const e = fakeEngine(); started.push({ key, mode, e }); return e; },
     ...opts,
   });
@@ -174,14 +177,14 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   assert.match(text(r).split('\n')[0], /Sage Pro ▾/);
   a.mouse({ button: 0, release: false }, drop);
   r = render(a, 90, 24, 0);
-  assert.match(text(r), /Sage Ultra[\s\S]*best at code[\s\S]*✓ Sage Pro[\s\S]*Sage Lite/);
+  assert.match(text(r), /Sage Ultra[\s\S]*smartest[\s\S]*✓ Sage Pro[\s\S]*Sage Flash[\s\S]*Sage Lite[\s\S]*fastest/);
   const e2b = r.hits.find((h) => h.action === 'model' && h.key === 'e2b');
   a.mouse({ button: 0, release: false }, e2b);
   assert.strictEqual(a.model, 'e2b');
   assert.strictEqual(a.started.length, 2);
   assert.strictEqual(a.started[0].e.closed, true);
   assert.strictEqual(a.status, 'loading');
-  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Sage Lite ▾/);
+  assert.match(text(render(a, 90, 24, 0)).split('\n')[0], /Sage Flash ▾/);
   // keys: ^O, down, enter
   a.key({ name: 'o', ctrl: true });
   a.key({ name: 'up' });
@@ -196,7 +199,7 @@ test('the model dropdown opens by click or ^O and switches models', () => {
   const b = app({ models: [{ key: 'ultra', ready: false }, { key: 'e4b', ready: true }, { key: 'e2b', ready: false }] });
   b.switchModel('e2b');
   assert.strictEqual(b.model, 'e4b');
-  assert.match(b.items[b.items.length - 1].text, /sage --lite --setup/);
+  assert.match(b.items[b.items.length - 1].text, /sage --flash --setup/);
   b.switchModel('ultra');
   assert.match(b.items[b.items.length - 1].text, /Sage Ultra isn’t set up — run: sage --ultra --setup/);
 });
@@ -368,6 +371,10 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'fenced': gemma.ultra_scan('Sure.\n\x60\x60\x60json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n\x60\x60\x60\nI made it.'),
   'pycode': gemma.ultra_scan('py:\n\x60\x60\x60python\nprint({"name": 1})\n\x60\x60\x60\nok'),
   'holding': gemma.ultra_scan('x\n\x60\x60\x60jso')[0],
+  'gscan': gemma.GemmaMlxChat.scan('Hi <|channel>thought\nthey want a greeting<channel|>there<turn|>'),
+  'gturn': gemma.GemmaMlxChat.user_turn(None, 'hey'),
+  'sscan': gemma.SmolChat.scan('Hi there.<|im_end|>'),
+  'thinking': gemma.visible('<|channel>thought\nplan\n'),
   'chat': 'sage code' in gemma.system_prompt('chat') and 'introduce yourself as Sage' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code') and 'mkdir -p' in gemma.system_prompt('code')}))
 `;
   const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
@@ -387,6 +394,12 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.strictEqual(out.fenced[2], 'Sure.\n```json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n```\n'.length);
   assert.deepStrictEqual(out.pycode, ['py:\n```python\nprint({"name": 1})\n```\nok', [], null]);
   assert.strictEqual(out.holding, 'x\n');
+  // Sage Ultra in a chat (Gemma 4 26B on MLX): Gemma's turns, its thinking hidden, no tools
+  assert.deepStrictEqual(out.gscan, ['Hi there', [], null]);
+  assert.strictEqual(out.gturn, '<|turn>user\nhey<turn|>\n<|turn>model\n');
+  // Sage Lite (SmolLM2): ChatML, no tools
+  assert.deepStrictEqual(out.sscan, ['Hi there.', [], null]);
+  assert.strictEqual(out.thinking, ''); // not even a newline while it thinks
   assert.strictEqual(out.uresp, '<|im_start|>user\n<tool_response>\nexit 0\n</tool_response>\n<tool_response>\ntext\n</tool_response><|im_end|>\n<|im_start|>assistant\n');
 });
 
@@ -423,8 +436,11 @@ test('without room for E4B, Sage picks E2B unless a model was asked for', () => 
     assert.strictEqual(gemma.pick(['hi']).chosen, false);
     assert.strictEqual(gemma.pick(['--e4b', 'hi']).chosen, true);
     const a = app({ notice: auto.why });
-    assert.match(text(render(a, 90, 26, 0)).replace(/\s+/g, ' '), /this is Sage Lite, the lighter model/);
-    assert.strictEqual(gemma.pick(['--lite', 'hi']).key, 'e2b');
+    assert.match(text(render(a, 90, 26, 0)).replace(/\s+/g, ' '), /this is Sage Flash, the lighter model/);
+    assert.strictEqual(gemma.pick(['--flash', 'hi']).key, 'e2b');
+    assert.strictEqual(gemma.pick(['--lite', 'hi']).key, 'lite');
+    assert.strictEqual(gemma.MODELS.lite.label, 'Sage Lite');
+    assert.strictEqual(gemma.MODELS.e2b.label, 'Sage Flash');
     assert.strictEqual(gemma.pick(['--ultra', 'hi']).key, 'ultra');
     assert.strictEqual(gemma.MODELS.ultra.label, 'Sage Ultra');
     assert.ok(!/Gemma/.test(text(render(app(), 90, 26, 0))));
@@ -478,7 +494,6 @@ test('a background image job reports progress, then the saved picture', () => {
 test('/image draws in the background while the chat goes on', () => {
   const polls = [{ state: 'running', step: 0, total: 20 }, { state: 'running', step: 7, total: 20 }, { state: 'done', step: 20, total: 20 }];
   const job = { out: path.join(os.tmpdir(), 'sage-a-fox.png'), stopped: false, poll: () => polls.shift() || { state: 'done', step: 20, total: 20 }, stop() { this.stopped = true; }, cleanup() {} };
-  process.env.MAXSHELL_IMAGE_NO_OPEN = '1';
   const a = app({ startImage: () => job });
   a.onEvent({ ev: 'ready' });
   a.setInput('/image a fox in the snow');
@@ -536,7 +551,6 @@ test('/image draws in the background while the chat goes on', () => {
   c.key({ name: 'c', ctrl: true });
   assert.strictEqual(c.items[0].state, 'stopped');
   assert.strictEqual(c.done, false);
-  delete process.env.MAXSHELL_IMAGE_NO_OPEN;
 });
 
 test('sage image from the shell saves a PNG here and never overwrites', () => {
@@ -558,21 +572,62 @@ test('sage image from the shell saves a PNG here and never overwrites', () => {
   fs.rmSync(work, { recursive: true });
 });
 
-test('Sage Ultra is for sage code only', () => {
+test('Sage Ultra: Gemma 4 26B in a chat, the coding model in sage code', () => {
+  const gemma = require('../src/gemma');
+  assert.strictEqual(gemma.modelFor('ultra', 'chat').repo, 'mlx-community/gemma-4-26b-a4b-it-4bit');
+  assert.strictEqual(gemma.modelFor('ultra', 'code').repo, 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit');
+  assert.strictEqual(gemma.modelFor('e4b', 'chat'), gemma.MODELS.e4b);
+  assert.strictEqual(gemma.modelFor('lite', 'chat').repo, 'HuggingFaceTB/SmolLM2-1.7B-Instruct');
+  assert.strictEqual(gemma.modelFor('lite', 'code').repo, 'mlx-community/Qwen2.5-Coder-3B-Instruct-4bit');
   const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
-  const env = { ...process.env, MAXSHELL_SETUP: '0' };
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-ultra-'));
+  const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_GEMMA_PYTHON: process.execPath };
   const r = spawnSync('node', [sh, '-c', 'sage --ultra hello'], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 1);
-  assert.match(r.stderr, /Sage Ultra is for coding — use: sage code --ultra/);
-  const a = app({ models: [{ key: 'e4b', ready: true }, { key: 'e2b', ready: true }] }); // a chat's dropdown
+  assert.match(r.stderr, /Sage Ultra isn’t set up — run: sage --ultra --setup/);
+  const c = spawnSync('node', [sh, '-c', 'sage code --ultra hello'], { env, encoding: 'utf8' });
+  assert.match(c.stderr, /run: sage code --ultra --setup/);
+  // the shards the index names must all be there
+  const d = path.join(gem, 'ultra-chat');
+  fs.mkdirSync(d);
+  for (const f of gemma.MODELS.ultrachat.files) fs.writeFileSync(path.join(d, f), '{}');
+  fs.writeFileSync(path.join(d, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { a: 'model-1.safetensors', b: 'model-2.safetensors' } }));
+  fs.writeFileSync(path.join(d, 'model-1.safetensors'), '');
+  process.env.MAXSHELL_GEMMA = gem;
+  process.env.MAXSHELL_GEMMA_PYTHON = process.execPath;
+  try {
+    assert.ok(!gemma.ready(gemma.MODELS.ultrachat));
+    fs.writeFileSync(path.join(d, 'model-2.safetensors'), '');
+    assert.ok(gemma.ready(gemma.MODELS.ultrachat));
+  } finally {
+    delete process.env.MAXSHELL_GEMMA;
+    delete process.env.MAXSHELL_GEMMA_PYTHON;
+    fs.rmSync(gem, { recursive: true });
+  }
+  // a chat's dropdown: Ultra is the smartest; in sage code, the best at code
+  const a = app();
   a.onEvent({ ev: 'ready' });
   a.openMenu();
-  assert.ok(!/Ultra/.test(text(render(a, 90, 24, 0))));
+  assert.match(text(render(a, 90, 24, 0)), /Sage Ultra[\s\S]*smartest/);
   a.menu = null;
   a.setInput('/model ultra');
   a.submit();
-  assert.strictEqual(a.model, 'e4b');
-  assert.match(a.items[a.items.length - 1].text, /it’s in sage code/);
+  assert.strictEqual(a.model, 'ultra');
+  assert.strictEqual(a.started[a.started.length - 1].key, 'ultra');
+  const b = app({ mode: 'code' });
+  b.onEvent({ ev: 'ready' });
+  b.openMenu();
+  assert.match(text(render(b, 90, 24, 0)), /Sage Ultra[\s\S]*best at code[\s\S]*Sage Lite[\s\S]*~2 GB/);
+  b.menu = null;
+  b.setInput('/model lite');
+  b.submit();
+  assert.strictEqual(b.model, 'lite');
+  b.setInput('/model flash');
+  b.submit();
+  assert.strictEqual(b.model, 'e2b');
+  b.setInput('/model pro');
+  b.submit();
+  assert.strictEqual(b.model, 'e4b');
 });
 
 test('image chat: the first message draws, each one after edits the latest picture', () => {
