@@ -850,8 +850,10 @@ test('sage video from the shell: Sage’s prompt, then a clip here', () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-work-'));
   fs.writeFileSync(path.join(work, 'pic.png'), makePng());
   const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_VIDEO_BIN: path.join(__dirname, 'fake-wan.js'), MAXSHELL_SAGE_WRITER: path.join(__dirname, 'fake-sage-writer.js'), MAXSHELL_SAGE_FREE: '80' };
-  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage video --steps 2 a paper boat`], { env, encoding: 'utf8' });
+  const r = spawnSync('node', [sh, '-c', `cd ${work} && sage video --steps 2 a paper boat`], { env: { ...env, MAXSHELL_AUDIO_BIN: path.join(__dirname, 'fake-mmaudio.js') }, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /adding sound…\nsound 1\/1/);
+  assert.strictEqual(fs.readFileSync(path.join(work, 'sage-a-paper-boat.mp4'), 'utf8'), 'not really an mp4+sound(a paper boat)');
   assert.match(r.stdout, /Sage Pro is writing a detailed prompt…\n {2}MOTION: a paper boat, the camera slowly pushes in\./);
   assert.match(r.stdout, /prompt: MOTION: a paper boat[\s\S]*frames: 49/);
   assert.match(r.stdout, /saved sage-a-paper-boat\.mp4/);
@@ -859,6 +861,7 @@ test('sage video from the shell: Sage’s prompt, then a clip here', () => {
   const pic = spawnSync('node', [sh, '-c', `cd ${work} && sage video --exact --image pic.png --seconds 1 --steps 1 the leaves sway`], { env, encoding: 'utf8' });
   assert.strictEqual(pic.status, 0, pic.stderr);
   assert.ok(!/writing a detailed prompt/.test(pic.stdout));
+  assert.match(pic.stdout, /silent: set up sound with sage video --setup/); // no sound model here
   assert.match(pic.stdout, /prompt: the leaves sway\nframes: 25\nimage: .*picture\.png/);
   const long = spawnSync('node', [sh, '-c', `cd ${work} && sage video --exact --seconds 5 --steps 1 a long walk`], { env, encoding: 'utf8' });
   assert.strictEqual(long.status, 0, long.stderr);
@@ -876,20 +879,110 @@ test('a background video job: Sage writes about motion, then Wan films it', () =
   const video = require('../src/sagevideo');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-vjob-'));
   process.env.MAXSHELL_VIDEO_BIN = path.join(__dirname, 'fake-wan.js');
+  process.env.MAXSHELL_AUDIO_BIN = path.join(__dirname, 'fake-mmaudio.js');
   const writer = { label: 'Sage Pro', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
   try {
-    const job = video.job(video.parseArgs(['--steps', '3', 'a', 'kite']), dir, { writer });
+    const job = video.job({ ...video.parseArgs(['--steps', '3', 'a', 'kite']), words: 'a kite' }, dir, { writer });
     let p;
     for (let i = 0; i < 300; i++) { p = job.poll(); if (p.state !== 'running') break; sleepSync(20); }
     assert.strictEqual(p.state, 'done');
+    assert.strictEqual(p.stage, 'sound'); // the last thing it did
     assert.strictEqual(p.detailed, 'MOTION: a kite, the camera slowly pushes in.');
     assert.strictEqual(job.out, path.join(dir, 'sage-a-kite.mp4'));
     assert.match(fs.readFileSync(job.log, 'utf8'), /prompt: MOTION: a kite/);
+    assert.strictEqual(fs.readFileSync(job.out, 'utf8'), 'not really an mp4+sound(a kite)'); // MMAudio got the words, not Sage's prompt
     job.cleanup();
+    // no sound asked for: none added
+    const quiet = video.job({ ...video.parseArgs(['--no-sound', '--steps', '1', 'a', 'mime']) }, dir);
+    for (let i = 0; i < 300; i++) { p = quiet.poll(); if (p.state !== 'running') break; sleepSync(20); }
+    assert.strictEqual(fs.readFileSync(quiet.out, 'utf8'), 'not really an mp4');
+    quiet.cleanup();
   } finally {
     delete process.env.MAXSHELL_VIDEO_BIN;
+    delete process.env.MAXSHELL_AUDIO_BIN;
     fs.rmSync(dir, { recursive: true });
   }
+});
+
+test('video chat: film, change it, keep going — with progress, sound and a frame', () => {
+  const { IDLE } = require('../src/sage');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-vchat-'));
+  const PNG = makePng();
+  const started = [];
+  let polls = [];
+  const startVideo = (o) => {
+    const out = path.join(root, o.output);
+    started.push(o);
+    polls = [
+      { state: 'running', phase: 'prompt', step: 0, total: 4 },
+      { state: 'running', phase: 'draw', stage: 'denoise', step: 2, total: 4, segment: 2, segments: 3, detailed: `DETAILED ${o.prompt}` },
+      { state: 'running', phase: 'draw', stage: 'sound', step: 4, total: 4, segment: 3, segments: 3, detailed: `DETAILED ${o.prompt}` },
+      { state: 'done', phase: 'draw', stage: 'sound', step: 4, total: 4, detailed: o.exact ? null : `DETAILED ${o.prompt}` },
+    ];
+    return {
+      out, writer: o.exact ? null : { label: 'Sage Pro' }, stop() {}, cleanup() {},
+      poll: () => { const p = polls.shift() || { state: 'done' }; if (p.state === 'done') { fs.writeFileSync(out, 'mp4'); fs.writeFileSync(o.poster, PNG); } return p; },
+    };
+  };
+  const a = new SageApp({ mode: 'video', root, model: 'video', models: [], start: () => IDLE, startVideo });
+  assert.strictEqual(a.status, 'ready');
+  let r = render(a, 90, 26, 0);
+  assert.match(text(r).split('\n')[0], /✦ Sage {2}video .*◆ Sage Video/);
+  assert.match(text(r), /Sage films it, with sound/);
+  assert.match(text(r), /Describe a clip…/);
+  a.setInput('/seconds 6');
+  a.submit();
+  assert.match(a.items[a.items.length - 1].text, /3 parts of 2 s, about 54 minutes/);
+  a.setInput('a puppy in sunflowers');
+  a.submit();
+  assert.deepStrictEqual([started[0].prompt, started[0].seconds, started[0].sound, started[0].output, started[0].previous], ['a puppy in sunflowers', 6, true, 'sage-a-puppy-in-sunflowers.mp4', undefined]);
+  a.tick();
+  assert.match(text(render(a, 90, 30, 0)), /● Clip 1280×704 · 6 s {2}Sage Pro is writing a detailed prompt…/);
+  assert.match(text(render(a, 90, 30, 0)).split('\n')[0], /writing a prompt/);
+  a.tick();
+  r = text(render(a, 90, 30, 0));
+  assert.match(r, /part 2\/3 · 2\/4 ━+/);
+  assert.match(r.split('\n')[0], /filming part 2\/3/);
+  assert.match(r, /✎ DETAILED a puppy in sunflowers/);
+  a.tick();
+  assert.match(text(render(a, 90, 30, 0)), /adding sound…/);
+  a.tick();
+  assert.strictEqual(a.clip, path.join(root, 'sage-a-puppy-in-sunflowers.mp4'));
+  assert.strictEqual(a.scene, 'DETAILED a puppy in sunflowers');
+  r = render(a, 90, 50, 0);
+  assert.match(text(r), /saved sage-a-puppy-in-sunflowers\.mp4/);
+  assert.match(text(r), /▀/); // a frame of it
+  assert.ok(r.hits.some((h) => h.action === 'open' && h.file === a.clip)); // click to play
+  assert.match(text(r), /“keep going”…/);
+  // a change: a new version, Sage told what the clip shows
+  a.setInput('make it night');
+  a.submit();
+  assert.deepStrictEqual([started[1].prompt, started[1].context, started[1].output], ['make it night', 'DETAILED a puppy in sunflowers', 'sage-a-puppy-in-sunflowers-2.mp4']);
+  assert.strictEqual(started[1].words, 'a puppy in sunflowers'); // what the sound model hears about
+  for (let i = 0; i < 4; i++) a.tick();
+  assert.match(text(render(a, 90, 80, 0)), /● New version/);
+  assert.strictEqual(a.scene, 'DETAILED make it night'); // Sage's new prompt has the change in it
+  // keep going: carry on from the latest clip, same scene, no rewrite
+  a.setInput('keep going');
+  a.submit();
+  assert.deepStrictEqual([started[2].previous, started[2].prompt, started[2].exact], [path.join(root, 'sage-a-puppy-in-sunflowers-2.mp4'), 'DETAILED make it night', true]);
+  for (let i = 0; i < 4; i++) a.tick();
+  assert.match(text(render(a, 90, 120, 0)), /● Longer 1280×704 · \+6 s/);
+  a.setInput('/sound off');
+  a.submit();
+  a.setInput('/new');
+  a.submit();
+  assert.deepStrictEqual([a.clip, a.scene, a.changes], [null, null, []]);
+  a.setInput('waves');
+  a.submit();
+  assert.strictEqual(started[3].sound, false);
+  for (const [c, rr] of [[90, 30], [40, 14], [24, 10]]) fits(render(a, c, rr, 0), c);
+  // not set up
+  const b = new SageApp({ mode: 'video', root, model: 'video', models: [], start: () => IDLE });
+  b.setInput('x');
+  b.submit();
+  assert.match(b.items[b.items.length - 1].text, /sage video --setup/);
+  fs.rmSync(root, { recursive: true });
 });
 
 test('png: decodes a PNG and draws it in half blocks', () => {

@@ -117,8 +117,13 @@ const IDLE = { send() {}, poll: () => [], close() {}, interrupt() {}, errors: ()
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null }) {
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
+    this.startVideo = startVideo; // video chat: (options) → a sagevideo job
+    this.clip = null;             // video chat: the latest clip, which the next message changes or extends
+    this.clipName = null;         // …and the first prompt, which names every version
+    this.clipOpts = { seconds: 2, sound: true };
+    this.posters = null;          // a scratch folder for clips' preview frames
     this.picture = null;          // image chat: the latest version, which the next message edits
     this.pictureName = null;      // …and the first prompt, which names every version
     this.fitted = null;           // a picture of yours: its shape, which edits keep
@@ -151,11 +156,14 @@ class SageApp {
 
   changed() { this.version++; }
 
+  // Image or video chat: no language model, the conversation makes media.
+  get media() { return this.mode === 'image' || this.mode === 'video'; }
+
   get busy() { return ['thinking', 'writing', 'waiting', 'running', 'stopping'].includes(this.status); }
 
   useModel(key) {
     this.model = key;
-    if (this.mode === 'image') { this.engine = IDLE; this.status = 'ready'; this.changed(); return; }
+    if (this.media) { this.engine = IDLE; this.status = 'ready'; this.changed(); return; }
     this.status = 'loading';
     this.loadStarted = Date.now();
     this.engine = this.start(key, this.mode);
@@ -338,6 +346,15 @@ class SageApp {
     const text = this.input.trim();
     if (!text) return;
     if (text.startsWith('/') && this.command(text)) { this.setInput(''); return; }
+    if (this.mode === 'video') {
+      if (this.drawing()) { this.note('Still filming — ^C stops it.'); return; }
+      this.history.push(text);
+      this.historyAt = -1;
+      this.setInput('');
+      this.items.push({ type: 'user', text });
+      this.film(text);
+      return;
+    }
     if (this.mode === 'image') {
       if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
       const dropped = require('./sageimage').droppedPath(text, this.root); // a file dragged in
@@ -387,12 +404,29 @@ class SageApp {
         this.load(require('./sageimage').droppedPath(file, this.root) || file);
         return true;
       }
+      case 'seconds': {
+        if (this.mode !== 'video') return false;
+        const n = Number(arg);
+        if (!(n > 0 && Number.isFinite(n))) { this.note('Say how long: /seconds 6', 'err'); return true; }
+        this.clipOpts.seconds = n;
+        this.note(`From now on: ${n} s${n > 2 ? ` (filmed in ${Math.ceil(n / 2)} parts of 2 s, about ${Math.ceil(n / 2) * 18} minutes)` : ''}.`);
+        return true;
+      }
+      case 'sound':
+        if (this.mode !== 'video') return false;
+        this.clipOpts.sound = arg ? !/^(off|no|0)$/i.test(arg) : !this.clipOpts.sound;
+        this.note(this.clipOpts.sound ? 'Clips get a soundtrack.' : 'Clips are silent.');
+        return true;
       case 'exact':
-        if (this.mode !== 'image') return false;
+        if (!this.media) return false;
         this.exact = !this.exact;
         this.note(this.exact ? 'Drawing from your words exactly as you write them.' : 'Sage writes a detailed prompt from your words first.');
         return true;
       case 'open':
+        if (this.mode === 'video') {
+          if (this.clip) require('child_process').spawnSync('open', [this.clip], { stdio: 'ignore' }); else this.note('No clip yet.');
+          return true;
+        }
         if (this.picture) {
           const last = [...this.items].reverse().find((i) => i.type === 'image' && i.out === this.picture);
           require('child_process').spawnSync('open', [(last && last.source) || this.picture], { stdio: 'ignore' });
@@ -400,6 +434,7 @@ class SageApp {
         else this.note('No picture yet.');
         return true;
       case 'help':
+        if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
         this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
@@ -409,8 +444,10 @@ class SageApp {
 
   newChat() {
     if (this.busy) { this.note('Sage is still answering — ^C stops it.'); return; }
-    if (this.mode === 'image') {
-      if (this.drawing()) { this.note('Still drawing — ^C stops it.'); return; }
+    if (this.media) {
+      if (this.drawing()) { this.note('Still working — ^C stops it.'); return; }
+      this.clip = null;
+      this.clipName = null;
       this.picture = null;
       this.pictureName = null;
       this.fitted = null;
@@ -443,7 +480,7 @@ class SageApp {
   }
 
   openMenu() {
-    if (this.mode === 'image') return; // one image model: nothing to pick
+    if (this.media) return; // one model: nothing to pick
     this.menu = { index: Math.max(0, this.models.findIndex((m) => m.key === this.model)) };
     this.changed();
   }
@@ -537,7 +574,31 @@ class SageApp {
     this.changed();
   }
 
-  drawing() { return this.items.find((i) => i.type === 'image' && i.state === 'running') || null; }
+  // Video chat: the first message films a clip; after that, "keep going"
+  // makes it longer (carrying on from its last frame) and anything else
+  // films a new version, Sage rewriting the prompt with the change.
+  film(text) {
+    if (!this.startVideo) { this.note('Sage can’t film yet — set it up in the shell: sage video --setup', 'err'); return; }
+    const img = require('./sageimage');
+    const extend = !!this.clip && /^(keep going|go on|continue|carry on|longer|more|extend|make it longer)\b/i.test(text);
+    const first = !this.clip;
+    if (first) this.clipName = text;
+    const words = [this.clipName, ...this.changes].join('; ');
+    const o = { width: 1280, height: 704, steps: 4, seed: null, open: false, ...this.clipOpts, words, exact: this.exact, prompt: text };
+    if (extend) Object.assign(o, { prompt: this.scene || this.clipName, exact: true, previous: this.clip }); // the same scene, carried on
+    else if (!first) o.context = [this.scene, this.changes.length && `It has since been changed: ${this.changes.join('; ')}.`].filter(Boolean).join(' ');
+    o.output = path.basename(img.outputPath(this.clipName, this.root, '.mp4'));
+    if (!this.posters) this.posters = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-posters-'));
+    o.poster = path.join(this.posters, `${this.items.length}.png`);
+    let job;
+    try { job = this.startVideo(o); } catch (e) { this.note(`Couldn’t start filming: ${e.message}`, 'err'); return; }
+    const kind = extend ? 'extend' : first ? 'film' : 'refilm';
+    this.items.push({ type: 'video', kind, prompt: text, size: `${o.width}×${o.height}`, length: o.seconds, job, poster: o.poster, state: 'running', step: 0, total: o.steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
+    this.scroll = 0;
+    this.changed();
+  }
+
+  drawing() { return this.items.find((i) => (i.type === 'image' || i.type === 'video') && i.state === 'running') || null; }
 
   // Checks on a picture being drawn; the loop calls it between keys.
   tick() {
@@ -545,15 +606,21 @@ class SageApp {
     if (!item || !item.job) return; // no job yet: Sage is writing its prompt
     const p = item.job.poll();
     const detailed = p.detailed || item.detailed; // from the job's writer, or from the chat's model
-    if (p.state === 'running' && p.step === item.step && p.total === item.total && p.phase === item.phase && detailed === item.detailed) return;
-    Object.assign(item, { step: p.step, total: p.total, phase: p.phase, detailed, unwritten: p.unwritten || item.unwritten });
+    const where = [p.step, p.total, p.phase, p.stage, p.segment, p.piece].join();
+    if (p.state === 'running' && where === item.where && detailed === item.detailed) return;
+    Object.assign(item, { where, step: p.step, total: p.total, phase: p.phase, stage: p.stage, segment: p.segment, segments: p.segments, detailed, unwritten: p.unwritten || item.unwritten });
     if (p.state !== 'running') {
       item.state = p.state;
       item.seconds = Math.round((Date.now() - item.started) / 1000);
       item.out = item.job.out;
       item.error = p.error;
       item.job.cleanup();
-      if (p.state === 'done' && this.mode === 'image') {
+      if (p.state === 'done' && this.mode === 'video') {
+        this.clip = item.out; // the next message changes or extends this
+        if (item.kind === 'extend') { /* the same scene, longer */ } else if (item.detailed) { this.scene = item.detailed; this.changes = []; } // Sage's prompt has every change in it
+        else if (item.kind === 'film') { this.scene = item.prompt; this.changes = []; }
+        else this.changes.push(item.prompt);
+      } else if (p.state === 'done' && this.mode === 'image') {
         this.picture = item.out; // the next message edits this
         if (item.edit) this.changes.push(item.prompt);
         else { this.scene = item.detailed || item.prompt; this.changes = []; }
@@ -656,7 +723,7 @@ class SageApp {
     if (k.button === 64) { this.scroll += 3; this.changed(); return; }
     if (k.button === 65) { this.scroll = Math.max(0, this.scroll - 3); this.changed(); return; }
     if (k.release || k.button !== 0) return;
-    if (hit && hit.action === 'menu' && this.mode === 'image') return; // nothing to pick
+    if (hit && hit.action === 'menu' && this.media) return; // nothing to pick
     if (hit && hit.action === 'menu') { if (this.menu) { this.menu = null; this.changed(); } else this.openMenu(); return; }
     if (hit && hit.action === 'model') { this.switchModel(hit.key); return; }
     if (hit && hit.action === 'answer') { this.answer(hit.choice); return; }
@@ -731,6 +798,42 @@ function itemLines(item, w, app) {
     md.forEach((l, i) => lines.push({ s: `${i ? '  ' : `${hilite('✦')} `}${l}${RESET()}` }));
     if (!item.done && app && app.status === 'writing') lines[lines.length - 1].s += `${muted}▍${RESET()}`;
     return lines;
+  }
+  if (item.type === 'video') {
+    const color = { running: theme.fg('accent'), done: theme.fg('ok'), failed: theme.fg('err') }[item.state] || muted;
+    const time = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+    const part = item.segments > 1 ? `part ${item.segment}/${item.segments} · ` : '';
+    let detail;
+    if (item.state === 'running') {
+      if (item.phase === 'prompt') detail = `${item.writer} is writing a detailed prompt…`;
+      else if (item.stage === 'sound') detail = 'adding sound…';
+      else if (item.stage === 'decode') detail = `${part}developing the frames…`;
+      else if (item.stage === 'denoise') {
+        const barW = Math.max(4, Math.min(16, w - 40));
+        const filled = Math.round((item.total ? item.step / item.total : 0) * barW);
+        detail = `${part}${item.step}/${item.total} ${theme.fg('accent')}${'━'.repeat(filled)}${muted}${'━'.repeat(barW - filled)}`;
+      } else detail = `${part}reading the prompt…`;
+      detail += `${muted} · ${time(Math.round((Date.now() - item.started) / 1000))}`;
+    } else if (item.state === 'done') detail = `saved ${path.relative(app ? app.root : '', item.out) || item.out} · ${time(item.seconds)}`;
+    else if (item.state === 'failed') detail = `didn’t work: ${item.error}`;
+    else detail = 'stopped';
+    const title = { film: 'Clip', refilm: 'New version', extend: 'Longer' }[item.kind] || 'Clip';
+    lines.push({ s: `${color}●${RESET()} ${ansi.bold()}${title}${RESET()} ${muted}${item.size} · ${item.kind === 'extend' ? '+' : ''}${item.length} s${RESET()}  ${muted}${detail}${RESET()}` });
+    if (item.kind === 'film') for (const l of wrap(`“${item.prompt}”`, w - 2).slice(0, 3)) lines.push({ s: `  ${theme.fg('accent')}${l}${RESET()}` });
+    if (item.detailed) {
+      const said = wrap(item.detailed, w - 4);
+      const shown = said.length > 4 ? [...said.slice(0, 3), `${said[3].slice(0, Math.max(0, w - 6))}…`] : said;
+      shown.forEach((l, i) => lines.push({ s: `  ${muted}${i ? ' ' : '✎'} ${l}${RESET()}` }));
+    } else if (item.unwritten) lines.push({ s: `  ${muted}✎ from your words — ${item.unwritten}${RESET()}` });
+    const fitted = lines.map((l) => ({ s: tui.textWidth(ansi.strip(l.s)) > w ? fitText(ansi.strip(l.s), w) : l.s }));
+    if (item.state === 'done') {
+      // a frame of it, in half blocks; click it to play the clip
+      const cols = Math.max(8, Math.min(w - 2, 48));
+      const thumb = item.poster ? require('./png').thumbnailFile(item.poster, cols) : [];
+      for (const l of thumb) fitted.push({ s: `  ${l}`, hits: [{ x0: 2, x1: 2 + cols, action: 'open', file: item.out }] });
+      if (thumb.length) fitted.push({ s: `  ${muted}▶ click to play${RESET()}`, hits: [{ x0: 2, x1: 17, action: 'open', file: item.out }] });
+    }
+    return fitted;
   }
   if (item.type === 'image') {
     const color = { running: theme.fg('accent'), done: theme.fg('ok'), failed: theme.fg('err') }[item.state] || muted;
@@ -823,7 +926,10 @@ function welcome(app, w) {
   const logo = w >= 30 ? '✦  S  A  G  E' : '✦ SAGE';
   out.push(center(logo, `${ansi.bold()}${theme.gradientText(logo)}${RESET()}`));
   out.push({ s: '' });
-  const lines = app.mode === 'image'
+  const lines = app.mode === 'video'
+    ? ['Sage Video: describe a clip — Sage films it, with sound.', 'Then say how to change it, or “keep going” to make it longer.',
+      `Each version is saved in ${tildify(app.root)}. It's slow: about 18 minutes for every 2 seconds.`]
+    : app.mode === 'image'
     ? ['Sage Image: describe a picture, then change it by talking to it —', '“make it night”, “add a red umbrella”, “now in watercolour”.',
       `Each version is saved in ${tildify(app.root)}; /new starts a new picture.`,
       'To change a picture of yours, drag it in here or type /edit photo.jpg.']
@@ -833,7 +939,9 @@ function welcome(app, w) {
     : ['An AI that runs entirely on your Mac.', 'Private · offline · no account · no API key.'];
   for (const l of lines) for (const part of wrap(l, w)) out.push(center(part, `${part}`));
   out.push({ s: '' });
-  const tries = app.mode === 'image'
+  const tries = app.mode === 'video'
+    ? ['a golden retriever puppy running through sunflowers', 'waves crashing on black rocks at sunset, slow motion', 'a steam train crossing a snowy bridge']
+    : app.mode === 'image'
     ? ['a cozy cabin in a snowy forest at night, warm light', 'a red panda reading under a cherry tree, watercolor', 'a retro poster of a rocket over Mars']
     : app.mode === 'code'
     ? ['add a --verbose flag to main.py', 'why does test_parser fail? fix it', 'write a README for this project']
@@ -864,10 +972,14 @@ function render(app, cols, rows, now = Date.now()) {
   const barBg = theme.bg(ui.bar.bg);
   const barFg = ansi.fg(ui.bar.fg);
   const info = MODEL_INFO[app.model] || { label: app.model };
-  const drop = app.mode === 'image' ? ' ◆ Sage Image ' : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
+  const working = (d) => (d.phase === 'prompt' ? 'writing a prompt'
+    : d.type !== 'video' ? `drawing ${d.step}/${d.total}`
+    : d.stage === 'sound' ? 'adding sound'
+    : `filming${d.segments > 1 ? ` part ${d.segment}/${d.segments}` : ''}`);
+  const drop = app.mode === 'video' ? ' ◆ Sage Video ' : app.mode === 'image' ? ' ◆ Sage Image ' : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
-    loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? (app.drawing().phase === 'prompt' ? `${spin} writing a prompt` : `${spin} drawing ${app.drawing().step}/${app.drawing().total}`) : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
+    loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} ${working(app.drawing())}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
     thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';
@@ -890,6 +1002,7 @@ function render(app, cols, rows, now = Date.now()) {
   // input box
   const inner = Math.max(4, W - 6);
   const prompt = app.approval ? 'answer above: y / a / n' : app.mode === 'code' ? 'Tell Sage what to build or fix…'
+    : app.mode === 'video' ? (app.clip ? 'Say how to change it, or “keep going”…' : 'Describe a clip…')
     : app.mode === 'image' ? (app.picture ? 'Say how to change it…' : 'Describe a picture…') : 'Ask Sage anything…';
   const inputRows = [];
   let cursor = null;
@@ -929,6 +1042,7 @@ function render(app, cols, rows, now = Date.now()) {
   box.push(`${frame}╰${'─'.repeat(W - 2)}╯${RESET()}`);
   const keysHelp = app.approval ? `y yes${app.approval.item.risky ? '' : ' · a yes to all'} · n no (Esc) · ^C stop`
     : app.busy ? '^C stop · PgUp/PgDn scroll'
+      : app.mode === 'video' ? `enter ${app.clip ? 'change' : 'film'} · /seconds 6 · /sound ${app.clipOpts.sound ? 'off' : 'on'} · /new · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
       : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /edit file · /new · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
         : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
@@ -941,7 +1055,7 @@ function render(app, cols, rows, now = Date.now()) {
   for (const item of app.items) {
     if (item.type === 'sage' && !item.text.trim()) continue; // only whitespace between tool calls
     body.push({ s: '' }); // a blank line above each item, the first too
-    const key = `${w}:${item.v || 0}:${item.state || ''}:${app.approval && app.approval.item === item}:${item.type === 'sage' && !item.done ? app.status : ''}`;
+    const key = `${w}:${item.v || 0}:${item.state || ''}:${app.approval && app.approval.item === item}:${item.type === 'sage' && !item.done ? app.status : ''}${item.type === 'video' && item.state === 'running' ? `:${Math.floor((now - item.started) / 1000)}` : ''}`; // a clip's clock ticks
     if (!item.cache || item.cacheKey !== key) { item.cache = itemLines(item, w, app); item.cacheKey = key; }
     body.push(...item.cache);
   }

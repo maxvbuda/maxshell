@@ -15,6 +15,9 @@
       of the one before (Wan TI2V continues from a picture), joined into one
       MP4. Memory stays that of one segment, so a clip can be any length;
       it just takes N times as long. Prints "segment i/N" as it goes.
+  sagevideo.py --continue PREV … / --poster PNG …
+      carry on from the last frame of the clip PREV (the result is PREV and
+      the new part, joined); write a frame of the result to PNG.
   sagevideo.py --setup DIR
       downloads and builds the model in DIR/turbo: Wan 2.2 TI2V-5B Turbo, a
       4-step, no-guidance distill (about 10x fewer passes than the base
@@ -94,6 +97,36 @@ def take(args, flag, default=None):
     return value
 
 
+def last_frame(video, png):
+    subprocess.run([ffmpeg_exe(), '-loglevel', 'error', '-y', '-sseof', '-0.1', '-i', video, '-update', '1',
+                    '-frames:v', '1', png], check=True)
+
+
+def join(parts, out):
+    """One MP4 from parts; each after the first begins with the frame the one
+    before ended on, so that frame is dropped. Sound, if any, is left out:
+    it's made for the whole clip afterwards."""
+    inputs, chains = [], []
+    for n, part in enumerate(parts):
+        inputs += ['-i', part]
+        chains.append(f'[{n}:v]{"trim=start_frame=1," if n else ""}setpts=PTS-STARTPTS[v{n}]')
+    graph = ';'.join(chains) + ';' + ''.join(f'[v{n}]' for n in range(len(parts))) + f'concat=n={len(parts)}:v=1:a=0[out]'
+    subprocess.run([ffmpeg_exe(), '-loglevel', 'error', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', '-r', '24',
+                    '-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-crf', '18', '-tag:v', 'avc1',
+                    '-movflags', '+faststart', out], check=True)
+
+
+def poster(video, png):
+    """The middle frame, small, for the Sage app's preview."""
+    import imageio_ffmpeg
+    try:
+        frames = imageio_ffmpeg.count_frames_and_secs(video)[0]
+    except Exception:  # noqa: BLE001 — the first frame will do
+        frames = 0
+    subprocess.run([ffmpeg_exe(), '-loglevel', 'error', '-y', '-i', video, '-vf', f"select='gte(n\\,{frames // 2})',scale=512:-2",
+                    '-frames:v', '1', png], check=False)
+
+
 def generate(args):
     import tempfile
 
@@ -109,38 +142,38 @@ def generate(args):
     out = take(args, '--output-path', 'output.mp4')
     image = take(args, '--image')
     seed = int(take(args, '--seed', '-1'))
-    if segments == 1:
-        sys.argv = ['sage-video'] + args + ['--output-path', out, '--seed', str(seed)] + (['--image', image] if image else [])
-        wan.main()
-        if os.path.exists(out):
-            reencode(out)
-        return
-    ffmpeg = ffmpeg_exe()
+    previous = take(args, '--continue')  # a clip to carry on from
+    still = take(args, '--poster')
     work = tempfile.mkdtemp(prefix='sage-video-')
-    parts = []
-    for n in range(segments):
-        print(f'segment {n + 1}/{segments}', flush=True)
-        part = os.path.join(work, f'part{n}.mp4')
-        start = ['--image', image] if image else []
-        sys.argv = ['sage-video'] + args + ['--output-path', part, '--seed', str(seed + n if seed >= 0 else -1)] + start
-        wan.main()
-        if not os.path.exists(part):
-            sys.exit(f'segment {n + 1} wasn\'t made')
-        parts.append(part)
-        # the next segment starts from this one's last frame
-        image = os.path.join(work, f'last{n}.png')
-        subprocess.run([ffmpeg, '-loglevel', 'error', '-y', '-sseof', '-0.1', '-i', part, '-update', '1', '-frames:v', '1', image], check=True)
-    # Join them; each segment after the first begins with the frame the one
-    # before ended on, so that frame is dropped.
-    inputs, chains = [], []
-    for n, part in enumerate(parts):
-        inputs += ['-i', part]
-        chains.append(f'[{n}:v]{"trim=start_frame=1," if n else ""}setpts=PTS-STARTPTS[v{n}]')
-    graph = ';'.join(chains) + ';' + ''.join(f'[v{n}]' for n in range(len(parts))) + f'concat=n={len(parts)}:v=1:a=0[out]'
-    subprocess.run([ffmpeg, '-loglevel', 'error', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', '-r', '24', '-c:v', 'libx264',
-                    '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-crf', '18', '-tag:v', 'avc1', '-movflags', '+faststart', out], check=True)
-    shutil.rmtree(work, ignore_errors=True)
-    print(f'joined {segments} segments into {out}', flush=True)
+    try:
+        if previous:
+            image = os.path.join(work, 'start.png')
+            last_frame(previous, image)
+        if segments == 1 and not previous:
+            sys.argv = ['sage-video'] + args + ['--output-path', out, '--seed', str(seed)] + (['--image', image] if image else [])
+            wan.main()
+            if not os.path.exists(out):
+                sys.exit('the clip wasn\'t made')
+            reencode(out)
+        else:
+            parts = [previous] if previous else []
+            for n in range(segments):
+                print(f'segment {n + 1}/{segments}', flush=True)
+                part = os.path.join(work, f'part{n}.mp4')
+                start = ['--image', image] if image else []
+                sys.argv = ['sage-video'] + args + ['--output-path', part, '--seed', str(seed + n if seed >= 0 else -1)] + start
+                wan.main()
+                if not os.path.exists(part):
+                    sys.exit(f'segment {n + 1} wasn\'t made')
+                parts.append(part)
+                image = os.path.join(work, f'last{n}.png')  # the next segment starts from this one's last frame
+                last_frame(part, image)
+            join(parts, out)
+            print(f'joined {len(parts)} parts into {out}', flush=True)
+        if still:
+            poster(out, still)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def setup(root):

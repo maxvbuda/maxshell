@@ -9,6 +9,11 @@
 // that would fight Sage's). A clip is saved as an MP4 in the current folder,
 // named after the prompt — never over a file that's there — and opened.
 //
+// Then MMAudio (src/sageaudio.py, its own Python 3.12 in
+// ~/.maxshell/gemma/audio; weights CC-BY-NC) watches the clip and adds the
+// sound that goes with it. `sage video` with no prompt opens video chat in
+// the Sage app: each message films a new version, "keep going" extends it.
+//
 // Like sage image, Sage Pro first turns the words into a detailed prompt —
 // for a video, about what moves and what the camera does — then exits
 // before the video model loads; --exact skips it. The background Job is
@@ -37,6 +42,21 @@ const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxsh
 const dir = () => path.join(base(), 'video');
 const modelDir = () => path.join(dir(), 'turbo');
 const python = () => path.join(dir(), 'venv', 'bin', 'python');
+const audioDir = () => path.join(base(), 'audio');
+const audioPython = () => path.join(audioDir(), 'venv', 'bin', 'python');
+// sageaudio.py --setup writes "ready" once every file is in (a half-done
+// download has the right names already).
+const soundReady = () => !!process.env.MAXSHELL_AUDIO_BIN || (fs.existsSync(audioPython()) && fs.existsSync(path.join(audioDir(), 'ready')));
+const MMAUDIO = '974010a026c731054592d8f777218bd9d85a6c24'; // hkchengrex/MMAudio, pinned
+
+// The command that gives a clip its sound (in place). The words, not Sage's
+// long prompt, say what it should sound like.
+function soundArgv(video, words) {
+  const args = [video, video, '--prompt', words];
+  if (process.env.MAXSHELL_AUDIO_BIN) return [process.env.MAXSHELL_AUDIO_BIN, ...args];
+  return [audioPython(), path.join(__dirname, 'sageaudio.py'), '--dir', audioDir(), ...args];
+}
+
 const ready = () => !!process.env.MAXSHELL_VIDEO_BIN
   || (fs.existsSync(python()) && ['model.safetensors', 't5_encoder.safetensors', 'vae.safetensors'].every((f) => fs.existsSync(path.join(modelDir(), f))));
 
@@ -52,7 +72,7 @@ function plan(seconds) {
 
 // sage video's options, or { error }.
 function parseArgs(args) {
-  const o = { ...DEFAULTS, seed: null, output: null, open: true, image: null, exact: false };
+  const o = { ...DEFAULTS, seed: null, output: null, open: true, image: null, exact: false, sound: true };
   const words = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -69,6 +89,7 @@ function parseArgs(args) {
     else if (a === '--image' || a === '-i') o.image = next() || '';
     else if (a === '--no-open') o.open = false;
     else if (a === '--exact') o.exact = true;
+    else if (a === '--no-sound') o.sound = false;
     else words.push(a);
   }
   o.prompt = words.join(' ').trim();
@@ -92,6 +113,8 @@ function argv(o, out) {
     '--num-frames', String(p.frames), ...(p.segments > 1 ? ['--segments', String(p.segments)] : []), '--steps', String(o.steps), '--guide-scale', '1', // Turbo needs no guidance
     '--seed', String(seed), '--output-path', out];
   if (o.images && o.images.length) flags.push('--image', o.images[0]);
+  if (o.previous) flags.push('--continue', o.previous); // carry on from this clip
+  if (o.poster) flags.push('--poster', o.poster);
   if (process.env.MAXSHELL_VIDEO_BIN) return [process.env.MAXSHELL_VIDEO_BIN, ...prompt, ...flags];
   return [python(), path.join(__dirname, 'sagevideo.py'), ...prompt, ...flags]; // Wan, with Sage's fixes
 }
@@ -102,14 +125,20 @@ function progress(text) {
   const seg = all.length ? { segment: Number(all[all.length - 1][1]), segments: Number(all[all.length - 1][2]) } : { segment: 1, segments: 1 };
   const t = all.length ? String(text).slice(all[all.length - 1].index) : String(text); // this segment's part
   const p = img.progress(t);
+  const sound = [...String(text).matchAll(/sound (\d+)\/(\d+)/g)].pop();
+  if (sound) return { stage: 'sound', ...(p || {}), ...seg, piece: Number(sound[1]), pieces: Number(sound[2]) };
   if (/Decoding with VAE/.test(t)) return { stage: 'decode', ...(p || {}), ...seg };
   if (p) return { stage: 'denoise', ...p, ...seg };
   if (/Encoding input image/.test(t)) return { stage: 'picture', ...seg };
   return { stage: 'prompt', ...seg };
 }
 
+// A clip in the background (for video chat), with its sound when o.sound
+// and the sound model is set up. o.words: what to tell the sound model.
 function job(o, folder, { env = process.env, free = 100, writer = null } = {}) {
-  return new img.Job(o, folder, { env, free, writer, build: argv, ext: '.mp4', kind: 'video' });
+  const out = o.output ? path.resolve(folder, o.output) : img.outputPath(o.prompt, folder, '.mp4');
+  const then = o.sound && soundReady() ? [soundArgv(out, o.words || o.prompt)] : [];
+  return new img.Job({ ...o, output: out }, folder, { env, free, writer, build: argv, ext: '.mp4', kind: 'video', parse: progress, then });
 }
 
 // Its own venv, Python 3.11+ (mlx-video needs it), then the 4-bit model.
@@ -135,7 +164,31 @@ function setup(write, err) {
     err('sage video: setup failed — run it again to pick up where it stopped\n');
     return 1;
   }
+  if (setupSound(write, err) !== 0) write('(clips will be silent until that works: sage video --setup again)\n');
   write('Sage can film now — try: sage video "a paper boat drifting down a rainy street"\n');
+  return 0;
+}
+
+// MMAudio in its own Python 3.12 (it needs numpy < 2.1, which has no build
+// for 3.13): made with uv when it's there, else a python3.12 / 3.11.
+function setupSound(write, err) {
+  const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { stdio: 'inherit', ...opts }).status === 0;
+  const has = (cmd) => spawnSync('/bin/sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }).status === 0;
+  fs.mkdirSync(audioDir(), { recursive: true });
+  const venv = path.join(audioDir(), 'venv');
+  const pkgs = ['torch', 'torchvision', 'torchaudio', 'imageio-ffmpeg', 'soundfile', `git+https://github.com/hkchengrex/MMAudio.git@${MMAUDIO}`];
+  write('Installing MMAudio, for sound…\n');
+  if (has('uv')) {
+    if (!fs.existsSync(audioPython()) && !run('uv', ['venv', '--python', '3.12', venv])) { err('sage video: couldn’t make a Python for sound\n'); return 1; }
+    if (!run('uv', ['pip', 'install', '-q', ...pkgs], { env: { ...process.env, VIRTUAL_ENV: venv } })) { err('sage video: installing MMAudio failed\n'); return 1; }
+  } else {
+    const py = ['python3.12', 'python3.11'].find(has);
+    if (!py) { err('sage video: sound needs Python 3.12 or 3.11, or uv (brew install uv)\n'); return 1; }
+    if (!fs.existsSync(audioPython()) && !run(py, ['-m', 'venv', venv])) { err('sage video: couldn’t make a Python for sound\n'); return 1; }
+    if (!run(audioPython(), ['-m', 'pip', 'install', '-q', ...pkgs])) { err('sage video: installing MMAudio failed\n'); return 1; }
+  }
+  write('Downloading MMAudio (5 GB)…\n');
+  if (!run(audioPython(), [path.join(__dirname, 'sageaudio.py'), '--setup'], { cwd: audioDir(), env: { HF_HUB_VERBOSITY: 'error', ...process.env } })) { err('sage video: downloading MMAudio failed\n'); return 1; }
   return 0;
 }
 
@@ -150,9 +203,12 @@ const HELP = `sage video — short clips made on your Mac
   sage video -o name.mp4 …         choose the file name (never over an existing file)
   sage video --exact …             film your words as they are (Sage Pro writes a detailed
                                    prompt from them first, by default)
+  sage video --no-sound …          no soundtrack (MMAudio adds one by default, if set up)
+  sage video                       video chat: describe a clip, then change it or say "keep going"
   sage video --no-open …           don't open it
-  sage video --setup               install it (~${SIZE})
+  sage video --setup               install it (~${SIZE}, and MMAudio for sound, 5 GB)
 Wan 2.2 TI2V-5B Turbo (Alibaba's Wan, distilled by quanhaol) — Apache 2.0.
+Sound: MMAudio — weights CC-BY-NC 4.0, non-commercial use only.
 `;
 
 function runVideo(args, io, shell) {
@@ -161,7 +217,20 @@ function runVideo(args, io, shell) {
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
   if (args[0] === '--setup') return setup(write, err);
-  if (!args.length || args[0] === '--help' || args[0] === '-h') { write(HELP); return args.length ? 0 : 1; }
+  if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
+  if (!args.length) { // video chat
+    if (!(process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term')) { write(HELP); return 1; }
+    if (!ready()) { err('sage video: the video model isn’t set up — run: sage video --setup\n'); return 1; }
+    const sage = require('./sage');
+    const tui = require('./tui');
+    const gemma = require('./gemma');
+    const app = new sage.SageApp({
+      mode: 'video', root: shell.cwd, model: 'video', models: [], start: () => sage.IDLE,
+      startVideo: (o) => job(o, shell.cwd, { env: shell.env, free: gemma.freeMemory(), writer: o.exact ? null : gemma.promptWriter(shell) }),
+    });
+    if (!soundReady()) app.clipOpts.sound = false;
+    return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
+  }
   const o = parseArgs(args);
   if (o.error) { err(`sage video: ${o.error}\n`); return 1; }
   if (!ready()) { err('sage video: the video model isn’t set up — run: sage video --setup\n'); return 1; }
@@ -198,6 +267,11 @@ function runVideo(args, io, shell) {
   const began = Date.now();
   const status = shell.runExternal(argv(o, out), io, { ...shell.env, PYTHONUNBUFFERED: '1', HF_HUB_VERBOSITY: 'error' });
   if (status !== 0 || !fs.existsSync(out)) { err('sage video: the clip wasn’t made\n'); return status || 1; }
+  if (o.sound && soundReady()) { // MMAudio watches it and adds the sound
+    write(`${muted}✦ adding sound…${ansi.reset()}\n`);
+    const words = args.filter((a, i) => !a.startsWith('-') && !(i && /^--?(size|s|seconds|t|steps|seed|o|output|image|i)$/.test(args[i - 1]))).join(' ');
+    if (shell.runExternal(soundArgv(out, words), io, { ...shell.env, PYTHONUNBUFFERED: '1' }) !== 0) write(`${muted}  (the sound didn’t work — the clip is silent)${ansi.reset()}\n`);
+  } else if (o.sound) write(`${muted}  (silent: set up sound with sage video --setup)${ansi.reset()}\n`);
   const secs = Math.round((Date.now() - began) / 1000);
   const where = path.relative(shell.cwd, out) || out;
   write(`${theme.style(theme.current().ui.ok)}✓${ansi.reset()} saved ${where} ${muted}(${secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`})${ansi.reset()}\n`);
@@ -205,4 +279,4 @@ function runVideo(args, io, shell) {
   return 0;
 }
 
-module.exports = { runVideo, job, parseArgs, argv, progress, frames, plan, ready, dir, DEFAULTS, SEGMENT, REPO, HELP };
+module.exports = { runVideo, job, parseArgs, argv, progress, frames, plan, ready, soundReady, soundArgv, dir, DEFAULTS, SEGMENT, REPO, HELP };

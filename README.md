@@ -1178,6 +1178,28 @@ faster), and the MP4 is re-encoded so QuickTime plays it.
 download, converted on the spot, 17 GB kept. Wan is **Apache 2.0** —
 commercial use is fine.
 
+**With sound.** After filming, a second model — [MMAudio](https://github.com/hkchengrex/MMAudio)
+— watches the clip and makes the sound that goes with it: rain and
+splashing, paws on grass, an engine passing, timed to what happens on
+screen. It hears your own words (not Sage's long prompt) as a hint, runs
+on the GPU with PyTorch in its own Python 3.12 (`~/.maxshell/gemma/audio`;
+it needs numpy < 2.1, which has no build for 3.13 — setup uses `uv` when
+it's there), and takes a minute or two. It's trained on 8-second clips, so
+a longer one gets its sound 8 seconds at a time, crossfaded. `--no-sound`
+skips it. `sage video --setup` installs it too (5 GB). MMAudio's weights
+are **CC-BY-NC 4.0 — non-commercial use only**.
+
+**Video chat.** `sage video` on its own opens the Sage app for video:
+describe a clip and Sage films it — the conversation shows Sage's prompt,
+which part it's on with a progress bar, then a frame of the result (click
+it to play). Then say how to change it ("make it night", "slower, from
+above") for a new version — Sage rewrites the whole prompt knowing what the
+clip shows — or "keep going" to make it longer: it carries on from the last
+frame and the result is the whole clip, sound and all. Every version is
+saved (`sage-a-puppy.mp4`, `-2`, …). `/seconds 6` sets the length,
+`/sound off`, `/exact`, `/open` plays the latest, `/new` starts over, ^C
+stops.
+
 **Sage Ultra** is a 7-billion-parameter coding model — Alibaba's open
 Qwen2.5-Coder-7B-Instruct, 4-bit, run with Apple's MLX on the GPU (about
 6 GB; it starts with 30% of memory free). It's the strongest at code and,

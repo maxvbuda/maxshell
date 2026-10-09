@@ -166,12 +166,14 @@ const lastLine = (text) => String(text).trim().split('\n').map((l) => l.trim()).
 
 // A generation running in the background (for the Sage app). With a writer
 // (gemma.promptWriter), Sage writes the prompt first. sage video uses it
-// too, with its own command line (build), file type and kind.
+// too, with its own command line (build), file type, kind, progress parser
+// (parse) and steps to run after it (then: argv lists, e.g. adding sound).
 class Job {
-  constructor(o, folder, { env = process.env, free = 100, writer = null, build = argv, ext = '.png', kind = 'image' } = {}) {
+  constructor(o, folder, { env = process.env, free = 100, writer = null, build = argv, ext = '.png', kind = 'image', parse = progress, then = [] } = {}) {
     this.options = o;
     this.writer = writer;
     this.kind = kind;
+    this.parse = parse;
     this.out = o.output ? path.resolve(folder, o.output) : outputPath(o.prompt, folder, ext);
     this.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-image-'));
     const at = (name) => path.join(this.tmp, name);
@@ -184,7 +186,8 @@ class Job {
       first = `${[...writer.cmd, '--image-prompt', at('request.json'), this.detailed].map(quote).join(' ')} > "$WRITERLOG" 2>&1 && cp "$DETAILED" "$PROMPTFILE"; : > "$WROTE"; `;
     }
     const fd = fs.openSync(this.log, 'w');
-    const script = `trap "" INT; ${first}"$@"; echo $? > "$EXITFILE"`;
+    const after = then.map((cmd) => ` && ${cmd.map(quote).join(' ')}`).join('');
+    const script = `trap "" INT; ${first}"$@"${after}; echo $? > "$EXITFILE"`;
     const [cmd, ...rest] = build({ ...o, promptFile: this.prompt }, this.out, free);
     this.child = spawn('/bin/sh', ['-c', script, 'sh', cmd, ...rest], {
       cwd: folder,
@@ -200,7 +203,7 @@ class Job {
   poll() {
     const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
     const text = read(this.log) || '';
-    const p = progress(text) || { step: 0, total: this.options.steps };
+    const p = { step: 0, total: this.options.steps, ...this.parse(text) };
     const finished = fs.existsSync(this.exit);
     const writing = this.writer && !finished && !fs.existsSync(this.wrote);
     const detailed = read(this.detailed);

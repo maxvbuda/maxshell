@@ -762,6 +762,9 @@ def write_image_prompt(new_chat, req):
     if req.get('kind') == 'video':
         chat = new_chat('video-from-image' if edit else 'video')
         ask = req.get('prompt', '')
+        if req.get('context') and not edit:  # a new version of a clip: rewrite the whole prompt with the change
+            ask = (f"The clip so far: {req['context']}\n\nThe change the user wants: {ask}\n\n"
+                   f"Write the whole prompt for the new version, keeping everything they didn't ask to change.")
         if req.get('seconds'):
             ask += f"\n\n(The clip is {req['seconds']:g} seconds long.)"
         parts = []

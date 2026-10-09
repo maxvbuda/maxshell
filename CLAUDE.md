@@ -100,8 +100,12 @@ tests swap in `test/fake-mflux.js` and `test/fake-sage-writer.js`
 (`src/sagevideo.js` + `src/sagevideo.py`, run by its own venv in
 `~/.maxshell/gemma/video`) is Wan 2.2 TI2V-5B Turbo via mlx-video, which
 sagevideo.py patches (bf16 T5 and VAE, prompt file, QuickTime re-encode) and
-chains in 2 s segments for any length; tests use `test/fake-wan.js`
-(`MAXSHELL_VIDEO_BIN`). Off a terminal, sage.py
+chains in 2 s segments for any length (`--continue` extends a clip);
+MMAudio (`src/sageaudio.py`, its own Python 3.12 venv in
+`~/.maxshell/gemma/audio`, made with uv) adds the sound after, as a Job
+`then` step. `sage video` alone opens video chat (`SageApp` mode
+`video`). Tests use `test/fake-wan.js` and `test/fake-mmaudio.js`
+(`MAXSHELL_VIDEO_BIN`, `MAXSHELL_AUDIO_BIN`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +
 `src/tex.js` math; NUL ends a reply and is acked on stderr).
 
