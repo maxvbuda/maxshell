@@ -179,6 +179,15 @@ class SageApp {
     this.changed();
   }
 
+  // Ends the thinking being shown, if any, with how long it took.
+  endThought() {
+    const last = this.items[this.items.length - 1];
+    if (!last || last.type !== 'thought' || last.done) return;
+    last.done = true;
+    last.seconds = Math.max(1, Math.round((Date.now() - last.started) / 1000));
+    last.v = (last.v || 0) + 1;
+  }
+
   lastSage() {
     const last = this.items[this.items.length - 1];
     return last && last.type === 'sage' && !last.done ? last : null;
@@ -200,7 +209,15 @@ class SageApp {
           this.send(q, !waiting);
         }
         break;
+      case 'think': {
+        let item = this.items[this.items.length - 1];
+        if (!item || item.type !== 'thought' || item.done) { item = { type: 'thought', text: '', done: false, started: Date.now() }; this.items.push(item); }
+        item.text += ev.s;
+        item.v = (item.v || 0) + 1;
+        break;
+      }
       case 'text': {
+        this.endThought();
         let item = this.lastSage();
         if (!item) { item = { type: 'sage', text: '', done: false }; this.items.push(item); }
         item.text += ev.s;
@@ -208,9 +225,10 @@ class SageApp {
         if (this.status !== 'stopping') this.status = 'writing';
         break;
       }
-      case 'tool': this.onTool(ev.name, ev.args || {}); break;
+      case 'tool': this.endThought(); this.onTool(ev.name, ev.args || {}); break;
       case 'image-prompt': this.onImagePrompt(ev); break;
       case 'done': {
+        this.endThought();
         const item = this.lastSage();
         if (item) { item.done = true; item.v = (item.v || 0) + 1; }
         if (ev.stopped) this.note('stopped');
@@ -796,6 +814,13 @@ function itemLines(item, w, app) {
     for (const l of wrap(item.text, w - 2)) lines.push({ s: `  ${color}${l}${RESET()}` });
     return lines;
   }
+  if (item.type === 'thought') {
+    // the model's thinking, muted, under a heading that says how long it took
+    const time = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+    lines.push({ s: `${muted}◇ ${item.done ? `Thought for ${time(item.seconds)}` : 'Thinking…'}${RESET()}` });
+    for (const l of wrap(item.text.trim(), w - 4)) lines.push({ s: `  ${muted}│ ${l}${RESET()}` });
+    return lines;
+  }
   if (item.type === 'sage') {
     const text = item.text.replace(/^\s+/, '');
     const md = text ? renderMarkdown(text, { width: w - 2 }).split('\n') : [''];
@@ -1057,14 +1082,16 @@ function render(app, cols, rows, now = Date.now()) {
   let body = [];
   if (!app.items.length) body = welcome(app, w);
   for (const item of app.items) {
-    if (item.type === 'sage' && !item.text.trim()) continue; // only whitespace between tool calls
+    if ((item.type === 'sage' || item.type === 'thought') && !item.text.trim()) continue; // only whitespace between tool calls
     body.push({ s: '' }); // a blank line above each item, the first too
     const key = `${w}:${item.v || 0}:${item.state || ''}:${app.approval && app.approval.item === item}:${item.type === 'sage' && !item.done ? app.status : ''}${item.type === 'video' && item.state === 'running' ? `:${Math.floor((now - item.started) / 1000)}` : ''}`; // a clip's clock ticks
     if (!item.cache || item.cacheKey !== key) { item.cache = itemLines(item, w, app); item.cacheKey = key; }
     body.push(...item.cache);
   }
   const writing = app.lastSage();
-  if ((app.status === 'thinking' || app.status === 'stopping') && !(writing && writing.text.trim())) {
+  const last = app.items[app.items.length - 1];
+  const showing = (writing && writing.text.trim()) || (last && last.type === 'thought' && !last.done && last.text.trim()); // the thinking is on screen
+  if ((app.status === 'thinking' || app.status === 'stopping') && !showing) {
     body.push({ s: '' }, { s: `${hilite('✦')} ${muted}${SPIN[Math.floor(now / 90) % SPIN.length]} ${app.status === 'stopping' ? 'stopping' : 'thinking'}…${RESET()}` });
   }
   const maxScroll = Math.max(0, body.length - bodyH);

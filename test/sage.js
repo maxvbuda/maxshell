@@ -168,6 +168,26 @@ test('messages wait for the model, then go to it; answers stream in', () => {
   assert.strictEqual(shown.match(/hello\?/g).length, 1);
 });
 
+test('thinking shows as it comes, muted, then says how long it took', () => {
+  const a = app();
+  a.onEvent({ ev: 'ready' });
+  a.setInput('what is 23 * 47?');
+  a.submit();
+  a.onEvent({ ev: 'think', s: 'They want 23 × 47. ' });
+  a.onEvent({ ev: 'think', s: '20 × 47 = 940, plus 3 × 47 = 141, so 1081. '.repeat(3) });
+  let shown = text(render(a, 50, 24, 0));
+  assert.match(shown, /◇ Thinking…\n\s*│ They want 23 × 47\./);
+  assert.doesNotMatch(shown, /thinking…/); // the thinking itself replaces the spinner
+  for (const l of shown.split('\n')) assert.ok(require('../src/tui').textWidth(l) <= 50, l);
+  a.onEvent({ ev: 'text', s: '23 × 47 = **1081**' });
+  a.onEvent({ ev: 'done', tokens: 20, seconds: 2 });
+  shown = text(render(a, 50, 30, 0));
+  assert.match(shown, /◇ Thought for \d+s\n\s*│ They want[\s\S]*✦ 23 × 47 = 1081/);
+  // after a tool call the model thinks again: a new block
+  a.onEvent({ ev: 'think', s: 'Next step.' });
+  assert.strictEqual(a.items.filter((i) => i.type === 'thought').length, 2);
+});
+
 test('the model dropdown opens by click or ^O and switches models', () => {
   const a = app();
   a.onEvent({ ev: 'ready' });
@@ -382,6 +402,8 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'uanswer': gemma.QwenUltraChat.scan('2 + 2\n</think>\n\nIt is 4.<|im_end|>'),
   'ucall': gemma.QwenUltraChat.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
   'uwait': gemma.QwenUltraChat.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
+  'uthought': [gemma.QwenUltraChat.thought('\nThey want a sum.</thi'), gemma.QwenUltraChat.thought('\nThey want a sum.\n</think>\n\nIt is 4.')],
+  'gthought': gemma.GemmaChat.thought('<|channel>thought\nplan it<channel|>Hi<|channel>more<chan'),
   'uturn': gemma.QwenUltraChat.user_turn(gemma.QwenUltraChat.__new__(gemma.QwenUltraChat), 'hey'),
   'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
   'ganswer': gemma.GemmaChat.answer(None, [('read_file', {})], ['x = 1']),
@@ -411,6 +433,9 @@ print(json.dumps({'call': gemma.parse_call(raw),
   // Sage Ultra (Qwen3.8-27B): nothing shows while it thinks; then the answer, and
   // XML tool calls, cut where the call ends (one newline trimmed round each value)
   assert.deepStrictEqual(out.uthink, ['', [], null]);
+  // …and its thinking, for the app to show apart (an end tag still coming is held back)
+  assert.deepStrictEqual(out.uthought, ['They want a sum.', 'They want a sum.']);
+  assert.strictEqual(out.gthought, 'plan itmore');
   assert.deepStrictEqual(out.uanswer, ['It is 4.', [], null]);
   assert.deepStrictEqual(out.ucall.slice(0, 2), ['Let me look.\n', [['write_file', { path: 'a.py', content: 'x = 1\n' }]]]);
   assert.strictEqual(out.ucall[2], 'plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call>'.length);

@@ -381,6 +381,7 @@ class MlxChat:
         self.tok = engine.tok
         self.im_end = self.tok.convert_tokens_to_ids(self.END)
         self.turns = []
+        self.think = None  # shows the thinking, if given
         self.generated = 0  # tokens written in the last answer…
         self.seconds = 0.0  # …and the time spent writing them (not waiting on tools)
         self.cache = make_prompt_cache(engine.model)
@@ -453,7 +454,7 @@ class MlxChat:
             self.mark()
         sampler = make_sampler(temp=temperature, **self.SAMPLING)
         processors = make_logits_processors(repetition_penalty=self.REPEAT)
-        raw, shown, out, cut = '', 0, [], None
+        raw, shown, thought, out, cut = '', 0, 0, [], None
         base = len(self.tokens)
         began = time.time()
         for r in stream_generate(self.e.model, self.tok, prompt, max_tokens=self.max_tokens, prompt_cache=self.cache,
@@ -464,6 +465,11 @@ class MlxChat:
                 out.append(r.token)
             raw += r.text
             seen, _, cut = self.scan(raw)
+            if self.think:
+                th = self.thought(raw)
+                if len(th) > thought:
+                    self.think(th[thought:])
+                    thought = len(th)
             if len(seen) > shown:
                 show(seen[shown:])
                 shown = len(seen)
@@ -485,6 +491,11 @@ class MlxChat:
     def scan(raw):
         return ultra_scan(raw)
 
+    @staticmethod
+    def thought(raw):
+        """The thinking in raw output so far (shown apart from the answer)."""
+        return ''
+
     def temperature(self):
         return 0.3 if self.mode == 'code' else 0.7
 
@@ -502,9 +513,11 @@ class MlxChat:
             self.tokens.append(self.im_end)
         self.tokens += self.encode('\n')
 
-    def reply(self, question, show, tools=None):
+    def reply(self, question, show, tools=None, think=None):
         """Sage's answer, shown as it comes; and whether Ctrl-C stopped it.
-        tools maps a tool's name to a function of its arguments."""
+        tools maps a tool's name to a function of its arguments; think, if
+        given, is shown the model's thinking as it comes."""
+        self.think = think
         self.turns.append(('user', question))
         self.generated, self.seconds = 0, 0.0
         stop = {'hit': False}
@@ -558,6 +571,11 @@ class GemmaChat(MlxChat):
     def answer(self, calls, results):
         return ''.join(tool_response(name, result) for (name, _), result in zip(calls, results))
 
+    @staticmethod
+    def thought(raw):
+        return ''.join(m.group(1) if m.group(2) else held(m.group(1), '<channel|>')
+                       for m in re.finditer(r'<\|channel>(?:thought\n)?(.*?)(<channel\|>|\Z)', raw, re.S))
+
     def temperature(self):
         if self.mode.startswith(('image', 'video')):
             return 0.7
@@ -568,6 +586,14 @@ class GemmaChat(MlxChat):
 
 
 THINK = re.compile(r'<think>.*?(</think>|\Z)\s*', re.S)
+
+
+def held(text, end):
+    """text without a start of end at its end — it may be the end tag coming."""
+    for k in range(min(len(end) - 1, len(text)), 0, -1):
+        if text.endswith(end[:k]):
+            return text[:-k]
+    return text
 
 
 class QwenLiteChat(MlxChat):
@@ -615,6 +641,11 @@ class QwenUltraChat(MlxChat):
         start += len(raw[start:]) - len(raw[start:].lstrip())
         shown, calls, cut = ultra_scan(raw[start:])
         return shown, calls, None if cut is None else start + cut
+
+    @staticmethod
+    def thought(raw):
+        end = raw.find('</think>')
+        return (held(raw, '</think>') if end < 0 else raw[:end].rstrip()).lstrip()
 
     def temperature(self):
         return 0.6 if self.mode == 'code' else 1.0  # Qwen's advice for thinking
@@ -757,7 +788,7 @@ def serve(cmd_path, mode):
             text, stopped = write_image_prompt(new_chat, cmd)
             emit(ev='image-prompt', id=cmd.get('id'), text=text, stopped=stopped)
         elif op == 'ask':
-            stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', s=s), tools)
+            stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', s=s), tools, lambda s: emit(ev='think', s=s))
             emit(ev='done', stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
 
 

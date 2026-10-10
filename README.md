@@ -1097,7 +1097,8 @@ the tests and report.
 
 Sage Ultra is raw power over speed: the strongest open model that fits
 this Mac's GPU, all 27 billion parameters working on every word, and it
-thinks before every answer (hidden; the header says *thinking*) — most
+thinks before every answer — you watch it think, in muted text under
+**◇ Thinking…**, which becomes **◇ Thought for 42s** once it answers — most
 answers take a minute or two, hard ones longer. On a hard set of puzzles,
 exact arithmetic and trick questions it got all 22 (Sage Pro 21), and in
 `sage code` it did every task. `MAXSHELL_SAGE_EFFORT=xhigh` makes it think
