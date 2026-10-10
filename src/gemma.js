@@ -12,15 +12,17 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// The models, best first. Sage Ultra, Pro and Flash are Google's Gemma 4 in
-// chat and sage code alike; Sage Lite is a different small model for each.
+// The models, best first. Sage Ultra, Pro and Flash are the same in chat and
+// sage code; Sage Lite is a different small model for each.
 const MODELS = {
-  // Gemma 4 26B-A4B: a mixture of experts — 26B parameters, about 4B used for
-  // each token — so it knows like a big model and writes like a small one.
+  // Alibaba's Qwen3.8-27B: the strongest model that fits this Mac's GPU, all
+  // 27B parameters used for every token, and it thinks before it answers —
+  // slow, but the most power.
   ultra: {
-    name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/gemma-4-26b-a4b-it-4bit', sub: 'ultra',
-    size: '15 GB', needFree: 60,
+    name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/Qwen3.8-27B-4bit', sub: 'ultra',
+    size: '16 GB', needFree: 60,
   },
+  // Pro and Flash are Google's Gemma 4.
   e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'mlx-community/gemma-4-e4b-it-4bit', sub: 'pro', size: '5.2 GB', needFree: 30 },
   e2b: { name: 'E2B', label: 'Sage Flash', flag: 'flash', repo: 'mlx-community/gemma-4-e2b-it-4bit', sub: 'flash', size: '3.3 GB', needFree: 20 },
   // Lite in a chat: Alibaba's Qwen3-1.7B, thinking off — about 50 tokens a
@@ -143,7 +145,7 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage video <prompt>  a short clip, made here (sage video --help)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
-  sage --ultra …       use Sage Ultra, the smartest (needs ~15 GB of memory)
+  sage --ultra …       use Sage Ultra, the smartest (needs ~16 GB of memory)
   sage --flash …       use Sage Flash, twice as fast as Pro (MAXSHELL_SAGE_MODEL=flash
                        makes it the default; Sage Pro is, unless memory is short)
   sage --lite …        use Sage Lite, tiny and the fastest of all

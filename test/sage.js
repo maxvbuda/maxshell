@@ -378,6 +378,11 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'mcall': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"path": "a.py"}</s>'),
   'mwait': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"pa'),
   'mplain': gemma.MistralChat.scan('Done.</s>'),
+  'uthink': gemma.QwenUltraChat.scan('they want a sum, 2 + 2'),
+  'uanswer': gemma.QwenUltraChat.scan('2 + 2\n</think>\n\nIt is 4.<|im_end|>'),
+  'ucall': gemma.QwenUltraChat.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
+  'uwait': gemma.QwenUltraChat.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
+  'uturn': gemma.QwenUltraChat.user_turn(gemma.QwenUltraChat.__new__(gemma.QwenUltraChat), 'hey'),
   'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
   'ganswer': gemma.GemmaChat.answer(None, [('read_file', {})], ['x = 1']),
   'thinking': gemma.visible('<|channel>thought\nplan\n'),
@@ -391,7 +396,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.strictEqual(out.partial, 'Sure!');
   assert.deepStrictEqual(out.tools, ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'run_command']);
   assert.deepStrictEqual([out.chat, out.code], [true, true]);
-  // Sage Ultra (Qwen) writes its calls as JSON in <tool_call> tags
+  // Qwen writes its calls as JSON in <tool_call> tags
   assert.deepStrictEqual(out.ucalls, [['run_command', { command: 'mkdir -p x' }], ['read_file', { path: 'a.py' }]]);
   assert.strictEqual(out.useen, 'Sure.');
   assert.strictEqual(out.upartial, 'Sure.');
@@ -400,9 +405,17 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.strictEqual(out.fenced[2], 'Sure.\n```json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n```\n'.length);
   assert.deepStrictEqual(out.pycode, ['py:\n```python\nprint({"name": 1})\n```\nok', [], null]);
   assert.strictEqual(out.holding, 'x\n');
-  // Sage Ultra in a chat (Gemma 4 26B on MLX): Gemma's turns, its thinking hidden, no tools
+  // Sage Pro and Flash (Gemma 4 on MLX): Gemma's turns, any thinking hidden
   assert.deepStrictEqual(out.gscan, ['Hi there', [], null]);
   assert.strictEqual(out.gturn, '<|turn>user\nhey<turn|>\n<|turn>model\n');
+  // Sage Ultra (Qwen3.8-27B): nothing shows while it thinks; then the answer, and
+  // XML tool calls, cut where the call ends (one newline trimmed round each value)
+  assert.deepStrictEqual(out.uthink, ['', [], null]);
+  assert.deepStrictEqual(out.uanswer, ['It is 4.', [], null]);
+  assert.deepStrictEqual(out.ucall.slice(0, 2), ['Let me look.\n', [['write_file', { path: 'a.py', content: 'x = 1\n' }]]]);
+  assert.strictEqual(out.ucall[2], 'plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call>'.length);
+  assert.deepStrictEqual(out.uwait, ['Let me look.', [], null]);
+  assert.strictEqual(out.uturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n');
   // Sage Lite in a chat (Qwen3-1.7B): ChatML with thinking off, no tools
   assert.deepStrictEqual(out.qscan, ['Hi there.', [], null]);
   assert.strictEqual(out.qturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n');
@@ -588,10 +601,10 @@ test('sage image from the shell saves a PNG here and never overwrites', () => {
   fs.rmSync(work, { recursive: true });
 });
 
-test('the models: Gemma 4 for Ultra, Pro and Flash; Lite differs in sage code', () => {
+test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in sage code', () => {
   const gemma = require('../src/gemma');
   for (const mode of ['chat', 'code']) {
-    assert.strictEqual(gemma.modelFor('ultra', mode).repo, 'mlx-community/gemma-4-26b-a4b-it-4bit');
+    assert.strictEqual(gemma.modelFor('ultra', mode).repo, 'mlx-community/Qwen3.8-27B-4bit');
     assert.strictEqual(gemma.modelFor('e4b', mode).repo, 'mlx-community/gemma-4-e4b-it-4bit');
     assert.strictEqual(gemma.modelFor('e2b', mode).repo, 'mlx-community/gemma-4-e2b-it-4bit');
   }

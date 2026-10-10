@@ -75,18 +75,21 @@ prefers mx4, then mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
 `sage` (`src/gemma.js`) is Sage. Every model is a 4-bit mlx-lm build on the
-GPU (`MODELS` in gemma.js, folders under `~/.maxshell/gemma`): Ultra / Pro /
-Flash are Gemma 4 26B-A4B / E4B / E2B (`ultra`, `pro`, `flash`; keys
-`ultra`, `e4b`, `e2b`); Lite is Qwen3-1.7B in a chat (`lite`) and Ministral
+GPU (`MODELS` in gemma.js, folders under `~/.maxshell/gemma`): Ultra is
+Qwen3.8-27B (`ultra`, thinking on — the strongest that fits the 24 GB Mac;
+chosen 2026-10-09 for raw power over speed), Pro / Flash are Gemma 4 E4B /
+E2B (`pro`, `flash`; keys `ultra`, `e4b`, `e2b`); Lite is Qwen3-1.7B in a chat (`lite`) and Ministral
 3 3B in `sage code` (`litecode`, folder `lite-code`) —
 `gemma.modelFor(key, mode)` picks. They were chosen on 2026-10-09 by
 testing candidates on this Mac (sums/facts for chat; fix-a-bug, write-a-file,
 run-the-tests for code); test a replacement the same way before swapping
 one in. All of them run in `src/sage.py` (one venv, `~/.maxshell/gemma/venv`):
 `Engine` loads the model, and `$MAXSHELL_SAGE_NAME` picks its conversation
-class — `GemmaChat`, `QwenLiteChat` (thinking off) or `MistralChat`
-(tokenizer needs `fix_mistral_regex`) — all `MlxChat`s keeping the KV cache
-across turns. At a terminal, `sage` / `sage code` open `src/sage.js`,
+class — `QwenUltraChat` (thinking hidden, XML tool calls), `GemmaChat`,
+`QwenLiteChat` (thinking off) or `MistralChat` (tokenizer needs
+`fix_mistral_regex`) — all `MlxChat`s keeping the KV cache across turns
+(Qwen3.8's linear-attention layers can't be trimmed, so `mark`/`rewind`
+snapshot the cache before each answer). At a terminal, `sage` / `sage code` open `src/sage.js`,
 a full-screen app (`SageApp` state + `render()`, model dropdown) that runs
 `sage.py --serve` as a separate process: JSON commands appended to a file,
 JSON events read back from another (`Engine`), so it stays synchronous.

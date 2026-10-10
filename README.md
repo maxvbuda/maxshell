@@ -1090,16 +1090,19 @@ the tests and report.
 
 | | In a chat | In `sage code` | Memory | Speed here |
 |---|---|---|---|---|
-| **Sage Ultra** | Gemma 4 26B-A4B (Google) | the same | ~15 GB | ~17 tokens/s |
+| **Sage Ultra** | Qwen3.8-27B (Alibaba) | the same | ~16 GB | ~4 tokens/s, thinks first |
 | **Sage Pro** (default) | Gemma 4 E4B (Google) | the same | ~5 GB | ~16 tokens/s |
 | **Sage Flash** | Gemma 4 E2B (Google) | the same | ~3 GB | ~34 tokens/s |
 | **Sage Lite** | Qwen3-1.7B (Alibaba) | Ministral 3 3B (Mistral AI) | ~1 / ~3 GB | ~50 / ~20 tokens/s |
 
-Sage Ultra is a mixture of experts — 26 billion parameters, but only about
-4 billion work on each word — so it knows and reasons like a big model and
-writes like a small one; it thinks before it answers (the thinking is
-hidden), and in `sage code` it did every task, every time. Sage Pro did
-too, in a third of the memory. Sage Lite in a chat answers in a moment and
+Sage Ultra is raw power over speed: the strongest open model that fits
+this Mac's GPU, all 27 billion parameters working on every word, and it
+thinks before every answer (hidden; the header says *thinking*) — most
+answers take a minute or two, hard ones longer. On a hard set of puzzles,
+exact arithmetic and trick questions it got all 22 (Sage Pro 21), and in
+`sage code` it did every task. `MAXSHELL_SAGE_EFFORT=xhigh` makes it think
+longer still (`low` shorter; `medium` is the default). Sage Pro did every
+`sage code` task too, in a third of the memory. Sage Lite in a chat answers in a moment and
 gets its sums right (21 of 22 on a hard set of sums and facts); in `sage
 code` it's Ministral, the smallest model that reliably reads a file before
 it edits it.
@@ -1117,7 +1120,7 @@ without room for it — Ultra with less than 60% of memory free, Pro 30% —
 and when you haven't picked one and there's less than 30% free (the GPU
 shares it), Sage starts as Sage Flash and says so. Sage shares the GPU with
 mx training (`ai --train stop` pauses it); `MAXSHELL_SAGE_DEVICE=cpu` runs
-Sage on the CPU instead. Waking takes a few seconds (Ultra about 30).
+Sage on the CPU instead. Waking takes a few seconds (Ultra about 15).
 
 **Sage draws, too.** `sage image "a lighthouse at dusk, oil painting"` makes
 a picture on your Mac with Qwen-Image 2.1, Alibaba's open image model

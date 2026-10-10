@@ -28,7 +28,7 @@ const tools = require('./sagetools');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~15 GB', flag: 'ultra' },
+  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra' },
   e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro' },
   e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash' },
   lite: { label: 'Sage Lite', blurb: 'fastest · ~3 GB', flag: 'lite' }, // sage code's

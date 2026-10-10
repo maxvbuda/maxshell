@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Sage's engine, running on this Mac with Apple's MLX: Sage Ultra, Pro and
-Flash are Google's Gemma 4 (26B-A4B, E4B, E2B); Sage Lite is Alibaba's
-Qwen3-1.7B in a chat and Mistral's Ministral 3 3B in sage code. All 4-bit.
+"""Sage's engine, running on this Mac with Apple's MLX: Sage Ultra is
+Alibaba's Qwen3.8-27B, thinking before it answers; Sage Pro and Flash are
+Google's Gemma 4 (E4B, E2B); Sage Lite is Alibaba's Qwen3-1.7B in a chat and
+Mistral's Ministral 3 3B in sage code. All 4-bit.
 Run by maxshell's `sage`.
 
 The model folder ($MAXSHELL_GEMMA, set up by `sage --setup` under
@@ -34,13 +35,13 @@ import time
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
-# Ultra, Pro and Flash are Gemma 4 (26B-A4B, E4B, E2B); Lite is Qwen3-1.7B in
-# a chat and Ministral 3 3B in sage code.
+# Ultra is Qwen3.8-27B; Pro and Flash are Gemma 4 (E4B, E2B); Lite is
+# Qwen3-1.7B in a chat and Ministral 3 3B in sage code.
 LABEL = {'ULTRA': 'Ultra', 'E2B': 'Flash', 'LITE': 'Lite', 'LITE-CODE': 'Lite'}.get(NAME, 'Pro')
 FLAG = {'ULTRA': ' --ultra', 'E2B': ' --flash', 'LITE': ' --lite', 'LITE-CODE': ' code --lite'}.get(NAME, '')
-NEED_GB = {'ULTRA': 15, 'E4B': 5, 'E2B': 3, 'LITE': 1, 'LITE-CODE': 3}.get(NAME, 5)
+NEED_GB = {'ULTRA': 16, 'E4B': 5, 'E2B': 3, 'LITE': 1, 'LITE-CODE': 3}.get(NAME, 5)
 NEED_FREE = {'ULTRA': 60, 'E4B': 30, 'E2B': 20, 'LITE': 10, 'LITE-CODE': 15}.get(NAME, 30)  # % of memory free before loading
-MAKER = {'LITE': 'Alibaba', 'LITE-CODE': 'Mistral AI'}.get(NAME, 'Google')
+MAKER = {'ULTRA': 'Alibaba', 'LITE': 'Alibaba', 'LITE-CODE': 'Mistral AI'}.get(NAME, 'Google')
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
 C = type('C', (), COLORS)
@@ -85,7 +86,7 @@ CODE_TOOLS = [
 ]
 QUOTE = '<|"|>'
 CALL = re.compile(r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>', re.S)
-# Hidden too: Gemma's thinking (Sage Ultra thinks before it answers).
+# Hidden too: Gemma's thinking.
 HIDDEN = re.compile(r'<\|tool_call>.*?(<tool_call\|>|\Z)|<\|tool_response>.*?(<tool_response\|>|\Z)|<\|channel>.*?(<channel\|>|\Z)|'
                     r'<\|[^<>|\s]*>|<[^<>|\s]*\|>', re.S)
 MAX_CALLS = 40  # tool calls in one answer
@@ -227,15 +228,23 @@ class Printer:
 
 # --- the engine: every model runs with MLX on the GPU ---------------------------
 #
-# Qwen-style tool calls (<tool_call>JSON</tool_call>, or a ```json block) are
+# Qwen-style tool calls (<tool_call> with JSON or XML inside, or a ```json block) are
 # read by ultra_scan below; Gemma's and Mistral's by their chat classes.
 
 ULTRA_SPECIAL = re.compile(r'<\|im_(start|end)\|>|<\|endoftext\|>')
 TOOL_NAMES = {t['function']['name'] for t in CODE_TOOLS}
 
 
+XML_FUNCTION = re.compile(r'<function=([\w.-]+)>(.*?)</function>', re.S)
+XML_PARAM = re.compile(r'<parameter=([\w.-]+)>\n?(.*?)\n?</parameter>', re.S)
+
+
 def _call(text):
-    """(name, {arg: text}) if text is a JSON tool call, else None."""
+    """(name, {arg: text}) if text is a tool call — JSON, or Qwen 3.5's XML
+    (<function=name><parameter=arg>\ntext\n</parameter></function>) — else None."""
+    m = XML_FUNCTION.fullmatch(text.strip())
+    if m:
+        return (m.group(1), dict(XML_PARAM.findall(m.group(2)))) if m.group(1) in TOOL_NAMES else None
     try:
         data = json.loads(text)
     except ValueError:
@@ -367,7 +376,7 @@ class MlxChat:
     REPEAT = 1.05  # repetition penalty
 
     def __init__(self, engine, mode, system, tools, max_calls, max_tokens):
-        from mlx_lm.models.cache import make_prompt_cache
+        from mlx_lm.models.cache import make_prompt_cache, can_trim_prompt_cache
         self.e, self.mode, self.max_calls, self.max_tokens = engine, mode, max_calls, max_tokens
         self.tok = engine.tok
         self.im_end = self.tok.convert_tokens_to_ids(self.END)
@@ -375,23 +384,59 @@ class MlxChat:
         self.generated = 0  # tokens written in the last answer…
         self.seconds = 0.0  # …and the time spent writing them (not waiting on tools)
         self.cache = make_prompt_cache(engine.model)
-        prefix = self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
-        self.tokens = self.encode(prefix)  # the whole conversation
-        mx = engine.mx
-        engine.model(mx.array(self.tokens)[None], cache=self.cache)  # read the system prompt now
-        mx.eval([c.state for c in self.cache])
+        self.tokens = self.encode(self.prefix(system, tools))  # the whole conversation
+        # Linear-attention layers (Qwen 3.5's) can't trim their cache back, so
+        # the cache is remembered before each answer and wound back from there.
+        self.trimmable = can_trim_prompt_cache(self.cache)
+        self.feed(self.tokens)  # read the system prompt now
+        self.mark()
+
+    def prefix(self, system, tools):
+        """The system turn (with the tools), in the model's chat template."""
+        return self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
+
     def encode(self, text):
         return list(self.tok.encode(text, add_special_tokens=False))
 
     def fed(self):
-        return self.cache[0].offset
+        return next(c.offset for c in self.cache if hasattr(c, 'offset'))
+
+    def feed(self, tokens):
+        mx = self.e.mx
+        if tokens:
+            self.e.model(mx.array(tokens)[None], cache=self.cache)
+            mx.eval([c.state for c in self.cache])
+
+    def mark(self):
+        """Remembers the cache as it is now (the linear layers' arrays never
+        change in place, so a copy of the lists will do)."""
+        from mlx_lm.models.cache import ArraysCache
+        if not self.trimmable:
+            self.saved = (self.fed(), [list(c.cache) if isinstance(c, ArraysCache) else None for c in self.cache])
+
+    def rewind(self, n):
+        """Makes the cache hold just the conversation's first n tokens."""
+        from mlx_lm.models.cache import trim_prompt_cache
+        extra = self.fed() - n
+        if extra <= 0:
+            return
+        if self.trimmable:
+            trim_prompt_cache(self.cache, extra)
+            return
+        at, states = self.saved
+        for c, saved in zip(self.cache, states):
+            if saved is None:
+                c.trim(c.offset - at)
+            else:
+                c.cache = list(saved)
+        self.feed(self.tokens[at:n])
+        self.mark()
 
     def pending(self):
-        """Conversation tokens the cache hasn't read; trims the cache if it read
-        past them (a token computed but never shown)."""
-        from mlx_lm.models.cache import trim_prompt_cache
+        """Conversation tokens the cache hasn't read; winds the cache back if
+        it read past them (a token computed but never shown)."""
         if self.fed() > len(self.tokens):
-            trim_prompt_cache(self.cache, self.fed() - len(self.tokens))
+            self.rewind(len(self.tokens))
         return self.tokens[self.fed():]
 
     def generate(self, text_after, show, stop, temperature):
@@ -402,6 +447,10 @@ class MlxChat:
         new = self.encode(text_after)
         prompt = self.pending() + new
         self.tokens += new
+        if not self.trimmable and len(prompt) > 1:
+            self.feed(prompt[:-1])  # read it here, so the mark is just before the answer
+            prompt = prompt[-1:]
+            self.mark()
         sampler = make_sampler(temp=temperature, **self.SAMPLING)
         processors = make_logits_processors(repetition_penalty=self.REPEAT)
         raw, shown, out, cut = '', 0, [], None
@@ -425,12 +474,10 @@ class MlxChat:
         if cut is None:
             self.tokens += out
             return raw
-        # Keep the conversation up to the end of the call: trim the cache back
-        # and let the call's text be read again (a few tokens).
-        from mlx_lm.models.cache import trim_prompt_cache
+        # Keep the conversation up to the end of the call: wind the cache back
+        # and let the call's text be read again.
         raw = raw[:cut]
-        if self.fed() > base:
-            trim_prompt_cache(self.cache, self.fed() - base)
+        self.rewind(base)
         self.tokens = self.tokens[:base] + self.encode(raw)
         return raw
 
@@ -494,10 +541,10 @@ class MlxChat:
 
 
 class GemmaChat(MlxChat):
-    """Gemma 4 (Sage Ultra, Pro and Flash). Gemma's turns and sampling, and its
-    tool calls: it writes <|tool_call>call:name{…}<tool_call|>, generation
-    stops there, and the result goes back in the same turn, as Gemma's
-    template does. Its thinking (Ultra thinks first) is hidden."""
+    """Gemma 4 (Sage Pro and Flash). Gemma's turns and sampling, and its tool
+    calls: it writes <|tool_call>call:name{…}<tool_call|>, generation stops
+    there, and the result goes back in the same turn, as Gemma's template
+    does. Any thinking is hidden."""
     END = '<turn|>'
     SAMPLING = {'top_p': 0.95, 'top_k': 64}  # Google's settings, with temperature 1
     REPEAT = None
@@ -540,6 +587,45 @@ class QwenLiteChat(MlxChat):
         return super().user_turn(question) + '<think>\n\n</think>\n\n'
 
 
+class QwenUltraChat(MlxChat):
+    """Sage Ultra: Qwen3.8-27B. ChatML, and it thinks before every answer
+    (<think>…</think>, hidden; the app says "thinking" meanwhile) at the
+    reasoning effort its template is given. Tool calls are XML in
+    <tool_call> tags, read by ultra_scan; results come back in a user turn."""
+    SAMPLING = {'top_p': 0.95, 'top_k': 20}  # Qwen's settings for thinking
+    REPEAT = None
+    EFFORT = os.environ.get('MAXSHELL_SAGE_EFFORT') or 'medium'  # xhigh, medium or low
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.max_tokens = max(self.max_tokens, 32768)  # room to think
+
+    def prefix(self, system, tools):
+        # its template wants a question to render; cut the system turn off one
+        whole = self.tok.apply_chat_template([{'role': 'system', 'content': system}, {'role': 'user', 'content': '?'}],
+                                             tools=tools, tokenize=False, reasoning_effort=self.EFFORT)
+        return whole[:whole.index('<|im_start|>user')]
+
+    @staticmethod
+    def scan(raw):
+        end = raw.find('</think>')
+        if end < 0:
+            return '', [], None  # still thinking
+        start = end + len('</think>')
+        start += len(raw[start:]) - len(raw[start:].lstrip())
+        shown, calls, cut = ultra_scan(raw[start:])
+        return shown, calls, None if cut is None else start + cut
+
+    def temperature(self):
+        return 0.6 if self.mode == 'code' else 1.0  # Qwen's advice for thinking
+
+    def user_turn(self, question):
+        return super().user_turn(question) + '<think>\n'
+
+    def answer(self, calls, results):
+        return super().answer(calls, results) + '<think>\n'
+
+
 MISTRAL_CALL = re.compile(r'\[TOOL_CALLS\]([\w.-]+)\[ARGS\]')
 MISTRAL_HIDDEN = re.compile(r'\[TOOL_CALLS\].*|</s>|<s>', re.S)
 
@@ -580,7 +666,7 @@ class MistralChat(MlxChat):
 
 
 # Which conversation each model has; Gemma for the rest.
-CHATS = {'LITE': QwenLiteChat, 'LITE-CODE': MistralChat}
+CHATS = {'ULTRA': QwenUltraChat, 'LITE': QwenLiteChat, 'LITE-CODE': MistralChat}
 
 
 
