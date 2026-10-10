@@ -13,6 +13,8 @@ const ansi = require('../src/ansi');
 
 // Never open Preview or QuickTime Player from a test (children inherit it).
 process.env.MAXSHELL_IMAGE_NO_OPEN = '1';
+// …nor keep conversations where the real ones are.
+process.env.MAXSHELL_SAGE_HISTORY = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-history-'));
 const tools = require('../src/sagetools');
 const { SageApp, Engine, render } = require('../src/sage');
 const { sleepSync } = require('../src/keys');
@@ -703,6 +705,43 @@ const until = (f) => new Promise((res, rej) => { const t0 = Date.now(); const k 
   const { math } = require('../src/sagebridge');
   assert.strictEqual(math('So $x^2$, not `$x$`, for $5 and $6.'), 'So x², not `$x$`, for $5 and $6.');
   fs.rmSync(root, { recursive: true });
+});
+
+test('Sage remembers: conversations are kept, picked up, and survive a model switch', () => {
+  const conversations = require('../src/conversations');
+  const items = [
+    { type: 'user', text: 'My name is Zorblax.' }, { type: 'thought', text: 'a name', done: false },
+    { type: 'sage', text: 'Hi Zorblax!', done: true },
+    { type: 'user', text: 'fix main.py' }, { type: 'tool', title: 'Edit main.py', detail: '+1 −1', state: 'ok', job: {}, cache: ['x'] },
+    { type: 'sage', text: 'Fixed.', done: true },
+  ];
+  const id = conversations.newId();
+  assert.ok(conversations.save({ id, mode: 'chat', root: os.tmpdir(), model: 'e4b', items }));
+  const kept = conversations.latest('chat');
+  assert.strictEqual(kept.id, id);
+  assert.strictEqual(kept.title, 'My name is Zorblax.');
+  assert.match(kept.updated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/); // what Swift's .iso8601 reads
+  assert.strictEqual(kept.items[4].job, undefined);
+  assert.deepStrictEqual(conversations.turns(kept.items), [['My name is Zorblax.', 'Hi Zorblax!'], ['fix main.py', '[Edit main.py — +1 −1]\n\nFixed.']]);
+  // picked up: shown, and the engine is told all of it
+  const a = app({ resume: kept });
+  assert.strictEqual(a.id, id);
+  assert.strictEqual(a.items.length, 6);
+  assert.deepStrictEqual(a.started[0].e.sent.find((c) => c.op === 'restore').turns[0], ['My name is Zorblax.', 'Hi Zorblax!']);
+  // another model gets the conversation too
+  a.onEvent({ ev: 'ready' });
+  a.switchModel('e2b');
+  assert.ok(a.started[1].e.sent.some((c) => c.op === 'restore'));
+  assert.match(a.items[a.items.length - 1].text, /it has the conversation so far/);
+  // a new chat is a new conversation; /resume brings the last one back
+  a.onEvent({ ev: 'ready' });
+  a.newChat();
+  assert.notStrictEqual(a.id, id);
+  a.onEvent({ ev: 'ready' });
+  a.setInput('/resume');
+  a.submit();
+  assert.strictEqual(a.id, id);
+  assert.match(a.items[a.items.length - 1].text, /Picked up “My name is Zorblax\.”/);
 });
 
 test('sage app: rebuilt when its sources are newer than the app', () => {

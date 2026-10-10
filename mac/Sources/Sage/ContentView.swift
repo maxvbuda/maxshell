@@ -21,16 +21,16 @@ struct ContentView: View {
             .navigationTitle(title)
             .navigationSubtitle(subtitle)
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in dropped(providers) }
+            // conversations from sage in the terminal show up too
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in sage.loadConversations() }
         }
     }
 
     var title: String {
-        if !sage.isLive, let c = sage.viewedConversation { return c.title }
-        return "Sage " + sage.mode.title
+        sage.conversations.first { $0.id == sage.current }?.title ?? "Sage " + sage.mode.title
     }
 
     var subtitle: String {
-        if !sage.isLive { return "an earlier conversation" }
         if sage.mode == .code { return (sage.state.root as NSString).abbreviatingWithTildeInPath }
         return ""
     }
@@ -63,17 +63,17 @@ struct Sidebar: View {
                             Image(systemName: mode.symbol).frame(width: 18)
                             Text(mode == .chat ? "New chat" : mode == .code ? "New code session" : mode == .image ? "New picture" : "New video")
                             Spacer()
-                            if sage.isLive && sage.mode == mode && sage.state.items.isEmpty { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
+                            if sage.mode == mode && sage.state.items.isEmpty { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(SidebarButton(selected: sage.isLive && sage.mode == mode))
+                    .buttonStyle(SidebarButton(selected: sage.mode == mode && sage.state.items.isEmpty))
                 }
             }
             .padding(.horizontal, 8).padding(.top, 8)
 
-            List(selection: Binding(get: { sage.viewing }, set: { if let id = $0 { sage.viewing = id } })) {
+            List(selection: Binding(get: { sage.current }, set: { id in if let c = sage.conversations.first(where: { $0.id == id }) { sage.open(c) } })) {
                 ForEach(groups, id: \.0) { group in
                     Section(group.0) {
                         ForEach(group.1) { conv in
@@ -83,7 +83,6 @@ struct Sidebar: View {
                                     Text(conv.title).lineLimit(1)
                                     if conv.mode == .code { Text((conv.root as NSString).lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                                 }
-                                if conv.id == sage.current { Spacer(); Circle().fill(Color.green).frame(width: 6, height: 6).help("live") }
                             }
                             .tag(conv.id)
                             .contextMenu {
@@ -114,7 +113,6 @@ struct Sidebar: View {
     }
 
     func newConversation(_ mode: Mode) {
-        if mode == .code, sage.mode != .code || !sage.isLive { sage.chooseFolder(); return }
         if mode == .code { sage.chooseFolder(); return }
         sage.start(mode: mode, root: mode == .image || mode == .video ? mediaFolder() : nil)
     }
@@ -143,13 +141,13 @@ struct Toolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) { StatusPill() }
         ToolbarItemGroup(placement: .primaryAction) {
-            if sage.isLive && sage.mode == .code {
+            if sage.mode == .code {
                 Button { sage.chooseFolder() } label: {
                     Label((sage.state.root as NSString).lastPathComponent, systemImage: "folder")
                 }
                 .help("Open another project folder")
             }
-            if sage.isLive && sage.state.thinks {
+            if sage.state.thinks {
                 Menu {
                     Picker("Thinking", selection: Binding(get: { sage.state.thinking ?? "medium" }, set: { sage.setThinking($0) })) {
                         Text("Off — answers straight away").tag("off")
@@ -164,7 +162,7 @@ struct Toolbar: ToolbarContent {
                 }
                 .help("How much Sage Ultra thinks before it answers (⌘T)")
             }
-            if sage.isLive && !sage.state.models.isEmpty {
+            if !sage.state.models.isEmpty {
                 Menu {
                     ForEach(sage.state.models) { m in
                         Button { sage.setModel(m.key) } label: {
@@ -188,10 +186,7 @@ struct StatusPill: View {
     var body: some View {
         let s = sage.state
         HStack(spacing: 6) {
-            if !sage.isLive {
-                Image(systemName: "clock.arrow.circlepath")
-                Text("earlier")
-            } else if s.status == "error" {
+            if s.status == "error" {
                 Circle().fill(Color.red).frame(width: 7, height: 7)
                 Text("not running")
             } else if s.status == "ready" && !s.drawing {
@@ -227,25 +222,16 @@ struct Transcript: View {
     var body: some View {
         let items = sage.shown
         ScrollView {
-            if items.isEmpty && sage.isLive {
+            if items.isEmpty {
                 Welcome().padding(.top, 60)
             } else {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    if !sage.isLive {
-                        HStack {
-                            Image(systemName: "clock.arrow.circlepath")
-                            Text("A conversation from earlier — Sage doesn’t remember it. Your next message starts a new one.")
-                        }
-                        .font(.callout).foregroundStyle(.secondary)
-                        .padding(10).frame(maxWidth: .infinity)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-                    }
                     ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                         if !(item.type == "sage" || item.type == "thought") || !(item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            ItemView(item: item, index: i, live: sage.isLive)
+                            ItemView(item: item, index: i, live: true)
                         }
                     }
-                    if sage.isLive, ["thinking", "stopping"].contains(sage.state.status), !showsProgress(items) {
+                    if ["thinking", "stopping"].contains(sage.state.status), !showsProgress(items) {
                         HStack(spacing: 10) {
                             Sparkle()
                             Text(sage.state.status == "stopping" ? "Stopping…" : "Thinking…").foregroundStyle(.secondary).shimmering()
@@ -336,7 +322,7 @@ struct Composer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        let busy = sage.isLive && (sage.state.busy || sage.state.drawing)
+        let busy = (sage.state.busy || sage.state.drawing)
         VStack(spacing: 6) {
             HStack(alignment: .bottom, spacing: 10) {
                 if sage.mode == .image {
@@ -389,7 +375,7 @@ struct Composer: View {
     func send() {
         let t = draft
         guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if sage.isLive && sage.state.busy && !t.hasPrefix("/") { return }
+        if sage.state.busy && !t.hasPrefix("/") { return }
         draft = ""
         sage.submit(t)
     }

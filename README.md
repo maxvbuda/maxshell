@@ -1078,6 +1078,15 @@ file, `git reset --hard`, `find -delete`, …), which are always asked and
 marked *careful*. Sage is told never to delete anything. Plain `sage` can't
 touch files or run commands at all.
 
+**Sage remembers.** Every conversation is kept, in `~/Library/Application
+Support/Sage/Conversations` — on your Mac, nowhere else. `sage --continue`
+picks up your last chat (`sage code --continue`: the last session in this
+folder), and `/resume` does it inside the app: you see it again and Sage
+remembers all of it, what Sage Code did included. Switching models keeps
+the conversation too — the new model is told everything so far. Sage for
+Mac lists the same conversations, terminal ones included; click one to
+carry on.
+
 **Private, and quick to follow up.** Sage keeps what it has read of the
 conversation (its KV cache), so each follow-up reads only your new message
 and answers in seconds, however long the chat.
@@ -1241,7 +1250,8 @@ Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 first time with Swift's own tools (no Xcode), into `~/Applications/Sage.app`,
 so it's in Launchpad and Spotlight too. A sidebar starts a **new chat**,
 **code session** (pick a project folder), **picture** or **video**, and lists
-your earlier conversations by day, searchable. Answers render as rich text
+your earlier conversations by day, searchable — click one and Sage
+carries on, remembering it. Answers render as rich text
 — headings, tables, highlighted code with a Copy button, math — and Sage
 Ultra's thinking streams in a fold that closes to *Thought for 27s*. In a
 code session every tool shows as a card: what it read, a red/green **diff**

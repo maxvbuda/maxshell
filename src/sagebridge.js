@@ -7,7 +7,8 @@
 // filming — without a screen. The Mac app sends actions as JSON lines on
 // stdin and gets the app's state back as JSON lines on stdout:
 //
-//   in:  {op: 'open', mode, root, model?}   chat | code | image | video
+//   in:  {op: 'open', mode, root, model?, id?, items?}   chat | code | image
+//        | video; with items, an earlier conversation, which Sage remembers
 //        {op: 'submit', text}  {op: 'answer', choice: y|a|n}  {op: 'stop'}
 //        {op: 'model', key}  {op: 'think', level}  {op: 'new'}
 //        {op: 'load', file} (image: a picture of yours)  {op: 'quit'}
@@ -43,7 +44,7 @@ function itemsOf(app) {
   return app.items.map((it) => {
     const o = {};
     for (const [k, v] of Object.entries(it)) {
-      if (['job', 'cache', 'cacheKey', 'options', 'where'].includes(k) || typeof v === 'function') continue;
+      if (['job', 'cache', 'cacheKey', 'options', 'where', 'v'].includes(k) || typeof v === 'function') continue;
       o[k] = v;
     }
     if (it.type === 'sage') o.text = math(it.text);
@@ -62,15 +63,23 @@ function models(mode) {
 
 let app = null;
 
-function open({ mode = 'chat', root = process.env.HOME, model } = {}) {
-  if (app) app.close();
+function open({ mode = 'chat', root = process.env.HOME, model, id, items } = {}) {
   root = path.resolve(root || process.env.HOME);
+  const conv = id ? { id, items: items || [] } : null;
+  // The same model, idle: keep it loaded and just change the conversation.
+  if (app && !app.media && app.mode === mode && app.root === root && (!model || model === app.model) && app.status === 'ready' && !app.drawing()) {
+    if (app.approval) app.answer('n');
+    app.newChat();
+    if (conv) app.resume(conv);
+    return;
+  }
+  if (app) app.close();
   const shell = shellFor(root);
   const writer = () => gemma.promptWriter(shell);
   const free = () => gemma.freeMemory();
   if (mode === 'image' || mode === 'video') {
     app = new sage.SageApp({
-      mode, root, model: 'e4b', models: [], start: () => sage.IDLE,
+      mode, root, model: 'e4b', models: [], start: () => sage.IDLE, resume: conv,
       startImage: mode === 'image' && img.ready() ? (o) => new img.Job(o, root, { env: shell.env, free: free(), writer: o.exact ? null : writer() }) : null,
       startVideo: mode === 'video' && video.ready() ? (o) => video.job(o, root, { env: shell.env, free: free(), writer: o.exact ? null : writer() }) : null,
     });
@@ -87,7 +96,7 @@ function open({ mode = 'chat', root = process.env.HOME, model } = {}) {
       { cwd: root, env: { ...shell.env, MAXSHELL_GEMMA: path.join(base, gemma.modelFor(k, mode).sub), MAXSHELL_SAGE_NAME: gemma.modelFor(k, mode).name, MAXSHELL_NODE: process.execPath } },
     );
     const startImage = img.ready() ? (o) => new img.Job(o, root, { env: shell.env, free: free() }) : null;
-    app = new sage.SageApp({ mode, root, model: key, models: list.map((m) => ({ key: m.key, ready: m.ready })), start, notice: auto.why, startImage });
+    app = new sage.SageApp({ mode, root, model: key, models: list.map((m) => ({ key: m.key, ready: m.ready })), start, notice: auto.why, startImage, resume: conv });
     if (!list.find((m) => m.key === key).ready) {
       app.status = 'error';
       app.note(`${list.find((m) => m.key === key).label} isn’t set up — in a terminal, run: sage${mode === 'code' ? ' code' : ''} --${list.find((m) => m.key === key).flag} --setup`, 'err');
@@ -121,7 +130,7 @@ function publish(force) {
   const now = Date.now();
   if (!force && now - lastAt < 50) return; // at most 20 a second
   const state = {
-    ev: 'state', mode: app.mode, root: app.root, model: app.model, models: app.media ? [] : models(app.mode),
+    ev: 'state', id: app.id, mode: app.mode, root: app.root, model: app.model, models: app.media ? [] : models(app.mode),
     status: app.status, speed: app.speed || 0, thinking: app.thinking, thinks: app.thinks,
     waiting: !!app.approval, drawing: !!app.drawing(), items: itemsOf(app),
   };

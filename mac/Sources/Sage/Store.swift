@@ -20,8 +20,7 @@ final class Sage: ObservableObject {
     @Published var state = SageState.empty
     @Published var problem: String?
     @Published var conversations: [Conversation] = []
-    @Published var current: UUID?        // the live conversation
-    @Published var viewing: UUID?        // what the window shows: the live one, or an earlier one
+    @Published var current: UUID?        // the conversation on screen, which Sage remembers
     @Published var mode: Mode = .chat
     @Published var root: String = NSHomeDirectory()
 
@@ -37,15 +36,11 @@ final class Sage: ObservableObject {
         let env = ProcessInfo.processInfo.environment
         let first = Mode(rawValue: env["SAGE_MODE"] ?? "") ?? .chat
         start(mode: first, root: env["SAGE_ROOT"] ?? (first == .image || first == .video ? mediaFolder() : nil), model: env["SAGE_MODEL"])
+        if env["SAGE_RESUME"] != nil, let last = conversations.first { open(last) } // …or the latest conversation
         if let ask = env["SAGE_ASK"] { submit(ask) }
     }
 
-    var isLive: Bool { viewing == nil || viewing == current }
-    var shown: [Item] {
-        if isLive { return state.items }
-        return conversations.first { $0.id == viewing }?.items ?? []
-    }
-    var viewedConversation: Conversation? { conversations.first { $0.id == viewing } }
+    var shown: [Item] { state.items }
 
     // --- the bridge ---------------------------------------------------------
 
@@ -113,11 +108,10 @@ final class Sage: ObservableObject {
         self.mode = mode
         let id = UUID()
         current = id
-        viewing = id
         state = SageState.empty
         state.mode = mode.rawValue
         state.root = self.root
-        var cmd: [String: Any] = ["op": "open", "mode": mode.rawValue, "root": mode == .chat ? NSHomeDirectory() : self.root]
+        var cmd: [String: Any] = ["op": "open", "id": id.uuidString, "mode": mode.rawValue, "root": mode == .chat ? NSHomeDirectory() : self.root]
         if let model { cmd["model"] = model }
         else if let last = UserDefaults.standard.string(forKey: "model.\(mode == .code ? "code" : "chat")") { cmd["model"] = last }
         send(cmd)
@@ -127,8 +121,25 @@ final class Sage: ObservableObject {
     func submit(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        if !isLive { start(mode: mode) }
         send(["op": "submit", "text": t])
+    }
+
+    // An earlier conversation, picked up where it left off: Sage is told all
+    // of it, so it remembers.
+    func open(_ conv: Conversation) {
+        guard conv.id != current else { return }
+        if state.busy || state.drawing { stop() }
+        mode = conv.mode
+        if conv.mode != .chat { root = conv.root }
+        current = conv.id
+        state = SageState.empty
+        state.mode = conv.mode.rawValue
+        state.root = conv.root
+        state.items = conv.items
+        let items = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(conv.items))) ?? []
+        var cmd: [String: Any] = ["op": "open", "id": conv.id.uuidString, "mode": conv.mode.rawValue, "root": conv.root, "items": items]
+        if let model = conv.model, conv.mode == .chat || conv.mode == .code { cmd["model"] = model }
+        send(cmd)
     }
 
     func answer(_ choice: String) { send(["op": "answer", "choice": choice]) }
@@ -170,7 +181,7 @@ final class Sage: ObservableObject {
         return url
     }
 
-    private func loadConversations() {
+    func loadConversations() {
         let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
@@ -204,6 +215,6 @@ final class Sage: ObservableObject {
         let url = folder.appendingPathComponent("\(conv.id.uuidString).json")
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
         conversations.removeAll { $0.id == conv.id }
-        if viewing == conv.id { viewing = current }
+        if current == conv.id { start(mode: mode) }
     }
 }

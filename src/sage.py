@@ -510,6 +510,17 @@ class MlxChat:
     def user_turn(self, question):
         return f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
 
+    def past_turn(self, question, said):
+        """An earlier exchange, as if it had just happened (for restore)."""
+        return f'{self.user_turn(question)}{said}{self.END}\n'
+
+    def restore(self, turns):
+        """Picks up an earlier conversation: [[question, answer], …]. The
+        cache reads it before the next answer."""
+        for question, said in turns:
+            self.tokens += self.encode(self.past_turn(question, said))
+            self.turns += [('user', question), ('ai', said)]
+
     def answer(self, calls, results):
         """The text that gives the model its calls' results: Qwen hears them
         in a user turn."""
@@ -591,6 +602,9 @@ class GemmaChat(MlxChat):
 
     def user_turn(self, question):
         return f'<|turn>user\n{question}<turn|>\n<|turn>model\n'
+
+    def past_turn(self, question, said):
+        return f'{self.user_turn(question)}{said}<turn|>\n'
 
 
 THINK = re.compile(r'<think>.*?(</think>|\Z)\s*', re.S)
@@ -682,6 +696,9 @@ class QwenUltraChat(MlxChat):
     def user_turn(self, question):
         return super().user_turn(question) + self.start()
 
+    def past_turn(self, question, said):
+        return f'{MlxChat.user_turn(self, question)}{self.NO_THINKING}{said}{self.END}\n'
+
     def answer(self, calls, results):
         return super().answer(calls, results) + self.start()
 
@@ -715,6 +732,9 @@ class MistralChat(MlxChat):
 
     def user_turn(self, question):
         return f'[INST]{question}[/INST]'
+
+    def past_turn(self, question, said):
+        return f'[INST]{question}[/INST]{said}</s>'
 
     def answer(self, calls, results):
         self.close_turn()
@@ -815,6 +835,8 @@ def serve(cmd_path, mode):
             chat = new_chat(mode)
             chat.set_thinking(thinking)
             emit(ev='ready', model=NAME, device=device)
+        elif op == 'restore':
+            chat.restore(cmd.get('turns') or [])
         elif op == 'think':
             thinking = cmd.get('level')
             chat.set_thinking(thinking)

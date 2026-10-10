@@ -119,7 +119,12 @@ that only draws: it runs `src/sagebridge.js`, a SageApp without a screen —
 actions in, JSON state out — so the Mac app and the terminal app share all
 logic. `SAGE_SNAPSHOT=file.png` (with `SAGE_ASK`, `SAGE_MODE`, `SAGE_MODEL`,
 `SAGE_ROOT`, `SAGE_DATA`) makes the app save its own window, to check the
-look without screen-recording rights. `sage video` alone opens video chat (`SageApp` mode
+look without screen-recording rights (`SAGE_RESUME=1` opens the latest
+conversation). Conversations are kept by `src/conversations.js` (one JSON each
+in ~/Library/Application Support/Sage/Conversations, shared with the Mac app;
+`MAXSHELL_SAGE_HISTORY` in tests): `SageApp.resume` shows one and sends the
+engine `{op: 'restore', turns}`, which each chat class writes back as past
+turns (`past_turn`), so Sage remembers — also after a model switch. `sage video` alone opens video chat (`SageApp` mode
 `video`). Tests use `test/fake-wan.js` and `test/fake-mmaudio.js`
 (`MAXSHELL_VIDEO_BIN`, `MAXSHELL_AUDIO_BIN`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +
@@ -170,7 +175,7 @@ GitHub in `github.js` + `githubview.js` (via the `gh` CLI). Shared plumbing in
   flags get the real `ls`. Colour is off for `-c` and scripts.
 - **Env overrides keep tests off real files:** `MAXSHELL_TRASH`,
   `MAXSHELL_SNIPPETS_FILE`, `MAXSHELL_MARKS_FILE`, `MAXSHELL_CACHE`,
-  `MAXSHELL_STATE_FILE`, `MAXSHELL_WRAPPER`, `MAXSHELL_BOT_FILE`, and **`MAXSHELL_SETUP=0` in every
+  `MAXSHELL_STATE_FILE`, `MAXSHELL_WRAPPER`, `MAXSHELL_BOT_FILE`, `MAXSHELL_SAGE_HISTORY`, and **`MAXSHELL_SETUP=0` in every
   pty run** (else the one-time "make maxshell your default shell?" offer
   appears and is marked as answered on the user's machine),
   `MAXSHELL_HISTORY_FILE`, `MAXSHELL_DIRS_FILE`, `MAXSHELL_THEME_FILE`,

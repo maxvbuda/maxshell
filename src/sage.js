@@ -25,6 +25,7 @@ const tui = require('./tui');
 const { KeyReader } = require('./keys');
 const { renderMarkdown } = require('./markdown');
 const tools = require('./sagetools');
+const conversations = require('./conversations');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
@@ -125,7 +126,8 @@ const IDLE = { send() {}, poll: () => [], close() {}, interrupt() {}, errors: ()
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null }) {
+    this.id = conversations.newId(); // where this conversation is kept (src/conversations.js)
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
     this.startVideo = startVideo; // video chat: (options) → a sagevideo job
     this.clip = null;             // video chat: the latest clip, which the next message changes or extends
@@ -161,6 +163,38 @@ class SageApp {
     this.historyAt = -1;
     this.thinking = firstThinking();
     this.useModel(model);
+    if (resume) this.resume(resume);
+  }
+
+  // Picks up an earlier conversation ({ id, items }): it's shown, and the
+  // model is told all of it, so Sage remembers.
+  resume(conv) {
+    this.id = conv.id;
+    this.items = conversations.plain(conv.items || []);
+    const last = (type) => [...this.items].reverse().find((i) => i.type === type && i.state === 'done' && i.out && fs.existsSync(i.out));
+    if (this.mode === 'image' && last('image')) {
+      const p = last('image');
+      this.picture = p.out;
+      this.pictureName = (this.items.find((i) => i.type === 'user') || {}).text || 'picture';
+      this.scene = p.detailed || p.prompt || null;
+      this.changes = [];
+    }
+    if (this.mode === 'video' && last('video')) {
+      const v = last('video');
+      this.clip = v.out;
+      this.clipName = (this.items.find((i) => i.type === 'user') || {}).text || 'clip';
+      this.scene = v.detailed || v.prompt || null;
+      this.changes = [];
+    }
+    this.remember();
+    this.scroll = 0;
+    this.changed();
+  }
+
+  // Tells a (new) engine the conversation so far.
+  remember() {
+    if (this.media || !this.items.some((i) => i.type === 'user')) return;
+    this.engine.send({ op: 'restore', turns: conversations.turns(this.items) });
   }
 
   changed() { this.version++; }
@@ -479,6 +513,15 @@ class SageApp {
         }
         else this.note('No picture yet.');
         return true;
+      case 'resume': case 'continue': {
+        if (this.busy || this.drawing()) { this.note('Sage is busy — ^C stops it first.'); return true; }
+        const conv = conversations.latest(this.mode, this.mode === 'code' ? this.root : null, this.id);
+        if (!conv) { this.note(`No earlier ${this.mode === 'chat' ? 'chat' : `${this.mode} conversation`}${this.mode === 'code' ? ' in this folder' : ''} to pick up.`); return true; }
+        if (!this.media && this.status === 'ready') { this.engine.send({ op: 'reset' }); this.status = 'loading'; }
+        this.resume(conv);
+        this.note(`Picked up “${conv.title}” — Sage remembers it.`);
+        return true;
+      }
       case 'think': case 'thinking': {
         const arg = text.slice(cmd.length + 1).trim().toLowerCase();
         if (this.media) return false;
@@ -489,7 +532,7 @@ class SageApp {
       case 'help':
         if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
-        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /resume  pick up your last conversation  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
@@ -507,12 +550,14 @@ class SageApp {
       this.scene = null;
       this.changes = [];
       this.items = [];
+      this.id = conversations.newId();
       this.changed();
       return;
     }
     this.items = [];
     this.allowAll = false;
     this.scroll = 0;
+    this.id = conversations.newId(); // the old one stays kept
     if (this.status === 'ready') { this.engine.send({ op: 'reset' }); this.status = 'loading'; }
     this.changed();
   }
@@ -526,8 +571,9 @@ class SageApp {
     if (!m.ready) { this.note(`${mi.label} isn’t set up — run: sage --${mi.flag} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
     this.engine.close();
-    if (this.items.length) this.note(`Switched to ${mi.label} — a fresh conversation.`);
+    if (this.items.some((i) => i.type === 'user')) this.note(`Switched to ${mi.label} — it has the conversation so far.`);
     this.useModel(key);
+    this.remember();
   }
 
   openMenu() {
@@ -1182,8 +1228,17 @@ function render(app, cols, rows, now = Date.now()) {
 
 // --- running it -----------------------------------------------------------------
 
-function loop(app, { input = 0, output = process.stdout } = {}) {
+function loop(app, { input = 0, output = process.stdout, keep = true } = {}) {
   const reader = new KeyReader(input);
+  // The conversation is kept as it goes (src/conversations.js), so Sage remembers it.
+  let kept = app.version;
+  let keptAt = 0;
+  const save = (now) => {
+    if (!keep || app.version === kept || (!now && Date.now() - keptAt < 1500)) return;
+    kept = app.version;
+    keptAt = Date.now();
+    try { conversations.save({ id: app.id, mode: app.mode, root: app.root, model: app.model, items: app.items }); } catch { /* not this time */ }
+  };
   let drawn = '';
   let last = null;
   let lastSpin = 0;
@@ -1214,7 +1269,9 @@ function loop(app, { input = 0, output = process.stdout } = {}) {
     app.tick();
     if (!app.done) draw(false);
     if (app.toRun) { app.work(); draw(true); }
+    save(false);
   }
+  save(true);
   app.close();
   return 0;
 }

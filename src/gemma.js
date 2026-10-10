@@ -143,6 +143,8 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage <question>      one answer, printed
   sage image <prompt>  a picture, made here (sage image --help)
   sage video <prompt>  a short clip, made here (sage video --help)
+  sage --continue      pick up your last chat, remembered (sage code --continue:
+                       the last session in this folder; /resume in the app)
   sage app             Sage for Mac: the same, as a Mac app (built here the
                        first time, into ~/Applications; --build rebuilds it)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
@@ -203,10 +205,18 @@ function runSage(args, io, shell, name = 'sage') {
   if (args[0] === 'video') return require('./sagevideo').runVideo(args.slice(1), io, shell);
   if (args[0] === 'app') return runApp(args.slice(1), write, err);
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
+  let cont = false; // --continue, among the flags at the front
+  for (let i = 0; i < 3 && i < args.length; i++) {
+    if (args[i] === '--continue' || args[i] === '-c') { cont = true; args = [...args.slice(0, i), ...args.slice(i + 1)]; break; }
+  }
+  if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   let { model: m, key, args: rest, chosen } = pick(args);
   if (!m) { err(`${name}: no model ${key} — ultra, pro, flash or lite\n`); return 1; }
   args = rest;
   if (mode === 'chat' && args[0] === 'code') { mode = 'code'; args = args.slice(1); }
+  // --continue: pick up the last conversation (sage code: in this folder)
+  const resume = cont ? require('./conversations').latest(mode, mode === 'code' ? shell.cwd : null) : null;
+  if (cont && !resume) err(`${name}: no earlier ${mode === 'code' ? 'session in this folder' : 'chat'} — starting a new one\n`);
   m = modelFor(key, mode);
   const flag = m === MODELS[DEFAULT] ? '' : ` --${m.flag}`;
   if (args[0] === '--setup') return setup(m, write, err);
@@ -229,7 +239,7 @@ function runSage(args, io, shell, name = 'sage') {
     );
     const img = require('./sageimage');
     const startImage = img.ready() ? (o) => new img.Job(o, shell.cwd, { env: shell.env, free: freeMemory() }) : null;
-    const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null, notice: auto.why, startImage });
+    const app = new sage.SageApp({ mode, root: shell.cwd, model: key, models, start, ask: args.length ? args.join(' ') : null, notice: auto.why, startImage, resume });
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
   if (mode === 'code') { err(`${name}: sage code needs a terminal\n`); return 1; }
