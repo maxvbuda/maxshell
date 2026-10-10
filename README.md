@@ -1101,8 +1101,12 @@ thinks before every answer — you watch it think, in muted text under
 **◇ Thinking…**, which becomes **◇ Thought for 42s** once it answers — most
 answers take a minute or two, hard ones longer. On a hard set of puzzles,
 exact arithmetic and trick questions it got all 22 (Sage Pro 21), and in
-`sage code` it did every task. `MAXSHELL_SAGE_EFFORT=xhigh` makes it think
-longer still (`low` shorter; `medium` is the default). Sage Pro did every
+`sage code` it did every task. **You choose how much it thinks**: the
+**◇ thinking medium** button in the header (click it, or press **^T**)
+steps through *off* (answers straight away), *low*, *medium* (the default)
+and *high* (thinks longest, for the hardest questions), or type `/think
+high`. It applies from the next answer, keeping the conversation;
+`MAXSHELL_SAGE_EFFORT=high` sets where it starts. Sage Pro did every
 `sage code` task too, in a third of the memory. Sage Lite in a chat answers in a moment and
 gets its sums right (21 of 22 on a hard set of sums and facts); in `sage
 code` it's Ministral, the smallest model that reliably reads a file before

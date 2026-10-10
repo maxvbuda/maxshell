@@ -28,7 +28,7 @@ const tools = require('./sagetools');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra' },
+  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra', thinks: true },
   e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro' },
   e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash' },
   lite: { label: 'Sage Lite', blurb: 'fastest · ~3 GB', flag: 'lite' }, // sage code's
@@ -36,6 +36,10 @@ const MODEL_INFO = {
 // In a chat, Sage Lite is a different, smaller model than in sage code.
 const CHAT_INFO = { lite: { label: 'Sage Lite', blurb: 'fastest · ~1 GB', flag: 'lite' } };
 const modelInfo = (mode, key) => (mode !== 'code' && CHAT_INFO[key]) || MODEL_INFO[key];
+// How much Sage Ultra thinks before answering (^T, the header, /think).
+const THINKING = ['off', 'low', 'medium', 'high'];
+const THINK_INFO = { off: 'answers straight away', low: 'a quick think first', medium: 'thinks it through', high: 'thinks longest, for the hardest questions' };
+const firstThinking = () => { const v = { xhigh: 'high' }[process.env.MAXSHELL_SAGE_EFFORT] || process.env.MAXSHELL_SAGE_EFFORT; return THINKING.includes(v) ? v : 'medium'; };
 
 // --- the engine -----------------------------------------------------------------
 
@@ -155,6 +159,7 @@ class SageApp {
     this.status = 'loading';
     this.history = [];
     this.historyAt = -1;
+    this.thinking = firstThinking();
     this.useModel(model);
   }
 
@@ -162,6 +167,22 @@ class SageApp {
 
   // Image or video chat: no language model, the conversation makes media.
   get media() { return this.mode === 'image' || this.mode === 'video'; }
+
+  // Whether this model thinks first, so the thinking level applies.
+  get thinks() { return !this.media && !!(modelInfo(this.mode, this.model) || {}).thinks; }
+
+  setThinking(level, say = false) {
+    if (!THINKING.includes(level)) { this.note(`Thinking can be ${THINKING.join(', ')}.`, 'err'); return; }
+    this.thinking = level;
+    if (this.thinks) this.engine.send({ op: 'think', level });
+    if (say) this.note(`Thinking: ${level} — ${THINK_INFO[level]}${this.thinks ? '.' : '. Only Sage Ultra thinks; it applies there.'}`);
+    this.changed();
+  }
+
+  cycleThinking() {
+    if (!this.thinks) { this.note('Only Sage Ultra thinks before it answers — pick it with ^O.'); return; }
+    this.setThinking(THINKING[(THINKING.indexOf(this.thinking) + 1) % THINKING.length]);
+  }
 
   get busy() { return ['thinking', 'writing', 'waiting', 'running', 'stopping'].includes(this.status); }
 
@@ -171,6 +192,7 @@ class SageApp {
     this.status = 'loading';
     this.loadStarted = Date.now();
     this.engine = this.start(key, this.mode);
+    if (this.thinks) this.engine.send({ op: 'think', level: this.thinking });
     this.changed();
   }
 
@@ -457,10 +479,17 @@ class SageApp {
         }
         else this.note('No picture yet.');
         return true;
+      case 'think': case 'thinking': {
+        const arg = text.slice(cmd.length + 1).trim().toLowerCase();
+        if (this.media) return false;
+        if (!arg) { this.note(`Thinking: ${this.thinking} — ${THINK_INFO[this.thinking]}. /think ${THINKING.join(' | ')} (or ^T) changes it${this.thinks ? '' : '; only Sage Ultra thinks'}.`); return true; }
+        this.setThinking({ xhigh: 'high', on: 'medium', none: 'off', no: 'off' }[arg] || arg, true);
+        return true;
+      }
       case 'help':
         if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
-        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /exit  leave\n^O models · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
@@ -694,6 +723,7 @@ class SageApp {
       if (k.name === 'return') { this.answer('y'); return; }
     }
     if (k.ctrl && k.name === 'o') { this.openMenu(); return; }
+    if (k.ctrl && k.name === 't') { this.cycleThinking(); return; }
     if (k.ctrl && k.name === 'n') { this.newChat(); return; }
     if (k.ctrl && k.name === 'd' && !this.input) { this.done = true; return; }
     if (k.name === 'pageup') { this.scroll += 10; this.changed(); return; }
@@ -748,6 +778,7 @@ class SageApp {
     if (hit && hit.action === 'menu' && this.media) return; // nothing to pick
     if (hit && hit.action === 'menu') { if (this.menu) { this.menu = null; this.changed(); } else this.openMenu(); return; }
     if (hit && hit.action === 'model') { this.switchModel(hit.key); return; }
+    if (hit && hit.action === 'think') { this.cycleThinking(); return; }
     if (hit && hit.action === 'answer') { this.answer(hit.choice); return; }
     if (hit && hit.action === 'try') { this.setInput(hit.text); return; }
     if (hit && hit.action === 'open') { require('./sageimage').openFile(hit.file); return; }
@@ -1014,15 +1045,21 @@ function render(app, cols, rows, now = Date.now()) {
   const brand = ' ✦ Sage';
   const pill = ` ${app.mode} `;
   const left = `${brand} ${pill}`;
-  const dropW = tui.textWidth(drop);
+  // Sage Ultra's thinking level, a button left of the dropdown (click or ^T)
+  let think = app.thinks ? ` ◇ thinking ${app.thinking} ` : '';
+  if (W - tui.textWidth(left) - tui.textWidth(drop) - tui.textWidth(think) < 8) think = '';
+  const thinkW = tui.textWidth(think);
+  const dropW = tui.textWidth(drop) + thinkW;
   const room = W - tui.textWidth(left) - dropW;
   const full = ` ${status} `;
   const statusText = room < 5 ? '' : tui.textWidth(full) <= room ? full : fitText(full, room);
   const gap = Math.max(0, W - tui.textWidth(left) - tui.textWidth(statusText) - dropW);
   let header;
   if (W >= tui.textWidth(left) + dropW) {
-    header = `${barBg}${barFg}${ansi.bold()}${brand}${RESET()}${barBg} ${theme.bg(ui.select.bg)}${ansi.fg(ui.select.fg)}${pill}${RESET()}${barBg}${barFg}${' '.repeat(gap)}${statusText}${theme.bg(ui.select.bg)}${ansi.fg(ui.select.fg)}${ansi.bold()}${drop}${RESET()}`;
-    hits.push({ y: 0, x0: W - dropW, x1: W, action: 'menu' });
+    const thinkBtn = think ? `${barBg}${theme.fg('accent')}${think}${RESET()}` : '';
+    header = `${barBg}${barFg}${ansi.bold()}${brand}${RESET()}${barBg} ${theme.bg(ui.select.bg)}${ansi.fg(ui.select.fg)}${pill}${RESET()}${barBg}${barFg}${' '.repeat(gap)}${statusText}${thinkBtn}${theme.bg(ui.select.bg)}${ansi.fg(ui.select.fg)}${ansi.bold()}${drop}${RESET()}`;
+    if (think) hits.push({ y: 0, x0: W - dropW, x1: W - dropW + thinkW, action: 'think' });
+    hits.push({ y: 0, x0: W - dropW + thinkW, x1: W, action: 'menu' });
   } else {
     header = tui.bar(` ✦ Sage · ${info.label} ▾`, W);
     hits.push({ y: 0, x0: 0, x1: W, action: 'menu' });
@@ -1073,7 +1110,7 @@ function render(app, cols, rows, now = Date.now()) {
     : app.busy ? '^C stop · PgUp/PgDn scroll'
       : app.mode === 'video' ? `enter ${app.clip ? 'change' : 'film'} · /seconds 6 · /sound ${app.clipOpts.sound ? 'off' : 'on'} · /new · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
       : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /edit file · /new · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
-        : 'enter send · ⌥enter new line · ^O model · ^N new chat · /help · ^C quit';
+        : `enter send · ⌥enter new line · ^O model${app.thinks ? ' · ^T thinking' : ''} · ^N new chat · /help · ^C quit`;
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
 
   // transcript

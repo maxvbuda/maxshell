@@ -86,7 +86,9 @@ run-the-tests for code); test a replacement the same way before swapping
 one in. All of them run in `src/sage.py` (one venv, `~/.maxshell/gemma/venv`):
 `Engine` loads the model, and `$MAXSHELL_SAGE_NAME` picks its conversation
 class — `QwenUltraChat` (thinking sent to the app as `think` events and
-shown muted, XML tool calls), `GemmaChat`,
+shown muted, XML tool calls; the app's thinking level — off/low/medium/high,
+^T or the header button — reaches it as `{op: 'think'}` and `set_thinking`
+restarts the cache with the new system prompt), `GemmaChat`,
 `QwenLiteChat` (thinking off) or `MistralChat` (tokenizer needs
 `fix_mistral_regex`) — all `MlxChat`s keeping the KV cache across turns
 (Qwen3.8's linear-attention layers can't be trimmed, so `mark`/`rewind`

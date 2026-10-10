@@ -41,6 +41,9 @@ LABEL = {'ULTRA': 'Ultra', 'E2B': 'Flash', 'LITE': 'Lite', 'LITE-CODE': 'Lite'}.
 FLAG = {'ULTRA': ' --ultra', 'E2B': ' --flash', 'LITE': ' --lite', 'LITE-CODE': ' code --lite'}.get(NAME, '')
 NEED_GB = {'ULTRA': 16, 'E4B': 5, 'E2B': 3, 'LITE': 1, 'LITE-CODE': 3}.get(NAME, 5)
 NEED_FREE = {'ULTRA': 60, 'E4B': 30, 'E2B': 20, 'LITE': 10, 'LITE-CODE': 15}.get(NAME, 30)  # % of memory free before loading
+# How much Sage Ultra thinks at first: off, low, medium or high (xhigh is high).
+THINKING = {'xhigh': 'high'}.get(os.environ.get('MAXSHELL_SAGE_EFFORT', ''), os.environ.get('MAXSHELL_SAGE_EFFORT', ''))
+THINKING = THINKING if THINKING in ('off', 'low', 'medium', 'high') else 'medium'
 MAKER = {'ULTRA': 'Alibaba', 'LITE': 'Alibaba', 'LITE-CODE': 'Mistral AI'}.get(NAME, 'Google')
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
@@ -378,6 +381,7 @@ class MlxChat:
     def __init__(self, engine, mode, system, tools, max_calls, max_tokens):
         from mlx_lm.models.cache import make_prompt_cache, can_trim_prompt_cache
         self.e, self.mode, self.max_calls, self.max_tokens = engine, mode, max_calls, max_tokens
+        self.system, self.tools = system, tools
         self.tok = engine.tok
         self.im_end = self.tok.convert_tokens_to_ids(self.END)
         self.turns = []
@@ -395,6 +399,10 @@ class MlxChat:
     def prefix(self, system, tools):
         """The system turn (with the tools), in the model's chat template."""
         return self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
+
+    def set_thinking(self, level):
+        """How much the model thinks: off, low, medium or high. Only Sage
+        Ultra thinks; for the rest it does nothing."""
 
     def encode(self, text):
         return list(self.tok.encode(text, add_special_tokens=False))
@@ -620,20 +628,35 @@ class QwenUltraChat(MlxChat):
     <tool_call> tags, read by ultra_scan; results come back in a user turn."""
     SAMPLING = {'top_p': 0.95, 'top_k': 20}  # Qwen's settings for thinking
     REPEAT = None
-    EFFORT = os.environ.get('MAXSHELL_SAGE_EFFORT') or 'medium'  # xhigh, medium or low
+    EFFORTS = {'low': 'low', 'medium': 'medium', 'high': 'xhigh'}  # the template's names
+    NO_THINKING = '<think>\n\n</think>\n\n'  # an empty thought, as its template writes for thinking off
 
     def __init__(self, *args):
+        self.level = THINKING
         super().__init__(*args)
         self.max_tokens = max(self.max_tokens, 32768)  # room to think
 
     def prefix(self, system, tools):
         # its template wants a question to render; cut the system turn off one
+        how = {'enable_thinking': False} if self.level == 'off' else {'reasoning_effort': self.EFFORTS[self.level]}
         whole = self.tok.apply_chat_template([{'role': 'system', 'content': system}, {'role': 'user', 'content': '?'}],
-                                             tools=tools, tokenize=False, reasoning_effort=self.EFFORT)
+                                             tools=tools, tokenize=False, **how)
         return whole[:whole.index('<|im_start|>user')]
 
-    @staticmethod
-    def scan(raw):
+    def set_thinking(self, level):
+        """The level is in the system prompt, so the conversation is kept and
+        the cache starts over: the next answer reads it all again first."""
+        from mlx_lm.models.cache import make_prompt_cache
+        if level not in ('off', *self.EFFORTS) or level == self.level:
+            return
+        head = len(self.encode(self.prefix(self.system, self.tools)))
+        self.level = level
+        self.tokens = self.encode(self.prefix(self.system, self.tools)) + self.tokens[head:]
+        self.cache = make_prompt_cache(self.e.model)
+
+    def scan(self, raw):
+        if self.level == 'off':
+            return ultra_scan(raw)
         end = raw.find('</think>')
         if end < 0:
             return '', [], None  # still thinking
@@ -642,19 +665,25 @@ class QwenUltraChat(MlxChat):
         shown, calls, cut = ultra_scan(raw[start:])
         return shown, calls, None if cut is None else start + cut
 
-    @staticmethod
-    def thought(raw):
+    def thought(self, raw):
+        if self.level == 'off':
+            return ''
         end = raw.find('</think>')
         return (held(raw, '</think>') if end < 0 else raw[:end].rstrip()).lstrip()
 
     def temperature(self):
+        if self.level == 'off':
+            return 0.7
         return 0.6 if self.mode == 'code' else 1.0  # Qwen's advice for thinking
 
+    def start(self):
+        return self.NO_THINKING if self.level == 'off' else '<think>\n'
+
     def user_turn(self, question):
-        return super().user_turn(question) + '<think>\n'
+        return super().user_turn(question) + self.start()
 
     def answer(self, calls, results):
-        return super().answer(calls, results) + '<think>\n'
+        return super().answer(calls, results) + self.start()
 
 
 MISTRAL_CALL = re.compile(r'\[TOOL_CALLS\]([\w.-]+)\[ARGS\]')
@@ -776,6 +805,7 @@ def serve(cmd_path, mode):
         return run
 
     tools = {t['function']['name']: tool(t['function']['name']) for t in CODE_TOOLS} if mode == 'code' else None
+    thinking = THINKING
     while True:
         cmd = next_cmd()
         op = cmd.get('op')
@@ -783,7 +813,11 @@ def serve(cmd_path, mode):
             return 0
         if op == 'reset':
             chat = new_chat(mode)
+            chat.set_thinking(thinking)
             emit(ev='ready', model=NAME, device=device)
+        elif op == 'think':
+            thinking = cmd.get('level')
+            chat.set_thinking(thinking)
         elif op == 'image-prompt':
             text, stopped = write_image_prompt(new_chat, cmd)
             emit(ev='image-prompt', id=cmd.get('id'), text=text, stopped=stopped)

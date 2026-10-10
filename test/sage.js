@@ -188,6 +188,39 @@ test('thinking shows as it comes, muted, then says how long it took', () => {
   assert.strictEqual(a.items.filter((i) => i.type === 'thought').length, 2);
 });
 
+test('Sage Ultra’s thinking level: the header button, ^T and /think', () => {
+  const a = app({ model: 'ultra' });
+  const e = a.started[0].e;
+  assert.deepStrictEqual(e.sent, [{ op: 'think', level: 'medium' }]); // told before anything else
+  a.onEvent({ ev: 'ready' });
+  let r = render(a, 90, 24, 0);
+  assert.match(text(r).split('\n')[0], /ready  ◇ thinking medium  ◆ Sage Ultra ▾/);
+  assert.match(text(r), /\^T thinking/);
+  a.mouse({ button: 0, release: false }, r.hits.find((h) => h.action === 'think'));
+  assert.strictEqual(a.thinking, 'high');
+  a.key({ name: 't', ctrl: true });
+  assert.strictEqual(a.thinking, 'off');
+  a.setInput('/think low');
+  a.submit();
+  assert.deepStrictEqual(e.sent.slice(1), [{ op: 'think', level: 'high' }, { op: 'think', level: 'off' }, { op: 'think', level: 'low' }]);
+  assert.match(text(render(a, 90, 24, 0)), /Thinking: low — a quick think first\./);
+  a.setInput('/think lots');
+  a.submit();
+  assert.match(a.items[a.items.length - 1].text, /Thinking can be off, low, medium, high/);
+  for (const cols of [30, 45, 60]) fits(render(a, cols, 20, 0), cols);
+  // the menu still opens from the dropdown beside it
+  r = render(a, 90, 24, 0);
+  a.mouse({ button: 0, release: false }, r.hits.find((h) => h.action === 'menu'));
+  assert.ok(a.menu);
+  // a fresh engine (switching back to Ultra) hears the level chosen
+  a.switchModel('e4b');
+  assert.strictEqual(text(render(a, 90, 24, 0)).split('\n')[0].includes('thinking'), false);
+  a.key({ name: 't', ctrl: true });
+  assert.match(a.items[a.items.length - 1].text, /Only Sage Ultra thinks/);
+  a.switchModel('ultra');
+  assert.deepStrictEqual(a.started[2].e.sent, [{ op: 'think', level: 'low' }]);
+});
+
 test('the model dropdown opens by click or ^O and switches models', () => {
   const a = app();
   a.onEvent({ ev: 'ready' });
@@ -380,6 +413,8 @@ import sys, json
 sys.path.insert(0, sys.argv[1])
 import sage as gemma
 raw = 'Sure!<|tool_call>call:edit_file{new_text:<|"|>x = {1: 2}<|"|>,old_text:<|"|>x = 1<|"|>,path:<|"|>a.py<|"|>}<tool_call|>'
+U = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); U.level = 'medium'
+Off = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); Off.level = 'off'
 print(json.dumps({'call': gemma.parse_call(raw),
   'seen': gemma.visible(raw + gemma.tool_response('edit_file', 'ok') + 'Done.<turn|>'),
   'partial': gemma.visible('Sure!<|tool_call>call:edit_fi'),
@@ -398,13 +433,14 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'mcall': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"path": "a.py"}</s>'),
   'mwait': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"pa'),
   'mplain': gemma.MistralChat.scan('Done.</s>'),
-  'uthink': gemma.QwenUltraChat.scan('they want a sum, 2 + 2'),
-  'uanswer': gemma.QwenUltraChat.scan('2 + 2\n</think>\n\nIt is 4.<|im_end|>'),
-  'ucall': gemma.QwenUltraChat.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
-  'uwait': gemma.QwenUltraChat.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
-  'uthought': [gemma.QwenUltraChat.thought('\nThey want a sum.</thi'), gemma.QwenUltraChat.thought('\nThey want a sum.\n</think>\n\nIt is 4.')],
+  'uthink': U.scan('they want a sum, 2 + 2'),
+  'uanswer': U.scan('2 + 2\n</think>\n\nIt is 4.<|im_end|>'),
+  'ucall': U.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
+  'uwait': U.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
+  'uthought': [U.thought('\nThey want a sum.</thi'), U.thought('\nThey want a sum.\n</think>\n\nIt is 4.')],
   'gthought': gemma.GemmaChat.thought('<|channel>thought\nplan it<channel|>Hi<|channel>more<chan'),
-  'uturn': gemma.QwenUltraChat.user_turn(gemma.QwenUltraChat.__new__(gemma.QwenUltraChat), 'hey'),
+  'uturn': U.user_turn('hey'),
+  'offturn': Off.user_turn('hey'), 'offscan': Off.scan('It is 4.<|im_end|>'), 'offthought': Off.thought('It is 4.'),
   'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
   'ganswer': gemma.GemmaChat.answer(None, [('read_file', {})], ['x = 1']),
   'thinking': gemma.visible('<|channel>thought\nplan\n'),
@@ -441,6 +477,9 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.strictEqual(out.ucall[2], 'plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call>'.length);
   assert.deepStrictEqual(out.uwait, ['Let me look.', [], null]);
   assert.strictEqual(out.uturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n');
+  // thinking off: an empty thought written for it, and everything it writes is the answer
+  assert.strictEqual(out.offturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n');
+  assert.deepStrictEqual([out.offscan, out.offthought], [['It is 4.', [], null], '']);
   // Sage Lite in a chat (Qwen3-1.7B): ChatML with thinking off, no tools
   assert.deepStrictEqual(out.qscan, ['Hi there.', [], null]);
   assert.strictEqual(out.qturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n');
