@@ -665,6 +665,67 @@ test('sage image from the shell saves a PNG here and never overwrites', () => {
   fs.rmSync(work, { recursive: true });
 });
 
+test('Sage for Mac’s bridge: a SageApp without a screen, state out and actions in', () => {
+  const root = project();
+  const driver = String.raw`
+const { spawn } = require('child_process');
+const b = spawn(process.execPath, [process.argv[1]], { stdio: ['pipe', 'pipe', 'inherit'] });
+const NL = String.fromCharCode(10);
+const states = [];
+let buf = '';
+const seen = (f) => states.find(f);
+b.stdout.on('data', (d) => { buf += d; const ls = buf.split(NL); buf = ls.pop(); for (const l of ls) states.push(JSON.parse(l)); });
+const say = (o) => b.stdin.write(JSON.stringify(o) + NL);
+const until = (f) => new Promise((res, rej) => { const t0 = Date.now(); const k = setInterval(() => { const s = seen(f); if (s) { clearInterval(k); res(s); } else if (Date.now() - t0 > 8000) { clearInterval(k); rej(new Error('timed out: ' + JSON.stringify(states[states.length - 1]))); } }, 20); });
+(async () => {
+  say({ op: 'open', mode: 'code', root: process.argv[2], model: 'e4b' });
+  const ready = await until((s) => s.status === 'ready');
+  say({ op: 'submit', text: 'please edit it' });
+  const ask = await until((s) => s.waiting && s.items.some((i) => i.asking));
+  say({ op: 'answer', choice: 'y' });
+  const done = await until((s) => s.status === 'ready' && s.items.some((i) => i.type === 'sage' && /Result/.test(i.text)));
+  say({ op: 'quit' });
+  console.log(JSON.stringify({ ready, ask, done }));
+})().catch((e) => { console.log(JSON.stringify({ error: e.message })); b.kill(); });
+`;
+  const env = { ...process.env, MAXSHELL_SAGE_ENGINE: path.join(__dirname, 'fake-sage-engine.js'), MAXSHELL_GEMMA_PYTHON: process.execPath };
+  const r = spawnSync(process.execPath, ['-e', driver, path.join(__dirname, '..', 'src', 'sagebridge.js'), root], { env, encoding: 'utf8', timeout: 20000 });
+  const out = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.ok(!out.error, out.error);
+  assert.strictEqual(out.ready.mode, 'code');
+  assert.deepStrictEqual(out.ready.models.map((m) => m.key), ['ultra', 'e4b', 'e2b', 'lite']);
+  const tool = out.ask.items.find((i) => i.asking);
+  assert.strictEqual(tool.title, 'Edit a.py');
+  assert.ok(tool.diff.rows.some((row) => row.kind === '+' && /return 2/.test(row.text)));
+  assert.strictEqual(fs.readFileSync(path.join(root, 'a.py'), 'utf8').includes('return 2'), true);
+  assert.match(out.done.items.find((i) => i.type === 'sage' && /Result/.test(i.text)).text, /Saved a\.py/);
+  // math comes out as the terminal shows it, code untouched
+  const { math } = require('../src/sagebridge');
+  assert.strictEqual(math('So $x^2$, not `$x$`, for $5 and $6.'), 'So x², not `$x$`, for $5 and $6.');
+  fs.rmSync(root, { recursive: true });
+});
+
+test('sage app: rebuilt when its sources are newer than the app', () => {
+  const gemma = require('../src/gemma');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-app-'));
+  const mac = path.join(dir, 'mac');
+  fs.mkdirSync(path.join(mac, 'Sources'), { recursive: true });
+  fs.writeFileSync(path.join(mac, 'Sources', 'A.swift'), '');
+  const app = path.join(dir, 'Sage.app');
+  assert.strictEqual(gemma.appStale(app, mac), true); // not built yet
+  fs.mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true });
+  fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'Sage'), '');
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(path.join(mac, 'Sources', 'A.swift'), old, old);
+  assert.strictEqual(gemma.appStale(app, mac), false);
+  fs.writeFileSync(path.join(mac, 'Sources', 'B.swift'), '');
+  assert.strictEqual(gemma.appStale(app, mac), true);
+  const out = [];
+  assert.strictEqual(gemma.runApp(['--help'], (t) => out.push(t), () => {}), 0);
+  assert.match(out.join(''), /sage app --build/);
+  fs.rmSync(dir, { recursive: true });
+});
+
 test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in sage code', () => {
   const gemma = require('../src/gemma');
   for (const mode of ['chat', 'code']) {

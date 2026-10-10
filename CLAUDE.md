@@ -113,7 +113,13 @@ sagevideo.py patches (bf16 T5 and VAE, prompt file, QuickTime re-encode) and
 chains in 2 s segments for any length (`--continue` extends a clip);
 MMAudio (`src/sageaudio.py`, its own Python 3.12 venv in
 `~/.maxshell/gemma/audio`, made with uv) adds the sound after, as a Job
-`then` step. `sage video` alone opens video chat (`SageApp` mode
+`then` step. `sage app` builds (mac/build.sh: SwiftPM, no Xcode project; icon from
+mac/icon.swift) and opens Sage for Mac, a SwiftUI app in `mac/Sources/Sage`
+that only draws: it runs `src/sagebridge.js`, a SageApp without a screen —
+actions in, JSON state out — so the Mac app and the terminal app share all
+logic. `SAGE_SNAPSHOT=file.png` (with `SAGE_ASK`, `SAGE_MODE`, `SAGE_MODEL`,
+`SAGE_ROOT`, `SAGE_DATA`) makes the app save its own window, to check the
+look without screen-recording rights. `sage video` alone opens video chat (`SageApp` mode
 `video`). Tests use `test/fake-wan.js` and `test/fake-mmaudio.js`
 (`MAXSHELL_VIDEO_BIN`, `MAXSHELL_AUDIO_BIN`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +

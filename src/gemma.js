@@ -143,6 +143,8 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage <question>      one answer, printed
   sage image <prompt>  a picture, made here (sage image --help)
   sage video <prompt>  a short clip, made here (sage video --help)
+  sage app             Sage for Mac: the same, as a Mac app (built here the
+                       first time, into ~/Applications; --build rebuilds it)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
   sage --ultra …       use Sage Ultra, the smartest (needs ~16 GB of memory)
@@ -154,6 +156,43 @@ const HELP = `sage — an AI that runs entirely on your Mac
                        sage code --lite --setup for Sage Code's Lite)
 `;
 
+// --- Sage for Mac (mac/: SwiftUI, built by mac/build.sh with SwiftPM) ---------
+
+const appPath = () => path.join(process.env.SAGE_APP_DIR || path.join(os.homedir(), 'Applications'), 'Sage.app');
+
+// Whether the app is missing or older than its sources (or the bridge it runs).
+function appStale(app = appPath(), mac = path.join(__dirname, '..', 'mac')) {
+  let built;
+  try { built = fs.statSync(path.join(app, 'Contents', 'MacOS', 'Sage')).mtimeMs; } catch { return true; }
+  const newest = (p) => {
+    let st;
+    try { st = fs.statSync(p); } catch { return 0; }
+    if (!st.isDirectory()) return st.mtimeMs;
+    return Math.max(0, ...fs.readdirSync(p).filter((n) => n !== '.build').map((n) => newest(path.join(p, n))));
+  };
+  return newest(mac) > built;
+}
+
+function runApp(args, write, err) {
+  if (args[0] === '--help' || args[0] === '-h') {
+    write('sage app — Sage for Mac: chat, code, pictures and clips in a Mac app.\n  sage app          open it (built into ~/Applications the first time)\n  sage app --build  build it again\n');
+    return 0;
+  }
+  const app = appPath();
+  if (args[0] === '--build' || appStale(app)) {
+    if (spawnSync('swift', ['--version'], { stdio: 'ignore' }).status !== 0) {
+      err('sage app: building it needs Swift — install Apple’s command line tools: xcode-select --install\n');
+      return 1;
+    }
+    write(`Building Sage for Mac into ${app.replace(os.homedir(), '~')} (about a minute)…\n`);
+    const r = spawnSync('/bin/sh', [path.join(__dirname, '..', 'mac', 'build.sh')], { stdio: ['ignore', 'ignore', 'inherit'] });
+    if (r.status !== 0) { err('sage app: the build failed\n'); return 1; }
+  }
+  if (!process.env.MAXSHELL_IMAGE_NO_OPEN) spawnSync('open', [app], { stdio: 'ignore' });
+  write(`Sage for Mac is open (${app.replace(os.homedir(), '~')}).\n`);
+  return 0;
+}
+
 function runSage(args, io, shell, name = 'sage') {
   const ansi = require('./ansi');
   const theme = require('./theme');
@@ -162,6 +201,7 @@ function runSage(args, io, shell, name = 'sage') {
   let mode = 'chat';
   if (args[0] === 'image') return require('./sageimage').runImage(args.slice(1), io, shell);
   if (args[0] === 'video') return require('./sagevideo').runVideo(args.slice(1), io, shell);
+  if (args[0] === 'app') return runApp(args.slice(1), write, err);
   if (args[0] === 'code') { mode = 'code'; args = args.slice(1); }
   let { model: m, key, args: rest, chosen } = pick(args);
   if (!m) { err(`${name}: no model ${key} — ultra, pro, flash or lite\n`); return 1; }
@@ -206,4 +246,4 @@ function runSage(args, io, shell, name = 'sage') {
   return shell.runExternal([python(), path.join(__dirname, 'sage.py'), ...args], io, env);
 }
 
-module.exports = { promptWriter, runSage, HELP, ready, pick, modelFor, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };
+module.exports = { appStale, runApp, promptWriter, runSage, HELP, ready, pick, modelFor, fallback, freeMemory, recent, MODELS, DEFAULT, REPO, FILES };

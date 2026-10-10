@@ -1237,6 +1237,23 @@ Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 `sage <question>` prints one answer as markdown — plain when piped.
 `MAXSHELL_GEMMA` points it at another model folder.
 
+**Sage for Mac.** `sage app` opens Sage as a real Mac app — built here the
+first time with Swift's own tools (no Xcode), into `~/Applications/Sage.app`,
+so it's in Launchpad and Spotlight too. A sidebar starts a **new chat**,
+**code session** (pick a project folder), **picture** or **video**, and lists
+your earlier conversations by day, searchable. Answers render as rich text
+— headings, tables, highlighted code with a Copy button, math — and Sage
+Ultra's thinking streams in a fold that closes to *Thought for 27s*. In a
+code session every tool shows as a card: what it read, a red/green **diff**
+for a change, the command and its output, with **Yes · Yes to all · No**.
+Pictures appear in the conversation and clips
+play there; drop a picture in to edit it. The toolbar has the model menu and
+Sage Ultra's thinking level (⌘T), ⌘. stops, ⌘1–4 pick a model. It's the
+same Sage underneath: the app runs `src/sagebridge.js`, which drives the
+terminal app's own state, so every rule — asking first, the Trash, the
+memory checks — is the same. `sage app --build` rebuilds it, and `sage
+app` does too when its sources have changed.
+
 ### 6-7
 
 `6-7` turns on **brainrot mode** for the session: the prompt gets a 💀 and a
