@@ -28,17 +28,13 @@ const tools = require('./sagetools');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  ultra: { label: 'Sage Ultra', blurb: 'best at code · ~6 GB', flag: 'ultra' },
-  e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~9 GB', flag: 'pro' },
-  e2b: { label: 'Sage Flash', blurb: 'fast · ~5 GB', flag: 'flash' },
-  lite: { label: 'Sage Lite', blurb: 'fastest · ~2 GB', flag: 'lite' },
-};
-// In a chat (not sage code), Sage Ultra is the big chat model, Gemma 4 26B,
-// and Sage Lite is SmolLM2; in sage code they're coding models.
-const CHAT_INFO = {
   ultra: { label: 'Sage Ultra', blurb: 'smartest · ~15 GB', flag: 'ultra' },
-  lite: { label: 'Sage Lite', blurb: 'fastest · ~1 GB', flag: 'lite' },
+  e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro' },
+  e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash' },
+  lite: { label: 'Sage Lite', blurb: 'fastest · ~3 GB', flag: 'lite' }, // sage code's
 };
+// In a chat, Sage Lite is a different, smaller model than in sage code.
+const CHAT_INFO = { lite: { label: 'Sage Lite', blurb: 'fastest · ~1 GB', flag: 'lite' } };
 const modelInfo = (mode, key) => (mode !== 'code' && CHAT_INFO[key]) || MODEL_INFO[key];
 
 // --- the engine -----------------------------------------------------------------

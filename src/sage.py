@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""Sage's engine: Sage Pro and Flash (Gemma 4 E4B / E2B, with transformers),
-Sage Lite (SmolLM2-1.7B in a chat, Qwen2.5-Coder-3B in sage code, with MLX)
-and Sage Ultra (Gemma 4 26B-A4B in a chat, Qwen2.5-Coder-7B in sage code,
-with MLX), running on this Mac. Run by
-maxshell's `sage`.
+"""Sage's engine, running on this Mac with Apple's MLX: Sage Ultra, Pro and
+Flash are Google's Gemma 4 (26B-A4B, E4B, E2B); Sage Lite is Alibaba's
+Qwen3-1.7B in a chat and Mistral's Ministral 3 3B in sage code. All 4-bit.
+Run by maxshell's `sage`.
 
-The model folder (~/.maxshell/gemma/e4b or ~/.maxshell/gemma, or
-$MAXSHELL_GEMMA) holds config.json, the tokenizer and model.safetensors (set
-up by `sage --setup`). Only the text half of the model is loaded — not the
-image and audio parts. Its FP8 weights become bfloat16 on the GPU, and the
-per-layer embedding table stays on disk and is read a row at a time, so E4B
-takes about 9 GB (E2B about 5) and can run next to mx training.
+The model folder ($MAXSHELL_GEMMA, set up by `sage --setup` under
+~/.maxshell/gemma) holds an mlx-lm model; $MAXSHELL_SAGE_NAME says which
+(ULTRA, E4B, E2B, LITE or LITE-CODE), so the conversation is in its format.
 
   sage.py                      chat on the terminal (bye to leave)
   sage.py <question>           one answer
@@ -38,16 +34,13 @@ import time
 
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
-ULTRA = NAME == 'ULTRA'  # Qwen2.5-Coder-7B on MLX (below), not Gemma
-ULTRA_CHAT = NAME == 'ULTRA-CHAT'  # Gemma 4 26B-A4B on MLX: Sage Ultra in a chat
-LITE = NAME == 'LITE'  # SmolLM2-1.7B on MLX
-LITE_CODE = NAME == 'LITE-CODE'  # Qwen2.5-Coder-3B on MLX: Sage Lite in sage code
-LABEL = {'E2B': 'Flash', 'LITE': 'Lite', 'LITE-CODE': 'Lite', 'ULTRA': 'Ultra', 'ULTRA-CHAT': 'Ultra'}.get(NAME, 'Pro')
-FLAG = {'E2B': ' --flash', 'LITE': ' --lite', 'LITE-CODE': ' code --lite', 'ULTRA': ' code --ultra',
-        'ULTRA-CHAT': ' --ultra'}.get(NAME, '')
-NEED_GB = {'E4B': 9, 'E2B': 5, 'LITE': 2, 'LITE-CODE': 2, 'ULTRA': 6, 'ULTRA-CHAT': 15}.get(NAME, 9)
-NEED_FREE = {'E4B': 40, 'E2B': 25, 'LITE': 15, 'LITE-CODE': 15, 'ULTRA': 30, 'ULTRA-CHAT': 60}.get(NAME, 40)  # % of memory free before loading (training pauses below 15)
-MAKER = 'Alibaba' if ULTRA or LITE_CODE else 'Hugging Face' if LITE else 'Google'
+# Ultra, Pro and Flash are Gemma 4 (26B-A4B, E4B, E2B); Lite is Qwen3-1.7B in
+# a chat and Ministral 3 3B in sage code.
+LABEL = {'ULTRA': 'Ultra', 'E2B': 'Flash', 'LITE': 'Lite', 'LITE-CODE': 'Lite'}.get(NAME, 'Pro')
+FLAG = {'ULTRA': ' --ultra', 'E2B': ' --flash', 'LITE': ' --lite', 'LITE-CODE': ' code --lite'}.get(NAME, '')
+NEED_GB = {'ULTRA': 15, 'E4B': 5, 'E2B': 3, 'LITE': 1, 'LITE-CODE': 3}.get(NAME, 5)
+NEED_FREE = {'ULTRA': 60, 'E4B': 30, 'E2B': 20, 'LITE': 10, 'LITE-CODE': 15}.get(NAME, 30)  # % of memory free before loading
+MAKER = {'LITE': 'Alibaba', 'LITE-CODE': 'Mistral AI'}.get(NAME, 'Google')
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
 C = type('C', (), COLORS)
@@ -173,7 +166,9 @@ def system_prompt(mode):
                 f"mkdir -p with run_command; use run_command too for running code and tests, installing packages "
                 f"and git. Never delete files or folders. Keep edits small and "
                 f"exact, and match the code's style. The user approves every change and may decline one — then "
-                f"ask what they'd like instead. Call one tool at a time and wait for its result — never say you did "
+                f"ask what they'd like instead. Never ask whether to go ahead or wait for a "
+                f"go-ahead: once you know the change, call edit_file or write_file right away — the app shows the "
+                f"user the change and asks them for you. Call one tool at a time and wait for its result — never say you did "
                 f"something until a tool's result shows it worked. When you're done, say briefly what you changed.")
     return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "
             f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not by the model "
@@ -189,87 +184,6 @@ def free_memory():
         return int(subprocess.run(['sysctl', '-n', 'kern.memorystatus_level'], capture_output=True, text=True).stdout)
     except Exception:
         return 100
-
-
-def load():
-    import numpy as np
-    import torch
-    from torch import nn
-    from safetensors import safe_open
-    from transformers import AutoTokenizer
-    from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4ForCausalLM, Gemma4TextRotaryEmbedding
-
-    device = os.environ.get('MAXSHELL_SAGE_DEVICE') or ('mps' if torch.backends.mps.is_available() else 'cpu')
-    path = os.path.join(DIR, 'model.safetensors')
-    with open(os.path.join(DIR, 'config.json')) as f:
-        conf = json.load(f)
-    cfg = Gemma4TextConfig(**conf['text_config'])
-    cfg._attn_implementation = 'sdpa'
-    with torch.device('meta'):
-        model = Gemma4ForCausalLM(cfg)
-    model.eval()
-
-    with open(path, 'rb') as f:
-        n = struct.unpack('<Q', f.read(8))[0]
-        header = json.loads(f.read(n))
-    base = 8 + n
-
-    class DiskEmbedding(nn.Module):
-        """A bfloat16 [vocab, dim] table in the file; rows are read as needed."""
-
-        def __init__(self, info, scale):
-            super().__init__()
-            rows, dim = info['shape']
-            self.table = np.memmap(path, dtype=np.int16, mode='r', offset=base + info['data_offsets'][0], shape=(rows, dim))
-            self.scale = torch.tensor(scale, dtype=torch.bfloat16)
-
-        def forward(self, ids):
-            rows = np.ascontiguousarray(self.table[ids.reshape(-1).cpu().numpy()])
-            out = torch.from_numpy(rows).view(torch.bfloat16).to(device) * self.scale.to(device)
-            return out.reshape(*ids.shape, -1)
-
-    inner = model.model
-    ple = 'model.language_model.embed_tokens_per_layer.weight'
-    inner.embed_tokens_per_layer = DiskEmbedding(header[ple], inner.embed_tokens_per_layer.scalar_embed_scale)
-
-    def put(owner, name, value, param):
-        mod = owner
-        parts = name.split('.')
-        for p in parts[:-1]:
-            mod = getattr(mod, p)
-        if param:
-            setattr(mod, parts[-1], nn.Parameter(value, requires_grad=False))
-        else:
-            mod.register_buffer(parts[-1], value, persistent=name.endswith('layer_scalar'))
-
-    with safe_open(path, framework='pt') as f:
-        for name, _ in list(model.named_parameters()):
-            if name == 'lm_head.weight':
-                continue
-            key = 'model.language_model.' + name[len('model.'):]
-            t = f.get_tensor(key)
-            if t.dtype == torch.float8_e4m3fn:
-                t = (t.to(torch.float32) * f.get_tensor(key + '_scale').to(torch.float32)).to(torch.bfloat16)
-            put(model, name, t.to(torch.bfloat16).to(device), True)
-        for name, buf in list(model.named_buffers()):
-            if not buf.is_meta:
-                continue
-            key = 'model.language_model.' + name[len('model.'):]
-            if name.endswith('layer_scalar'):
-                put(model, name, f.get_tensor(key).to(torch.bfloat16).to(device), False)
-            elif name.endswith('embed_scale'):
-                owner = model.get_submodule(name.rsplit('.', 1)[0])
-                put(model, name, torch.tensor(owner.scalar_embed_scale).to(device), False)
-    inner.rotary_emb = Gemma4TextRotaryEmbedding(cfg, device=device)
-    model.lm_head.weight = inner.embed_tokens.weight
-    left = [n for n, b in list(model.named_parameters()) + list(model.named_buffers()) if b.is_meta]
-    if left:
-        raise RuntimeError(f'not loaded: {left[:5]}')
-    tok = AutoTokenizer.from_pretrained(DIR)
-    with open(os.path.join(DIR, 'generation_config.json')) as f:
-        gen = json.load(f)
-    return model, tok, gen, device
 
 
 class Printer:
@@ -311,113 +225,10 @@ class Printer:
             self.proc = None
 
 
-class Chat:
-    """The conversation as tokens, and the model's cache of all it has read,
-    so each turn reads only the new message. (On the CPU, reading takes about
-    0.1 s a token: re-reading the whole chat every turn left a follow-up to a
-    long answer waiting minutes for its first word.)"""
-
-    def __init__(self, model, tok, gen, device, mode='chat'):
-        import torch
-        from transformers import DynamicCache
-        self.model, self.tok, self.gen, self.device, self.mode = model, tok, gen, device, mode
-        self.turns = []
-        self.generated = 0  # tokens written in the last answer…
-        self.seconds = 0.0  # …and the time spent writing them (not waiting on tools)
-        self.eos = gen['eos_token_id'] if isinstance(gen['eos_token_id'], list) else [gen['eos_token_id']]
-        system = [{'role': 'system', 'content': system_prompt(mode)}]
-        tools = CODE_TOOLS if mode == 'code' else None
-        self.ids = self.encode(tok.apply_chat_template(system, tools=tools, tokenize=False))
-        self.call_start = tok.convert_tokens_to_ids('<|tool_response>')
-        self.cache = DynamicCache(config=model.config)
-        with torch.no_grad():  # read the system prompt now, while "loading Gemma…" shows
-            model(self.ids, past_key_values=self.cache, use_cache=True)
-
-    def encode(self, text):
-        import torch
-        return torch.tensor([self.tok.encode(text, add_special_tokens=False)], device=self.device)
-
-    def reply(self, question, show, tools=None):
-        """Gemma's answer to the question, shown as it comes; and whether
-        Ctrl-C stopped it. tools maps a tool's name to a function of its
-        arguments that returns what to tell Gemma."""
-        import torch
-        from transformers import StoppingCriteria, StoppingCriteriaList, TextStreamer
-
-        self.turns.append(('user', question))
-        ids = torch.cat([self.ids, self.encode(f'<|turn>user\n{question}<turn|>\n<|turn>model\n')], dim=1)
-        start = ids.shape[1]
-        stop = {'hit': False}
-
-        class Stop(StoppingCriteria):
-            def __call__(self, input_ids, scores, **kw):
-                return stop['hit']
-
-        class Stream(TextStreamer):
-            """Shows only what's visible: tool calls are held back."""
-            raw, shown = '', 0
-
-            def on_finalized_text(self, text, stream_end=False):
-                self.raw += text
-                seen = visible(self.raw)
-                if len(seen) > self.shown:
-                    show(seen[self.shown:])
-                    self.shown = len(seen)
-
-        gen = self.gen
-        coding = self.mode == 'code' or is_coding(self.turns)
-        temperature = CODE_TEMPERATURE if coding else 0.7 if self.mode.startswith(('image', 'video')) else gen.get('temperature', 1.0)
-        self.generated = 0
-        self.seconds = 0.0
-        for _ in range(MAX_CALLS + 1):
-            began = time.time()
-            old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
-            try:
-                with torch.no_grad():
-                    out = self.model.generate(
-                        ids, past_key_values=self.cache, max_new_tokens=MAX_TOKENS, do_sample=True, temperature=temperature,
-                        top_k=gen.get('top_k', 64), top_p=gen.get('top_p', 0.95), eos_token_id=self.eos,
-                        pad_token_id=gen.get('pad_token_id', 0), stopping_criteria=StoppingCriteriaList([Stop()]),
-                        streamer=Stream(self.tok, skip_prompt=True, skip_special_tokens=False))
-            finally:
-                signal.signal(signal.SIGINT, old)
-            # The cache holds all but the last token; an end token (not read)
-            # is dropped.
-            self.seconds += time.time() - began
-            last = int(out[0, -1]) if out.shape[1] > ids.shape[1] else None
-            self.generated += out.shape[1] - ids.shape[1]
-            if last in self.eos:
-                out = out[:, :-1]
-            call = None
-            if last == self.call_start and not stop['hit']:
-                call = parse_call(self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=False))
-            if not call:
-                ids = out
-                break
-            # Gemma stopped to call a tool: run it, answer, and let it go on.
-            name, args = call
-            fn = (tools or {}).get(name)
-            try:
-                result = fn(**args) if fn else f'There is no tool called {name}.'
-            except Exception as e:  # noqa: BLE001 — Gemma hears what went wrong
-                result = f'{name} failed: {e}'
-            if stop['hit']:
-                ids = torch.cat([out, self.encode(tool_response(name, result))], dim=1)
-                break
-            ids = torch.cat([out, self.encode(tool_response(name, result))], dim=1)
-        self.ids = torch.cat([ids, self.encode('<turn|>\n')], dim=1)
-        answer = visible(self.tok.decode(ids[0, start:], skip_special_tokens=False)).strip()
-        self.turns.append(('ai', answer))
-        return stop['hit']
-
-
-# --- Sage Ultra: Qwen2.5-Coder-7B-Instruct (4-bit, MLX) on the GPU ---------------
+# --- the engine: every model runs with MLX on the GPU ---------------------------
 #
-# The same Chat interface as Gemma's above. Qwen calls tools by writing
-# <tool_call>{"name": …, "arguments": {…}}</tool_call> and stopping; the
-# answers go back in a user turn as <tool_response>…</tool_response>, and it
-# carries on. The conversation is kept as tokens next to MLX's KV cache, so
-# each turn reads only what's new.
+# Qwen-style tool calls (<tool_call>JSON</tool_call>, or a ```json block) are
+# read by ultra_scan below; Gemma's and Mistral's by their chat classes.
 
 ULTRA_SPECIAL = re.compile(r'<\|im_(start|end)\|>|<\|endoftext\|>')
 TOOL_NAMES = {t['function']['name'] for t in CODE_TOOLS}
@@ -527,9 +338,9 @@ def ultra_tool_responses(results):
     blocks = '\n'.join(f'<tool_response>\n{r}\n</tool_response>' for r in results)
     return f'<|im_start|>user\n{blocks}<|im_end|>\n<|im_start|>assistant\n'
 
-
-class UltraEngine:
-    """The model, loaded once; chat() starts a conversation."""
+class Engine:
+    """The model, loaded once with mlx-lm; chat() starts a conversation in the
+    model's own format."""
 
     def __init__(self, path, device=None):
         import mlx.core as mx
@@ -537,14 +348,20 @@ class UltraEngine:
         if device == 'cpu':
             mx.set_default_device(mx.cpu)
         self.mx = mx
-        self.model, self.tok = load(path)
+        # Mistral's tokenizer splits words wrongly without its fixed pattern
+        self.model, self.tok = load(path, tokenizer_config={'fix_mistral_regex': True} if NAME == 'LITE-CODE' else {})
         self.device = 'cpu' if device == 'cpu' else 'gpu'
 
     def chat(self, mode, system, tools=None, max_calls=40, max_tokens=8192):
-        return (GemmaMlxChat if ULTRA_CHAT else SmolChat if LITE else UltraChat)(self, mode, system, tools, max_calls, max_tokens)
+        return CHATS.get(NAME, GemmaChat)(self, mode, system, tools, max_calls, max_tokens)
 
 
-class UltraChat:
+class MlxChat:
+    """A conversation as tokens next to MLX's KV cache, so each turn reads only
+    what's new. In ChatML (<|im_start|>…<|im_end|>), with Qwen's tool calls:
+    <tool_call>{"name": …, "arguments": {…}}</tool_call>, stopping there, and
+    the answers back in a user turn as <tool_response>…</tool_response>.
+    Subclasses change the format."""
     END = '<|im_end|>'  # ends a turn
     SAMPLING = {'top_p': 0.8, 'top_k': 20}
     REPEAT = 1.05  # repetition penalty
@@ -555,15 +372,14 @@ class UltraChat:
         self.tok = engine.tok
         self.im_end = self.tok.convert_tokens_to_ids(self.END)
         self.turns = []
-        self.generated = 0
-        self.seconds = 0.0
+        self.generated = 0  # tokens written in the last answer…
+        self.seconds = 0.0  # …and the time spent writing them (not waiting on tools)
         self.cache = make_prompt_cache(engine.model)
         prefix = self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
         self.tokens = self.encode(prefix)  # the whole conversation
         mx = engine.mx
         engine.model(mx.array(self.tokens)[None], cache=self.cache)  # read the system prompt now
         mx.eval([c.state for c in self.cache])
-
     def encode(self, text):
         return list(self.tok.encode(text, add_special_tokens=False))
 
@@ -628,6 +444,12 @@ class UltraChat:
     def user_turn(self, question):
         return f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
 
+    def answer(self, calls, results):
+        """The text that gives the model its calls' results: Qwen hears them
+        in a user turn."""
+        self.close_turn()
+        return ultra_tool_responses(results)
+
     def close_turn(self):
         if not self.tokens or self.tokens[-1] != self.im_end:
             self.tokens.append(self.im_end)
@@ -662,8 +484,7 @@ class UltraChat:
                     results.append(f'{name} failed: {e}')
                 if stop['hit']:
                     break
-            self.close_turn()
-            text_after = ultra_tool_responses(results)
+            text_after = self.answer(calls, results)
             if stop['hit']:
                 self.tokens += self.encode(text_after)
                 break
@@ -672,38 +493,95 @@ class UltraChat:
         return stop['hit']
 
 
-class GemmaMlxChat(UltraChat):
-    """Sage Ultra in a chat: Gemma 4 26B-A4B on MLX. Gemma's turns and
-    sampling; no tools (sage code's Ultra is Qwen)."""
+class GemmaChat(MlxChat):
+    """Gemma 4 (Sage Ultra, Pro and Flash). Gemma's turns and sampling, and its
+    tool calls: it writes <|tool_call>call:name{…}<tool_call|>, generation
+    stops there, and the result goes back in the same turn, as Gemma's
+    template does. Its thinking (Ultra thinks first) is hidden."""
     END = '<turn|>'
     SAMPLING = {'top_p': 0.95, 'top_k': 64}  # Google's settings, with temperature 1
     REPEAT = None
 
     @staticmethod
     def scan(raw):
-        return visible(raw), [], None
+        end = raw.find('<tool_call|>')
+        call = parse_call(raw[:end + len('<tool_call|>')]) if end >= 0 else None
+        return visible(raw), [call] if call else [], end + len('<tool_call|>') if call else None
+
+    def answer(self, calls, results):
+        return ''.join(tool_response(name, result) for (name, _), result in zip(calls, results))
 
     def temperature(self):
         if self.mode.startswith(('image', 'video')):
             return 0.7
-        return CODE_TEMPERATURE if is_coding(self.turns) else 1.0
+        return CODE_TEMPERATURE if self.mode == 'code' or is_coding(self.turns) else 1.0
 
     def user_turn(self, question):
         return f'<|turn>user\n{question}<turn|>\n<|turn>model\n'
 
 
-class SmolChat(UltraChat):
-    """Sage Lite: SmolLM2-1.7B on MLX. The same turns as Qwen's (ChatML), with
-    Hugging Face's suggested sampling; no tools."""
+THINK = re.compile(r'<think>.*?(</think>|\Z)\s*', re.S)
+
+
+class QwenLiteChat(MlxChat):
+    """Sage Lite in a chat: Qwen3-1.7B, ChatML, with thinking off (an empty
+    <think></think>, as its template does): quick, and still right on sums."""
     SAMPLING = {'top_p': 0.9}
-    REPEAT = 1.1  # a small model loops without it
+    REPEAT = None
 
     @staticmethod
     def scan(raw):
-        return ULTRA_SPECIAL.sub('', raw), [], None
+        return ULTRA_SPECIAL.sub('', THINK.sub('', raw)), [], None
 
     def temperature(self):
         return 0.7 if self.mode.startswith(('image', 'video')) else 0.3
+
+    def user_turn(self, question):
+        return super().user_turn(question) + '<think>\n\n</think>\n\n'
+
+
+MISTRAL_CALL = re.compile(r'\[TOOL_CALLS\]([\w.-]+)\[ARGS\]')
+MISTRAL_HIDDEN = re.compile(r'\[TOOL_CALLS\].*|</s>|<s>', re.S)
+
+
+class MistralChat(MlxChat):
+    """Sage Lite in sage code: Ministral 3 3B. [INST]…[/INST] turns; it calls
+    a tool by writing [TOOL_CALLS]name[ARGS]{json} and ending its turn, and
+    hears back in [TOOL_RESULTS]…[/TOOL_RESULTS], then goes on."""
+    END = '</s>'
+    SAMPLING = {'top_p': 0.95}
+    REPEAT = None
+
+    @staticmethod
+    def scan(raw):
+        m = MISTRAL_CALL.search(raw)
+        if not m:
+            return MISTRAL_HIDDEN.sub('', raw), [], None
+        try:
+            args, end = json.JSONDecoder().raw_decode(raw, m.end())
+        except ValueError:
+            return MISTRAL_HIDDEN.sub('', raw[:m.start()]), [], None  # still coming
+        call = (m.group(1), {k: v if isinstance(v, str) else json.dumps(v) for k, v in args.items()}) if isinstance(args, dict) else None
+        return MISTRAL_HIDDEN.sub('', raw[:m.start()]), [call] if call else [], end
+
+    def temperature(self):
+        return 0.7 if self.mode.startswith(('image', 'video')) else 0.15  # Mistral's advice
+
+    def user_turn(self, question):
+        return f'[INST]{question}[/INST]'
+
+    def answer(self, calls, results):
+        self.close_turn()
+        return ''.join(f'[TOOL_RESULTS]{r}[/TOOL_RESULTS]' for r in results)
+
+    def close_turn(self):
+        if not self.tokens or self.tokens[-1] != self.im_end:
+            self.tokens.append(self.im_end)
+
+
+# Which conversation each model has; Gemma for the rest.
+CHATS = {'LITE': QwenLiteChat, 'LITE-CODE': MistralChat}
+
 
 
 def problem():
@@ -719,13 +597,10 @@ def problem():
 
 def open_engine():
     """Loads the model once; returns new_chat(mode) and the device it runs on."""
-    if ULTRA or ULTRA_CHAT or LITE or LITE_CODE:  # MLX
-        engine = UltraEngine(DIR, os.environ.get('MAXSHELL_SAGE_DEVICE'))
-        new_chat = lambda mode: engine.chat(mode, system_prompt(mode), CODE_TOOLS if mode == 'code' else None,  # noqa: E731
-                                            MAX_CALLS, MAX_TOKENS)
-        return new_chat, engine.device
-    model, tok, gen, device = load()
-    return (lambda mode: Chat(model, tok, gen, device, mode)), device
+    engine = Engine(DIR, os.environ.get('MAXSHELL_SAGE_DEVICE'))
+    new_chat = lambda mode: engine.chat(mode, system_prompt(mode), CODE_TOOLS if mode == 'code' else None,  # noqa: E731
+                                        MAX_CALLS, MAX_TOKENS)
+    return new_chat, engine.device
 
 
 def quiet():
@@ -842,9 +717,6 @@ def image_prompt(req_path, out_path):
     model draws from, then exits, so the two never share memory."""
     with open(req_path, encoding='utf-8') as f:
         req = json.load(f)
-    if ULTRA:
-        sys.stderr.write('Sage Ultra writes code, not image prompts\n')
-        return 1
     why = problem()
     if why:
         sys.stderr.write(f'{why}\n')

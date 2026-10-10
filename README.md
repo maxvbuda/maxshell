@@ -1082,36 +1082,42 @@ touch files or run commands at all.
 conversation (its KV cache), so each follow-up reads only your new message
 and answers in seconds, however long the chat.
 
+**The models.** Every Sage runs on this Mac with Apple's MLX on the GPU,
+4-bit. Each was picked by testing here (an M3 with 24 GB) against the
+others its size: sums and facts for chatting, and small real tasks for
+`sage code` — read a file and fix its bug, write a new file that runs, run
+the tests and report.
+
+| | In a chat | In `sage code` | Memory | Speed here |
+|---|---|---|---|---|
+| **Sage Ultra** | Gemma 4 26B-A4B (Google) | the same | ~15 GB | ~17 tokens/s |
+| **Sage Pro** (default) | Gemma 4 E4B (Google) | the same | ~5 GB | ~16 tokens/s |
+| **Sage Flash** | Gemma 4 E2B (Google) | the same | ~3 GB | ~34 tokens/s |
+| **Sage Lite** | Qwen3-1.7B (Alibaba) | Ministral 3 3B (Mistral AI) | ~1 / ~3 GB | ~50 / ~20 tokens/s |
+
+Sage Ultra is a mixture of experts — 26 billion parameters, but only about
+4 billion work on each word — so it knows and reasons like a big model and
+writes like a small one; it thinks before it answers (the thinking is
+hidden), and in `sage code` it did every task, every time. Sage Pro did
+too, in a third of the memory. Sage Lite in a chat answers in a moment and
+gets its sums right (21 of 22 on a hard set of sums and facts); in `sage
+code` it's Ministral, the smallest model that reliably reads a file before
+it edits it.
+
 **Setup.** `sage --setup` gets it ready: a Python of its own in
 `~/.maxshell/gemma/venv` (made from Python 3.10 or newer — macOS's own 3.9 is
-too old for `transformers` 5 — with the system PyTorch, or PyTorch installed
-if there isn't one, plus `transformers`), and Sage Pro's weights — an FP8
-build of Google's open Gemma 4 E4B, `leon-se/gemma-4-E4B-it-FP8-Dynamic` on
-Hugging Face (13 GB) — in `~/.maxshell/gemma/e4b`. Only the text half of the
-model is loaded, not the image and audio parts: its weights go to the GPU as
-bfloat16 and the per-layer embedding table stays on disk, read a row at a
-time, so Sage Pro takes about 9 GB and won't start with less than 40% of
-memory free. **Sage Flash** (Gemma 4 E2B) needs about 5 GB (25% free):
-`sage --flash --setup` downloads it (9 GB, from
-`leon-se/gemma-4-E2B-it-FP8-Dynamic`) into `~/.maxshell/gemma`; `sage --flash`
-uses it, and `MAXSHELL_SAGE_MODEL=flash` makes it the default (`--pro` and
-`pro` pick Sage Pro; `--e4b`/`--e2b` work too). When you haven't picked one
-and there's less than 40% of memory free (the GPU shares it), Sage starts
-as Sage Flash and says so.
-
-**Sage Lite** is Hugging Face's SmolLM2-1.7B-Instruct, made 4-bit for MLX:
-under 1 GB, and ridiculously fast — about 70 tokens a second here, and it
-wakes in a few seconds. It's tiny, so it's for quick questions and chat,
-not hard reasoning or maths. `sage --lite --setup` downloads the model
-(3.4 GB), converts it to 4-bit into `~/.maxshell/gemma/lite` and removes
-the download; then `sage --lite`. In `sage code`, Sage Lite is a small
-coding model instead — Alibaba's Qwen2.5-Coder-3B-Instruct, 4-bit on MLX
-(about 2 GB): quick, but at 3 billion parameters it's less sure with Sage
-Code's tools than the bigger models. `sage code --lite --setup` downloads
-`mlx-community/Qwen2.5-Coder-3B-Instruct-4bit` (1.8 GB) into
-`~/.maxshell/gemma/lite-code`; then `sage code --lite`. While mx training has the GPU, Sage runs on the
-CPU instead (`MAXSHELL_SAGE_DEVICE` picks), which leaves training alone.
-Waking takes 10–30 seconds.
+too old) with `mlx-lm`, and Sage Pro, `mlx-community/gemma-4-e4b-it-4bit`
+(5.2 GB), in `~/.maxshell/gemma/pro`. `sage --ultra --setup`, `sage --flash
+--setup` and `sage --lite --setup` add the others (`ultra`, `flash`,
+`lite`), and `sage code --lite --setup` adds Sage Code's Lite
+(`lite-code`); then `sage --ultra` and so on, or pick one from the
+dropdown. `MAXSHELL_SAGE_MODEL=flash` makes another the default (`--pro`
+and `pro` pick Sage Pro; `--e4b`/`--e2b` work too). Each model won't start
+without room for it — Ultra with less than 60% of memory free, Pro 30% —
+and when you haven't picked one and there's less than 30% free (the GPU
+shares it), Sage starts as Sage Flash and says so. Sage shares the GPU with
+mx training (`ai --train stop` pauses it); `MAXSHELL_SAGE_DEVICE=cpu` runs
+Sage on the CPU instead. Waking takes a few seconds (Ultra about 30).
 
 **Sage draws, too.** `sage image "a lighthouse at dusk, oil painting"` makes
 a picture on your Mac with Qwen-Image 2.1, Alibaba's open image model
@@ -1213,27 +1219,11 @@ saved (`sage-a-puppy.mp4`, `-2`, …). `/seconds 6` sets the length,
 `/sound off`, `/exact`, `/open` plays the latest, `/new` starts over, ^C
 stops.
 
-**Sage Ultra** is the smartest Sage to talk to: Google's open Gemma 4
-26B-A4B, 4-bit, run with Apple's MLX on the GPU. It's a mixture of experts
-— 26 billion parameters, but only about 4 billion work on each word — so it
-knows and reasons like a big model and writes about as fast as a small one.
-It needs about 15 GB of memory (it starts with 60% free), so close big
-apps first. `sage --ultra --setup` installs `mlx-lm` into Sage's Python and
-downloads `mlx-community/gemma-4-26b-a4b-it-4bit` (15 GB) into
-`~/.maxshell/gemma/ultra-chat`; then `sage --ultra`, or pick it from the
-dropdown. `/image` in an Ultra chat has Ultra write the picture's prompt.
-
-In `sage code`, **Sage Ultra** is a coding model instead — Alibaba's open
-Qwen2.5-Coder-7B-Instruct, 4-bit, also on MLX (about 6 GB; it starts with
-30% of memory free), the strongest at code and the quickest to answer
-(around 13–16 tokens a second here). `sage code --ultra --setup` downloads
-`mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` (4.3 GB) into
-`~/.maxshell/gemma/ultra`; then `sage code --ultra`, or pick it from Sage
-Code's dropdown. It calls Sage Code's tools in its own format — and
-sometimes writes a call as a JSON block instead; either way the call is
+In `sage code`, each model calls Sage Code's tools in its own format —
+Gemma's tool calls, Ministral's `[TOOL_CALLS]`, or JSON — and the call is
 taken out of the answer, Sage stops right there, and carries on only once
 the tool has run (and you've said yes), so it can't claim to have done what
-it hasn't.
+it hasn't. The models are told not to ask before a change: the app asks you.
 
 Away from a terminal, `sage` falls back to a plain chat (`bye` leaves) and
 `sage <question>` prints one answer as markdown — plain when piped.

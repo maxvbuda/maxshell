@@ -74,27 +74,25 @@ two-stage training, exam `ai/mx4/eval.js`; no self-check) is newer. `ai`
 prefers mx4, then mx3, then mx2,
 then mx (`MAXSHELL_AI` overrides). Evaluate on dates other than Tuesday
 29 Sep 2026 10:15 — mx2's old fixed date still confuses mx3.
-`sage` (`src/gemma.js`) is Sage: Sage Pro / Flash are Gemma 4 E4B / E2B
-(FP8 builds from `leon-se/gemma-4-E{4,2}B-it-FP8-Dynamic`, in
-`~/.maxshell/gemma/e4b` and `~/.maxshell/gemma`, run with transformers: text
-weights only, the per-layer embedding memory-mapped from disk, CPU while mx
-training runs); Sage Ultra is, in a chat, Gemma 4 26B-A4B 4-bit
-(`mlx-community/gemma-4-26b-a4b-it-4bit` in `~/.maxshell/gemma/ultra-chat`,
-key `ultrachat`, `GemmaMlxChat`) and, in `sage code`,
-Qwen2.5-Coder-7B-Instruct 4-bit (`~/.maxshell/gemma/ultra`); both run with
-mlx-lm on the GPU, and `gemma.modelFor(key, mode)` picks which. Sage Lite
-is, in a chat, SmolLM2-1.7B-Instruct (key `lite`, `SmolChat`), converted to
-4-bit MLX by `sage --lite --setup` into `~/.maxshell/gemma/lite`, and in
-`sage code`, Qwen2.5-Coder-3B-Instruct 4-bit (`litecode`, in
-`~/.maxshell/gemma/lite-code`). Both engines live in `src/sage.py` (one venv,
-`~/.maxshell/gemma/venv`) behind the same Chat interface, with the KV cache
-kept across turns. At a terminal, `sage` / `sage code` open `src/sage.js`,
+`sage` (`src/gemma.js`) is Sage. Every model is a 4-bit mlx-lm build on the
+GPU (`MODELS` in gemma.js, folders under `~/.maxshell/gemma`): Ultra / Pro /
+Flash are Gemma 4 26B-A4B / E4B / E2B (`ultra`, `pro`, `flash`; keys
+`ultra`, `e4b`, `e2b`); Lite is Qwen3-1.7B in a chat (`lite`) and Ministral
+3 3B in `sage code` (`litecode`, folder `lite-code`) —
+`gemma.modelFor(key, mode)` picks. They were chosen on 2026-10-09 by
+testing candidates on this Mac (sums/facts for chat; fix-a-bug, write-a-file,
+run-the-tests for code); test a replacement the same way before swapping
+one in. All of them run in `src/sage.py` (one venv, `~/.maxshell/gemma/venv`):
+`Engine` loads the model, and `$MAXSHELL_SAGE_NAME` picks its conversation
+class — `GemmaChat`, `QwenLiteChat` (thinking off) or `MistralChat`
+(tokenizer needs `fix_mistral_regex`) — all `MlxChat`s keeping the KV cache
+across turns. At a terminal, `sage` / `sage code` open `src/sage.js`,
 a full-screen app (`SageApp` state + `render()`, model dropdown) that runs
 `sage.py --serve` as a separate process: JSON commands appended to a file,
 JSON events read back from another (`Engine`), so it stays synchronous.
-`sage code` gives the model tools (Gemma's native calls; Qwen's
-`<tool_call>` JSON or a ```json block, found by `ultra_scan`, which stops
-generation at the call) that the app runs via `src/sagetools.js` — reads in
+`sage code` gives the model tools (Gemma's native calls, Mistral's
+`[TOOL_CALLS]`, or Qwen-style `<tool_call>` JSON / a ```json block found by
+`ultra_scan`; generation stops at the call) that the app runs via `src/sagetools.js` — reads in
 the project are free; writes, edits and commands show a diff / the command
 and ask; replaced files go to the Trash. Tests use
 `test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). `sage image`

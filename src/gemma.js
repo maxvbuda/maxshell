@@ -1,78 +1,61 @@
 'use strict';
 
-// sage: Sage, maxshell's AI, on this Mac — Sage Pro and Sage Flash are Gemma
-// 4 E4B and E2B (Google's open models, run with transformers), Sage Lite is
-// SmolLM2-1.7B (Hugging Face's, run with MLX: tiny and very fast), Sage Ultra is
-// Gemma 4 26B-A4B in a chat and Qwen2.5-Coder-7B (Alibaba's) in sage code,
-// both run with MLX. The full-screen app is src/sage.js; the models run in
-// src/sage.py under Sage's own Python (~/.maxshell/gemma/venv: the system
-// PyTorch plus transformers, and mlx-lm for Ultra); `sage --setup` makes that
-// Python and downloads the model into its folder. While mx training has the
-// GPU, Gemma runs on the CPU, which is as fast then and doesn't slow the
-// training.
+// sage: Sage, maxshell's AI, on this Mac. Every model is a 4-bit build run
+// with Apple's MLX on the GPU, in src/sage.py under Sage's own Python
+// (~/.maxshell/gemma/venv, with mlx-lm); `sage --setup` makes that Python and
+// downloads the model into its folder. The full-screen app is src/sage.js.
+// Chosen by testing on this Mac (24 GB, M3) against sums and facts for chat
+// and small read-edit-run tasks for sage code.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// The FP8 builds of Gemma 4 (instruction-tuned). E2B lives in the gemma
-// folder itself; E4B, about twice the compute and memory, in gemma/e4b.
-// Ultra, a 4-bit MLX build of Qwen2.5-Coder-7B-Instruct, in gemma/ultra;
-// in a chat, Ultra is a 4-bit MLX build of Gemma 4 26B-A4B (a mixture of
-// experts: 26B parameters, about 4B used for each token, so it's quick), in
-// gemma/ultra-chat.
+// The models, best first. Sage Ultra, Pro and Flash are Google's Gemma 4 in
+// chat and sage code alike; Sage Lite is a different small model for each.
 const MODELS = {
+  // Gemma 4 26B-A4B: a mixture of experts — 26B parameters, about 4B used for
+  // each token — so it knows like a big model and writes like a small one.
   ultra: {
-    name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit', sub: 'ultra',
-    size: '4.3 GB', needFree: 30, mlx: true, files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
-    try: 'sage code --ultra',
+    name: 'ULTRA', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/gemma-4-26b-a4b-it-4bit', sub: 'ultra',
+    size: '15 GB', needFree: 60,
   },
-  ultrachat: {
-    name: 'ULTRA-CHAT', label: 'Sage Ultra', flag: 'ultra', repo: 'mlx-community/gemma-4-26b-a4b-it-4bit', sub: 'ultra-chat',
-    size: '15 GB', needFree: 60, mlx: true, sharded: true, try: 'sage --ultra',
-    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'chat_template.jinja', 'model.safetensors.index.json'],
-  },
-  e2b: { name: 'E2B', label: 'Sage Flash', flag: 'flash', repo: 'leon-se/gemma-4-E2B-it-FP8-Dynamic', sub: '', size: '9 GB', needFree: 25 },
-  // Lite: SmolLM2-1.7B-Instruct, made 4-bit for MLX here (in gemma/lite):
-  // about 70 tokens a second, nearly three times its 8-bit build.
-  lite: {
-    name: 'LITE', label: 'Sage Lite', flag: 'lite', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', sub: 'lite',
-    size: '3.4 GB', needFree: 15, mlx: true, quantize: true, try: 'sage --lite',
-    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
-  },
-  // Lite in sage code: Qwen2.5-Coder-3B-Instruct, 4-bit MLX, in gemma/lite-code.
+  e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'mlx-community/gemma-4-e4b-it-4bit', sub: 'pro', size: '5.2 GB', needFree: 30 },
+  e2b: { name: 'E2B', label: 'Sage Flash', flag: 'flash', repo: 'mlx-community/gemma-4-e2b-it-4bit', sub: 'flash', size: '3.3 GB', needFree: 20 },
+  // Lite in a chat: Alibaba's Qwen3-1.7B, thinking off — about 50 tokens a
+  // second, and right on sums where smaller models weren't.
+  lite: { name: 'LITE', label: 'Sage Lite', flag: 'lite', repo: 'mlx-community/Qwen3-1.7B-4bit', sub: 'lite', size: '1 GB', needFree: 10 },
+  // Lite in sage code: Mistral's Ministral 3 3B, the smallest that reliably
+  // reads before it edits.
   litecode: {
-    name: 'LITE-CODE', label: 'Sage Lite', flag: 'lite', repo: 'mlx-community/Qwen2.5-Coder-3B-Instruct-4bit', sub: 'lite-code',
-    size: '1.8 GB', needFree: 15, mlx: true, try: 'sage code --lite',
-    files: ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'model.safetensors.index.json'],
+    name: 'LITE-CODE', label: 'Sage Lite', flag: 'lite', repo: 'mlx-community/Ministral-3-3B-Instruct-2512-4bit', sub: 'lite-code',
+    size: '2.6 GB', needFree: 15,
   },
-  e4b: { name: 'E4B', label: 'Sage Pro', flag: 'pro', repo: 'leon-se/gemma-4-E4B-it-FP8-Dynamic', sub: 'e4b', size: '13 GB', needFree: 40 },
 };
 const DEFAULT = 'e4b';
 const REPO = MODELS[DEFAULT].repo;
-const FILES = ['config.json', 'generation_config.json', 'tokenizer.json', 'tokenizer_config.json', 'chat_template.jinja'];
+const FILES = ['config.json', 'tokenizer.json', 'tokenizer_config.json'];
 
 const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxshell', 'gemma');
 const dir = (m = MODELS[DEFAULT]) => path.join(base(), m.sub);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
-// mlx-lm, which Ultra needs, in Sage's Python.
+// mlx-lm, which runs the models, in Sage's Python.
 function hasMlx() {
   const lib = path.join(path.dirname(path.dirname(python())), 'lib');
   try { return fs.readdirSync(lib).some((v) => fs.existsSync(path.join(lib, v, 'site-packages', 'mlx_lm'))); } catch { return false; }
 }
-// The weights: one file, or the shards the index lists.
+// The weights: the shards the index lists, or one file.
 function weights(m) {
-  if (!m.sharded) return ['model.safetensors'];
   try {
     return [...new Set(Object.values(JSON.parse(fs.readFileSync(path.join(dir(m), 'model.safetensors.index.json'), 'utf8')).weight_map))];
-  } catch { return ['model.safetensors.index.json']; }
+  } catch { return ['model.safetensors']; }
 }
-const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && weights(m).every((f) => fs.existsSync(path.join(dir(m), f)))
-  && (m.files || FILES).every((f) => fs.existsSync(path.join(dir(m), f))) && (!m.mlx || !!process.env.MAXSHELL_GEMMA_PYTHON || hasMlx());
+const ready = (m = MODELS[DEFAULT]) => fs.existsSync(python()) && [...FILES, ...weights(m)].every((f) => fs.existsSync(path.join(dir(m), f)))
+  && (!!process.env.MAXSHELL_GEMMA_PYTHON || hasMlx());
 
-// --pro / --flash / --lite / --ultra (or --e4b / --e2b) at the front of the arguments,
-// else $MAXSHELL_SAGE_MODEL, else Pro.
+// --ultra / --pro / --flash / --lite (or --e4b / --e2b) at the front of the
+// arguments, else $MAXSHELL_SAGE_MODEL, else Pro.
 const ALIASES = { flash: 'e2b', pro: 'e4b' };
 function pick(args) {
   const flag = /^--(e2b|e4b|flash|lite|pro|ultra)$/i.exec(args[0] || '');
@@ -81,13 +64,8 @@ function pick(args) {
   key = ALIASES[key] || key;
   return { model: MODELS[key], key, args, chosen: !!(flag || process.env.MAXSHELL_SAGE_MODEL), flagged: !!flag };
 }
-// Sage Ultra and Sage Lite are chat models in a chat and coding models in
-// sage code.
-function modelFor(key, mode) {
-  if (key === 'ultra') return mode === 'code' ? MODELS.ultra : MODELS.ultrachat;
-  if (key === 'lite') return mode === 'code' ? MODELS.litecode : MODELS.lite;
-  return MODELS[key];
-}
+// Sage Lite is a chat model in a chat and a coding model in sage code.
+const modelFor = (key, mode) => (key === 'lite' && mode === 'code' ? MODELS.litecode : MODELS[key]);
 
 // % of memory free — on a Mac the GPU's memory is the same memory.
 // MAXSHELL_SAGE_FREE stands in for it in tests.
@@ -97,17 +75,16 @@ function freeMemory() {
   return Number.isFinite(n) ? n : 100;
 }
 
-// When no model was asked for and there isn't room for E4B, E2B (if it's set
-// up) instead: { key, why }.
+// When no model was asked for and there isn't room for Pro, Flash (if it's
+// set up) instead: { key, why }.
 function fallback(key, chosen) {
   if (chosen || key !== 'e4b' || !ready(MODELS.e2b)) return { key };
   const free = freeMemory();
   if (free >= MODELS.e4b.needFree) return { key };
   return { key: 'e2b', why: `Only ${free}% of memory is free and Sage Pro needs ${MODELS.e4b.needFree}%, so this is Sage Flash, the lighter model.` };
 }
-const training = () => spawnSync('pgrep', ['-f', 'ai/mx2/train.py']).status === 0;
 
-// transformers 5 needs Python 3.10+; macOS's /usr/bin/python3 is 3.9.
+// mlx-lm needs Python 3.10+; macOS's /usr/bin/python3 is 3.9.
 const recent = (py) => spawnSync(py, ['-c', 'import sys; sys.exit(sys.version_info < (3, 10))'], { stdio: 'ignore' }).status === 0;
 const PYTHONS = ['python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3.14', 'python3',
   '/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/Library/Frameworks/Python.framework/Versions/Current/bin/python3'];
@@ -122,10 +99,10 @@ function setup(m, write, err) {
   fs.mkdirSync(d, { recursive: true });
   const run = (cmd, args) => spawnSync(cmd, args, { stdio: 'inherit' }).status === 0;
   const venv = path.join(base(), 'venv');
-  // A venv made from a Python older than 3.10 (macOS's own is 3.9) can't have
-  // transformers 5; it's ours, so make it again.
+  // A venv made from a Python older than 3.10 (macOS's own is 3.9) can't run
+  // mlx-lm; it's ours, so make it again.
   if (fs.existsSync(python()) && !recent(python()) && !process.env.MAXSHELL_GEMMA_PYTHON) {
-    write('Sage’s Python is too old for transformers 5 — making it again…\n');
+    write('Sage’s Python is too old — making it again…\n');
     fs.rmSync(venv, { recursive: true, force: true });
   }
   if (!fs.existsSync(python())) {
@@ -134,58 +111,18 @@ function setup(m, write, err) {
     write(`Making a Python for Sage from ${py}…\n`);
     if (!run(py, ['-m', 'venv', '--system-site-packages', venv])) { err('sage: couldn’t make the venv\n'); return 1; }
   }
-  const hasTorch = spawnSync(python(), ['-c', 'import torch'], { stdio: 'ignore' }).status === 0;
-  write(hasTorch ? 'Installing transformers…\n' : 'Installing PyTorch and transformers…\n');
-  if (!run(python(), ['-m', 'pip', 'install', '-q', 'transformers>=5.5', ...(hasTorch ? [] : ['torch'])])) { err('sage: pip install failed\n'); return 1; }
-  if (m.mlx) {
-    write('Installing mlx-lm…\n');
-    if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm>=0.32'])) { err('sage: pip install failed\n'); return 1; }
-    if (m.quantize) return quantize(m, d, write, err);
-    write(`Downloading ${m.repo} (${m.size}) into ${d}…\n`);
-    const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
-    if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
-    write(`${m.label} is ready — try: ${m.try}\n`);
-    return 0;
-  }
-  write(`Fetching the config and tokenizer from ${m.repo}…\n`);
-  const fetch = (files) => `from huggingface_hub import hf_hub_download\nfor f in ${JSON.stringify(files)}:\n    hf_hub_download(${JSON.stringify(m.repo)}, f, local_dir='.')\n`;
-  if (spawnSync(python(), ['-c', fetch(FILES)], { cwd: d, stdio: 'inherit', env: hubEnv() }).status !== 0) { err('sage: download failed\n'); return 1; }
-  const model = path.join(d, 'model.safetensors');
-  if (!fs.existsSync(model)) {
-    write(`Downloading ${m.repo}'s model.safetensors (${m.size}) into ${d}…\n`);
-    if (spawnSync(python(), ['-c', fetch(['model.safetensors'])], { cwd: d, stdio: 'inherit', env: hubEnv() }).status !== 0) { err('sage: download failed\n'); return 1; }
-  }
-  write(`${m.label} is ready — try: sage${m === MODELS[DEFAULT] ? '' : ` --${m.flag}`}\n`);
+  write('Installing mlx-lm…\n');
+  // 0.32 runs Gemma 4 and Ministral 3
+  if (!run(python(), ['-m', 'pip', 'install', '-q', 'mlx-lm>=0.32', 'transformers>=5.5'])) { err('sage: pip install failed\n'); return 1; }
+  write(`Downloading ${m.repo} (${m.size}) into ${d}…\n`);
+  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
+  if (spawnSync(python(), ['-c', snap], { cwd: d, stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
+  write(`${m.label} is ready — try: sage${m === MODELS.litecode ? ' code' : ''}${m === MODELS[DEFAULT] ? '' : ` --${m.flag}`}\n`);
   return 0;
 }
 
-// Downloads the full model into a folder of its own, makes the 4-bit MLX
-// build from it into the model's folder, and removes the download.
-function quantize(m, d, write, err) {
-  if (ready(m)) { write(`${m.label} is ready — try: ${m.try}\n`); return 0; }
-  const src = `${d}.download`;
-  const out = `${d}.part`;
-  for (const p of [src, out]) fs.rmSync(p, { recursive: true, force: true }); // ours, from a setup cut short
-  write(`Downloading ${m.repo} (${m.size})…\n`);
-  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir=${JSON.stringify(src)}, allow_patterns=['*.json', '*.safetensors', '*.txt', '*.jinja'])\n`;
-  if (spawnSync(python(), ['-c', snap], { stdio: 'inherit', env: { ...hubEnv(), HF_HUB_DISABLE_XET: '1' } }).status !== 0) { err('sage: download failed\n'); return 1; }
-  write(`Making it 4-bit, into ${d}…\n`);
-  const ok = spawnSync(python(), ['-m', 'mlx_lm', 'convert', '--hf-path', src, '-q', '--q-bits', '4', '--q-group-size', '64', '--mlx-path', out], { stdio: 'inherit', env: hubEnv() }).status === 0;
-  fs.rmSync(src, { recursive: true, force: true });
-  if (!ok) { fs.rmSync(out, { recursive: true, force: true }); err('sage: converting the model failed\n'); return 1; }
-  fs.rmSync(d, { recursive: true, force: true }); // the empty folder setup made
-  fs.renameSync(out, d);
-  write(`${m.label} is ready — try: ${m.try}\n`);
-  return 0;
-}
-
-// Where the engine runs and what it's told: the model folder, and the CPU
-// while mx training has the GPU.
-function engineEnv(m, shell) {
-  const env = { ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_SAGE_NAME: m.name, MAXSHELL_NODE: process.execPath };
-  if (!env.MAXSHELL_SAGE_DEVICE && !m.mlx && training()) env.MAXSHELL_SAGE_DEVICE = 'cpu'; // MLX shares the GPU
-  return env;
-}
+// What the engine is told: which model, and where it is.
+const engineEnv = (m, shell) => ({ ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_SAGE_NAME: m.name, MAXSHELL_NODE: process.execPath });
 
 // sage image's prompt writer: Sage Pro (Sage Flash when memory is short or
 // Pro isn't set up) as a command that turns a request into a detailed
@@ -206,16 +143,13 @@ const HELP = `sage — an AI that runs entirely on your Mac
   sage video <prompt>  a short clip, made here (sage video --help)
   sage code [task]     Sage Code: a coding agent that reads, writes and edits
                        files and runs commands here — each one asked first
-  sage --ultra …       use Sage Ultra, the smartest (needs ~15 GB of memory) —
-                       in sage code, a coding model, the best at code
+  sage --ultra …       use Sage Ultra, the smartest (needs ~15 GB of memory)
   sage --flash …       use Sage Flash, twice as fast as Pro (MAXSHELL_SAGE_MODEL=flash
                        makes it the default; Sage Pro is, unless memory is short)
-  sage --lite …        use Sage Lite, tiny and the fastest of all — in sage code,
-                       a small coding model
+  sage --lite …        use Sage Lite, tiny and the fastest of all
   sage --setup         install what it needs (sage --ultra --setup for Sage Ultra,
-                       sage code --ultra --setup for the coding one,
-                       sage --flash --setup, sage --lite --setup,
-                       sage code --lite --setup)
+                       sage --flash --setup, sage --lite --setup, and
+                       sage code --lite --setup for Sage Code's Lite)
 `;
 
 function runSage(args, io, shell, name = 'sage') {

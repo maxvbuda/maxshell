@@ -371,9 +371,15 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'fenced': gemma.ultra_scan('Sure.\n\x60\x60\x60json\n{"name": "run_command", "arguments": {"command": "mkdir -p lib"}}\n\x60\x60\x60\nI made it.'),
   'pycode': gemma.ultra_scan('py:\n\x60\x60\x60python\nprint({"name": 1})\n\x60\x60\x60\nok'),
   'holding': gemma.ultra_scan('x\n\x60\x60\x60jso')[0],
-  'gscan': gemma.GemmaMlxChat.scan('Hi <|channel>thought\nthey want a greeting<channel|>there<turn|>'),
-  'gturn': gemma.GemmaMlxChat.user_turn(None, 'hey'),
-  'sscan': gemma.SmolChat.scan('Hi there.<|im_end|>'),
+  'gscan': gemma.GemmaChat.scan('Hi <|channel>thought\nthey want a greeting<channel|>there<turn|>'),
+  'gturn': gemma.GemmaChat.user_turn(None, 'hey'),
+  'qscan': gemma.QwenLiteChat.scan('<think>\n\n</think>\n\nHi there.<|im_end|>'),
+  'qturn': gemma.QwenLiteChat.user_turn(gemma.QwenLiteChat.__new__(gemma.QwenLiteChat), 'hey'),
+  'mcall': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"path": "a.py"}</s>'),
+  'mwait': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"pa'),
+  'mplain': gemma.MistralChat.scan('Done.</s>'),
+  'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
+  'ganswer': gemma.GemmaChat.answer(None, [('read_file', {})], ['x = 1']),
   'thinking': gemma.visible('<|channel>thought\nplan\n'),
   'chat': 'sage code' in gemma.system_prompt('chat') and 'introduce yourself as Sage' in gemma.system_prompt('chat'), 'code': 'edit_file' in gemma.system_prompt('code') and 'mkdir -p' in gemma.system_prompt('code')}))
 `;
@@ -397,9 +403,17 @@ print(json.dumps({'call': gemma.parse_call(raw),
   // Sage Ultra in a chat (Gemma 4 26B on MLX): Gemma's turns, its thinking hidden, no tools
   assert.deepStrictEqual(out.gscan, ['Hi there', [], null]);
   assert.strictEqual(out.gturn, '<|turn>user\nhey<turn|>\n<|turn>model\n');
-  // Sage Lite (SmolLM2): ChatML, no tools
-  assert.deepStrictEqual(out.sscan, ['Hi there.', [], null]);
+  // Sage Lite in a chat (Qwen3-1.7B): ChatML with thinking off, no tools
+  assert.deepStrictEqual(out.qscan, ['Hi there.', [], null]);
+  assert.strictEqual(out.qturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n');
+  // Sage Lite in sage code (Ministral 3): [TOOL_CALLS]name[ARGS]{json}, cut where the JSON ends
+  assert.deepStrictEqual(out.mcall, ['Let me look.', [['read_file', { path: 'a.py' }]], 'Let me look.[TOOL_CALLS]read_file[ARGS]{"path": "a.py"}'.length]);
+  assert.deepStrictEqual(out.mwait, ['Let me look.', [], null]);
+  assert.deepStrictEqual(out.mplain, ['Done.', [], null]);
   assert.strictEqual(out.thinking, ''); // not even a newline while it thinks
+  // Gemma on MLX calls tools as on PyTorch: cut where the call ends, the result in the same turn
+  assert.deepStrictEqual(out.gcall, ['Let me look.', [['read_file', { path: 'a.py' }]], 'Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|>'.length]);
+  assert.strictEqual(out.ganswer, '<|tool_response>response:read_file{result:<|"|>x = 1<|"|>}<tool_response|>');
   assert.strictEqual(out.uresp, '<|im_start|>user\n<tool_response>\nexit 0\n</tool_response>\n<tool_response>\ntext\n</tool_response><|im_end|>\n<|im_start|>assistant\n');
 });
 
@@ -414,23 +428,25 @@ test('sage --help names chat and code; sage code needs a terminal', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
-test('without room for E4B, Sage picks E2B unless a model was asked for', () => {
+test('without room for Pro, Sage picks Flash unless a model was asked for', () => {
   const gemma = require('../src/gemma');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-models-'));
   const was = { ...process.env };
   try {
     process.env.MAXSHELL_GEMMA = dir;
     process.env.MAXSHELL_GEMMA_PYTHON = process.execPath;
-    for (const f of [...gemma.FILES, 'model.safetensors']) fs.writeFileSync(path.join(dir, f), '');
-    process.env.MAXSHELL_SAGE_FREE = '30';
+    const flash = path.join(dir, 'flash');
+    fs.mkdirSync(flash);
+    for (const f of [...gemma.FILES, 'model.safetensors']) fs.writeFileSync(path.join(flash, f), '');
+    process.env.MAXSHELL_SAGE_FREE = '20';
     const auto = gemma.fallback('e4b', false);
     assert.strictEqual(auto.key, 'e2b');
-    assert.match(auto.why, /30% of memory is free and Sage Pro needs 40%/);
+    assert.match(auto.why, /20% of memory is free and Sage Pro needs 30%/);
     assert.strictEqual(gemma.fallback('e4b', true).key, 'e4b');
     process.env.MAXSHELL_SAGE_FREE = '55';
     assert.strictEqual(gemma.fallback('e4b', false).key, 'e4b');
-    fs.rmSync(path.join(dir, 'model.safetensors'));
-    process.env.MAXSHELL_SAGE_FREE = '30';
+    fs.rmSync(path.join(flash, 'model.safetensors'));
+    process.env.MAXSHELL_SAGE_FREE = '20';
     assert.strictEqual(gemma.fallback('e4b', false).key, 'e4b'); // E2B isn't set up
     delete process.env.MAXSHELL_SAGE_MODEL;
     assert.strictEqual(gemma.pick(['hi']).chosen, false);
@@ -572,43 +588,45 @@ test('sage image from the shell saves a PNG here and never overwrites', () => {
   fs.rmSync(work, { recursive: true });
 });
 
-test('Sage Ultra: Gemma 4 26B in a chat, the coding model in sage code', () => {
+test('the models: Gemma 4 for Ultra, Pro and Flash; Lite differs in sage code', () => {
   const gemma = require('../src/gemma');
-  assert.strictEqual(gemma.modelFor('ultra', 'chat').repo, 'mlx-community/gemma-4-26b-a4b-it-4bit');
-  assert.strictEqual(gemma.modelFor('ultra', 'code').repo, 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit');
-  assert.strictEqual(gemma.modelFor('e4b', 'chat'), gemma.MODELS.e4b);
-  assert.strictEqual(gemma.modelFor('lite', 'chat').repo, 'HuggingFaceTB/SmolLM2-1.7B-Instruct');
-  assert.strictEqual(gemma.modelFor('lite', 'code').repo, 'mlx-community/Qwen2.5-Coder-3B-Instruct-4bit');
+  for (const mode of ['chat', 'code']) {
+    assert.strictEqual(gemma.modelFor('ultra', mode).repo, 'mlx-community/gemma-4-26b-a4b-it-4bit');
+    assert.strictEqual(gemma.modelFor('e4b', mode).repo, 'mlx-community/gemma-4-e4b-it-4bit');
+    assert.strictEqual(gemma.modelFor('e2b', mode).repo, 'mlx-community/gemma-4-e2b-it-4bit');
+  }
+  assert.strictEqual(gemma.modelFor('lite', 'chat').repo, 'mlx-community/Qwen3-1.7B-4bit');
+  assert.strictEqual(gemma.modelFor('lite', 'code').repo, 'mlx-community/Ministral-3-3B-Instruct-2512-4bit');
   const sh = path.join(__dirname, '..', 'bin', 'maxshell.js');
   const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-ultra-'));
   const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_GEMMA_PYTHON: process.execPath };
   const r = spawnSync('node', [sh, '-c', 'sage --ultra hello'], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /Sage Ultra isn’t set up — run: sage --ultra --setup/);
-  const c = spawnSync('node', [sh, '-c', 'sage code --ultra hello'], { env, encoding: 'utf8' });
-  assert.match(c.stderr, /run: sage code --ultra --setup/);
+  const c = spawnSync('node', [sh, '-c', 'sage code --lite hello'], { env, encoding: 'utf8' });
+  assert.match(c.stderr, /Sage Lite isn’t set up — run: sage code --lite --setup/);
   // the shards the index names must all be there
-  const d = path.join(gem, 'ultra-chat');
+  const d = path.join(gem, 'ultra');
   fs.mkdirSync(d);
-  for (const f of gemma.MODELS.ultrachat.files) fs.writeFileSync(path.join(d, f), '{}');
+  for (const f of gemma.FILES) fs.writeFileSync(path.join(d, f), '{}');
   fs.writeFileSync(path.join(d, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { a: 'model-1.safetensors', b: 'model-2.safetensors' } }));
   fs.writeFileSync(path.join(d, 'model-1.safetensors'), '');
   process.env.MAXSHELL_GEMMA = gem;
   process.env.MAXSHELL_GEMMA_PYTHON = process.execPath;
   try {
-    assert.ok(!gemma.ready(gemma.MODELS.ultrachat));
+    assert.ok(!gemma.ready(gemma.MODELS.ultra));
     fs.writeFileSync(path.join(d, 'model-2.safetensors'), '');
-    assert.ok(gemma.ready(gemma.MODELS.ultrachat));
+    assert.ok(gemma.ready(gemma.MODELS.ultra));
   } finally {
     delete process.env.MAXSHELL_GEMMA;
     delete process.env.MAXSHELL_GEMMA_PYTHON;
     fs.rmSync(gem, { recursive: true });
   }
-  // a chat's dropdown: Ultra is the smartest; in sage code, the best at code
+  // the dropdown: Ultra is the smartest; Lite is smaller in a chat than in sage code
   const a = app();
   a.onEvent({ ev: 'ready' });
   a.openMenu();
-  assert.match(text(render(a, 90, 24, 0)), /Sage Ultra[\s\S]*smartest/);
+  assert.match(text(render(a, 90, 24, 0)), /Sage Ultra[\s\S]*smartest[\s\S]*Sage Lite[\s\S]*~1 GB/);
   a.menu = null;
   a.setInput('/model ultra');
   a.submit();
@@ -617,7 +635,7 @@ test('Sage Ultra: Gemma 4 26B in a chat, the coding model in sage code', () => {
   const b = app({ mode: 'code' });
   b.onEvent({ ev: 'ready' });
   b.openMenu();
-  assert.match(text(render(b, 90, 24, 0)), /Sage Ultra[\s\S]*best at code[\s\S]*Sage Lite[\s\S]*~2 GB/);
+  assert.match(text(render(b, 90, 24, 0)), /Sage Ultra[\s\S]*smartest[\s\S]*Sage Lite[\s\S]*~3 GB/);
   b.menu = null;
   b.setInput('/model lite');
   b.submit();
