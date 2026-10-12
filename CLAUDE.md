@@ -124,7 +124,14 @@ conversation). Conversations are kept by `src/conversations.js` (one JSON each
 in ~/Library/Application Support/Sage/Conversations, shared with the Mac app;
 `MAXSHELL_SAGE_HISTORY` in tests): `SageApp.resume` shows one and sends the
 engine `{op: 'restore', turns}`, which each chat class writes back as past
-turns (`past_turn`), so Sage remembers — also after a model switch. `sage video` alone opens video chat (`SageApp` mode
+turns (`past_turn`), so Sage remembers — also after a model switch. After
+each answer the engine writes a suggested next message (`MlxChat.suggest`:
+asked apart from the conversation with the answer begun for it, then the
+cache wound back; stops if a command arrives) → `{ev: 'suggest'}`, shown in
+the empty box (Tab takes it). sage.py's serve keeps several conversations
+by `conv` (up to 4 KV caches, older ones kept as text); the bridge keeps
+every Mac conversation alive as its own SageApp, sharing one engine per
+model, and saves them all. `sage video` alone opens video chat (`SageApp` mode
 `video`). Tests use `test/fake-wan.js` and `test/fake-mmaudio.js`
 (`MAXSHELL_VIDEO_BIN`, `MAXSHELL_AUDIO_BIN`). Off a terminal, sage.py
 prints replies through `node src/markdown.js` (streaming markdown +

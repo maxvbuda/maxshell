@@ -83,6 +83,13 @@ struct Sidebar: View {
                                     Text(conv.title).lineLimit(1)
                                     if conv.mode == .code { Text((conv.root as NSString).lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                                 }
+                                Spacer(minLength: 0)
+                                // still at it in the background, or waiting for you
+                                if (sage.state.asking ?? []).contains(conv.id.uuidString) {
+                                    Image(systemName: "hand.raised.fill").font(.caption).foregroundStyle(.orange).help("Waiting for your OK")
+                                } else if (sage.state.working ?? []).contains(conv.id.uuidString) {
+                                    ProgressView().controlSize(.mini).help("Still working")
+                                }
                             }
                             .tag(conv.id)
                             .contextMenu {
@@ -205,7 +212,7 @@ struct StatusPill: View {
     func label(_ s: SageState) -> String {
         switch s.status {
         case "loading": return "waking \(s.models.first { $0.key == s.model }?.label ?? "Sage")…"
-        case "thinking": return "thinking"
+        case "thinking": return s.queued == true ? "waiting for your other conversation" : "thinking"
         case "writing": return "writing"
         case "waiting": return "waiting for you"
         case "running": return "running a command"
@@ -324,18 +331,50 @@ struct Composer: View {
     var body: some View {
         let busy = (sage.state.busy || sage.state.drawing)
         VStack(spacing: 6) {
+            // Sage's guess at your next message: click it, or Tab in the empty box
+            if let s = suggestion {
+                HStack {
+                    Button { draft = s; focused = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.turn.down.right").font(.caption)
+                            Text(s).lineLimit(1)
+                            Text("Tab").font(.caption2.bold()).padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.5)))
+                        }
+                        .font(.callout)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.1)))
+                        .overlay(Capsule().stroke(Color.accentColor.opacity(0.3)))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Use this suggestion")
+                    Spacer()
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 if sage.mode == .image {
                     Button { pickPicture() } label: { Image(systemName: "photo.badge.plus").font(.title3) }
                         .buttonStyle(.borderless).help("Change a picture of yours")
                         .padding(.bottom, 4)
                 }
-                TextField(placeholder, text: $draft, axis: .vertical)
+                TextField(suggestion ?? placeholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
                     .lineLimit(1...10)
                     .focused($focused)
                     .onSubmit(send)
+                    .onKeyPress(.escape) {
+                        guard sage.state.waiting else { return .ignored }
+                        sage.answer("n")
+                        return .handled
+                    }
+                    .onKeyPress(.tab) {
+                        guard draft.isEmpty, let s = suggestion else { return .ignored }
+                        draft = s
+                        return .handled
+                    }
                     .padding(.vertical, 4)
                 Button(action: busy ? sage.stop : send) {
                     Image(systemName: busy ? "stop.fill" : "arrow.up")
@@ -357,9 +396,16 @@ struct Composer: View {
         .frame(maxWidth: 860)
         .frame(maxWidth: .infinity)
         .onAppear { focused = true }
+        .animation(.easeOut(duration: 0.2), value: suggestion)
+    }
+
+    var suggestion: String? {
+        guard draft.isEmpty, !sage.state.busy, let s = sage.state.suggestion, !s.isEmpty else { return nil }
+        return s
     }
 
     var placeholder: String {
+        if sage.state.waiting { return "Return or y — yes · a — yes to all · n or Esc — no" }
         switch sage.mode {
         case .chat: return "Ask Sage anything…"
         case .code: return "Tell Sage what to build or fix…"
@@ -374,6 +420,15 @@ struct Composer: View {
 
     func send() {
         let t = draft
+        // Sage is asking about a change or command: the box answers it
+        if sage.state.waiting {
+            let word = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let choice = ["", "y", "yes", "ok", "okay", "sure", "go", "do it"].contains(word) ? "y"
+                : ["a", "all", "always", "yes to all"].contains(word) ? "a"
+                : ["n", "no", "nope", "stop", "don't"].contains(word) ? "n" : nil
+            if let choice { draft = ""; sage.answer(choice) }
+            return
+        }
         guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if sage.state.busy && !t.hasPrefix("/") { return }
         draft = ""

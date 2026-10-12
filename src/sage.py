@@ -448,9 +448,10 @@ class MlxChat:
             self.rewind(len(self.tokens))
         return self.tokens[self.fed():]
 
-    def generate(self, text_after, show, stop, temperature):
+    def generate(self, text_after, show, stop, temperature, halt=None, limit=None, ban=()):
         """Adds text_after to the conversation and lets the model write; returns
-        its raw output."""
+        its raw output. halt() true stops it too; limit caps its length; the
+        tokens in ban are never written."""
         from mlx_lm import stream_generate
         from mlx_lm.sample_utils import make_sampler, make_logits_processors
         new = self.encode(text_after)
@@ -462,10 +463,17 @@ class MlxChat:
             self.mark()
         sampler = make_sampler(temp=temperature, **self.SAMPLING)
         processors = make_logits_processors(repetition_penalty=self.REPEAT)
+        if ban:
+            ids = [self.tok.convert_tokens_to_ids(t) for t in ban]
+
+            def banned(tokens, logits):
+                logits[:, ids] = -float('inf')
+                return logits
+            processors = [*processors, banned]
         raw, shown, thought, out, cut = '', 0, 0, [], None
         base = len(self.tokens)
         began = time.time()
-        for r in stream_generate(self.e.model, self.tok, prompt, max_tokens=self.max_tokens, prompt_cache=self.cache,
+        for r in stream_generate(self.e.model, self.tok, prompt, max_tokens=limit or self.max_tokens, prompt_cache=self.cache,
                                  sampler=sampler, logits_processors=processors):
             if r.finish_reason is None:
                 out.append(r.token)
@@ -481,7 +489,7 @@ class MlxChat:
             if len(seen) > shown:
                 show(seen[shown:])
                 shown = len(seen)
-            if stop['hit'] or cut is not None:
+            if stop['hit'] or cut is not None or (halt and halt()):
                 break  # a whole tool call: stop there, so it waits for the result
         self.seconds += time.time() - began
         self.generated += len(out)
@@ -509,6 +517,44 @@ class MlxChat:
 
     def user_turn(self, question):
         return f'<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n'
+
+    SUGGEST = {
+        'chat': 'Based on our conversation, what will I most likely say to you next? Write my next message, short, '
+                'the way I would type it.',
+        'code': 'Based on our conversation, what will I most likely ask you to do next in this project? Write my next '
+                'message, short, the way I would type it.',
+    }
+    SUGGEST_START = 'My likely next message: "'  # its answer, begun for it: only the message is left to write
+
+    def suggest(self, halt=None):
+        """What the user will likely say next, written apart from the
+        conversation — the cache is wound back after, as if it never
+        happened. Stops as soon as halt() says a new command came. Returns ''
+        if none."""
+        if self.mode not in self.SUGGEST:
+            return ''
+        n0, kept = len(self.tokens), (self.generated, self.seconds, list(self.turns))
+        self.feed(self.pending())
+        self.mark()
+        saved = getattr(self, 'saved', None)
+        try:
+            ask = self.user_turn(self.SUGGEST[self.mode]) + self.no_thought() + self.SUGGEST_START
+            raw = self.generate(ask, lambda s: None, {'hit': False}, 0.7, halt, 40, self.NO_THOUGHT)
+        finally:
+            if saved is not None:
+                self.saved = saved
+            self.rewind(n0)
+            self.tokens = self.tokens[:n0]
+            self.generated, self.seconds, self.turns = kept
+        if halt and halt():
+            return ''
+        return clean_suggestion(raw)
+
+    NO_THOUGHT = ()  # tokens that would start thinking, not wanted in a suggestion
+
+    def no_thought(self):
+        """What makes the answer skip thinking (most chats already do)."""
+        return ''
 
     def past_turn(self, question, said):
         """An earlier exchange, as if it had just happened (for restore)."""
@@ -593,7 +639,7 @@ class GemmaChat(MlxChat):
     @staticmethod
     def thought(raw):
         return ''.join(m.group(1) if m.group(2) else held(m.group(1), '<channel|>')
-                       for m in re.finditer(r'<\|channel>(?:thought\n)?(.*?)(<channel\|>|\Z)', raw, re.S))
+                       for m in re.finditer(r'<\|channel>thought\n(.*?)(<channel\|>|\Z)', raw, re.S))  # once its label is whole
 
     def temperature(self):
         if self.mode.startswith(('image', 'video')):
@@ -605,6 +651,11 @@ class GemmaChat(MlxChat):
 
     def past_turn(self, question, said):
         return f'{self.user_turn(question)}{said}<turn|>\n'
+
+    NO_THOUGHT = ('<|channel>',)
+
+    def no_thought(self):
+        return '<|channel>thought\n<channel|>'  # an empty thought
 
 
 THINK = re.compile(r'<think>.*?(</think>|\Z)\s*', re.S)
@@ -633,6 +684,18 @@ class QwenLiteChat(MlxChat):
 
     def user_turn(self, question):
         return super().user_turn(question) + '<think>\n\n</think>\n\n'
+
+
+def clean_suggestion(text):
+    """One short line the user could send, from the user turn the model
+    wrote: up to the turn's end, no quotes, labels or markdown."""
+    text = re.split(r'"|”|\[/INST\]|<\|im_end\|>|<turn\|>|</s>|<\|im_start\|>|<\|turn>', text)[0]  # up to its closing quote
+    lines = [l.strip() for l in visible(text).split('\n') if l.strip()]
+    if not lines:
+        return ''
+    line = re.sub(r'^(\*\*)?(you|user|me|next message|suggestion)(\*\*)?\s*:\s*', '', lines[0], flags=re.I)
+    line = line.strip('*_`"“”\' ').strip()
+    return line if 2 <= len(line) <= 120 else ''
 
 
 class QwenUltraChat(MlxChat):
@@ -690,6 +753,13 @@ class QwenUltraChat(MlxChat):
             return 0.7
         return 0.6 if self.mode == 'code' else 1.0  # Qwen's advice for thinking
 
+    def suggest(self, halt=None):
+        level, self.level = self.level, 'off'  # a quick line: no thinking
+        try:
+            return super().suggest(halt)
+        finally:
+            self.level = level
+
     def start(self):
         return self.NO_THINKING if self.level == 'off' else '<think>\n'
 
@@ -732,6 +802,7 @@ class MistralChat(MlxChat):
 
     def user_turn(self, question):
         return f'[INST]{question}[/INST]'
+
 
     def past_turn(self, question, said):
         return f'[INST]{question}[/INST]{said}</s>'
@@ -778,11 +849,21 @@ def quiet():
 def serve(cmd_path, mode):
     """The engine for sage's app. Commands (one JSON object a line, appended to
     cmd_path): {"op": "ask", "text"}, {"op": "result", "text"} answering a
-    tool event, {"op": "image-prompt", "id", "prompt", "edit", "context"}
-    (/image: a detailed prompt, written apart from the conversation),
-    {"op": "reset"}, {"op": "quit"}. Events on stdout: loading, ready, text
-    {s}, tool {name, args}, done {stopped, tokens, seconds}, image-prompt {id,
-    text, stopped}, error {text}. SIGINT stops an answer."""
+    tool event, {"op": "restore", "turns"}, {"op": "think", "level"},
+    {"op": "suggest", "on"}, {"op": "cancel"} (a question not yet begun),
+    {"op": "image-prompt", "id", "prompt", "edit",
+    "context"} (/image: a detailed prompt, written apart from the
+    conversation), {"op": "reset"}, {"op": "drop"}, {"op": "quit"}. Events on
+    stdout: loading, ready, think {s}, text {s}, tool {name, args}, done
+    {stopped, tokens, seconds}, suggest {text}, image-prompt {id, text,
+    stopped}, error {text}. SIGINT stops an answer.
+
+    Each command may name a conversation ("conv"; "main" if not), and the
+    events about it carry it: the engine keeps several, each with its own
+    memory, and answers them one at a time — so one can carry on while the
+    app shows another (Sage for Mac)."""
+    import collections
+
     def emit(**ev):
         sys.stdout.write(json.dumps(ev) + '\n')
         sys.stdout.flush()
@@ -795,13 +876,13 @@ def serve(cmd_path, mode):
     emit(ev='loading', model=NAME)
     quiet()
     new_chat, device = open_engine()
-    chat = new_chat(mode)
     emit(ev='ready', model=NAME, device=device)
     parent = os.getppid()
     cmds = open(cmd_path, encoding='utf-8')
     pending = ''
+    later = collections.deque()  # commands for other conversations, while one waits on a tool
 
-    def next_cmd():
+    def read_cmd():
         nonlocal pending
         while True:
             line = cmds.readline()
@@ -813,39 +894,103 @@ def serve(cmd_path, mode):
                 return {'op': 'quit'}
             time.sleep(0.03)
 
-    def tool(name):
-        def run(**args):
-            emit(ev='tool', name=name, args=args)
-            while True:
-                cmd = next_cmd()
-                if cmd.get('op') == 'result':
-                    return cmd.get('text', '')
-                if cmd.get('op') == 'quit':
-                    sys.exit(0)
-        return run
+    def next_cmd():
+        return later.popleft() if later else read_cmd()
 
-    tools = {t['function']['name']: tool(t['function']['name']) for t in CODE_TOOLS} if mode == 'code' else None
+    def drain():
+        """Reads the commands already sent, without waiting, into later."""
+        nonlocal pending
+        while os.fstat(cmds.fileno()).st_size > cmds.tell():
+            pending += cmds.readline()
+            if not pending.endswith('\n'):
+                break
+            later.append(json.loads(pending))
+            pending = ''
+
+    def cancelled(conv):
+        """Whether a question still waiting was taken back ({"op": "cancel"})."""
+        drain()
+        for c in list(later):
+            if c.get('op') == 'cancel' and c.get('conv', 'main') == conv:
+                later.remove(c)
+                return True
+        return False
+
+    def tools_for(conv):
+        def tool(name):
+            def run(**args):
+                emit(ev='tool', conv=conv, name=name, args=args)
+                while True:
+                    cmd = read_cmd()
+                    if cmd.get('op') == 'result' and cmd.get('conv', 'main') == conv:
+                        return cmd.get('text', '')
+                    if cmd.get('op') == 'quit':
+                        sys.exit(0)
+                    later.append(cmd)  # for after this answer
+            return run
+        return {t['function']['name']: tool(t['function']['name']) for t in CODE_TOOLS} if mode == 'code' else None
+
     thinking = THINKING
+    suggesting = os.environ.get('MAXSHELL_SAGE_SUGGEST') != '0'
+    chats = {}      # conversation → its chat, the most recently used last
+    forgotten = {}  # conversation → its turns, once its memory was let go
+    MAX_CHATS = 4   # each keeps a KV cache in memory
+
+    def chat_for(conv):
+        if conv in chats:
+            chats[conv] = chats.pop(conv)
+            return chats[conv]
+        while len(chats) >= MAX_CHATS:  # let the oldest go: its words are kept, read again if it comes back
+            old_id = next(iter(chats))
+            old = chats.pop(old_id)
+            forgotten[old_id] = [[q, a] for (_, q), (_, a) in zip(old.turns[0::2], old.turns[1::2])]
+        chat = new_chat(mode)
+        chat.set_thinking(thinking)
+        if conv in forgotten:
+            chat.restore(forgotten.pop(conv))
+        chats[conv] = chat
+        return chat
+
+    def new_command():
+        """Whether a command is waiting (it stops a suggestion)."""
+        try:
+            return bool(later) or bool(pending) or os.fstat(cmds.fileno()).st_size > cmds.tell()
+        except (OSError, ValueError):
+            return False
+
     while True:
         cmd = next_cmd()
         op = cmd.get('op')
+        conv = cmd.get('conv', 'main')
         if op == 'quit':
             return 0
-        if op == 'reset':
-            chat = new_chat(mode)
-            chat.set_thinking(thinking)
-            emit(ev='ready', model=NAME, device=device)
+        if op in ('reset', 'drop'):
+            chats.pop(conv, None)
+            forgotten.pop(conv, None)
+            if op == 'reset':
+                emit(ev='ready', conv=conv, model=NAME, device=device)
         elif op == 'restore':
-            chat.restore(cmd.get('turns') or [])
+            chat_for(conv).restore(cmd.get('turns') or [])
         elif op == 'think':
             thinking = cmd.get('level')
-            chat.set_thinking(thinking)
+            chat_for(conv).set_thinking(thinking)
         elif op == 'image-prompt':
             text, stopped = write_image_prompt(new_chat, cmd)
-            emit(ev='image-prompt', id=cmd.get('id'), text=text, stopped=stopped)
+            emit(ev='image-prompt', conv=conv, id=cmd.get('id'), text=text, stopped=stopped)
         elif op == 'ask':
-            stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', s=s), tools, lambda s: emit(ev='think', s=s))
-            emit(ev='done', stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
+            if cancelled(conv):  # stopped before its turn came
+                emit(ev='done', conv=conv, stopped=True, tokens=0, seconds=0)
+                continue
+            chat = chat_for(conv)
+            stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', conv=conv, s=s), tools_for(conv),
+                                 lambda s: emit(ev='think', conv=conv, s=s))
+            emit(ev='done', conv=conv, stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
+            if suggesting and not stopped:
+                text = chat.suggest(new_command)
+                if text:
+                    emit(ev='suggest', conv=conv, text=text)
+        elif op == 'suggest':
+            suggesting = bool(cmd.get('on'))
 
 
 def clean_prompt(text):

@@ -206,6 +206,20 @@ test('the wrapper actually starts maxshell, passing arguments through', () => {
   assert.strictEqual(r.stdout, 'hi there\n');
 });
 
+test('~/.maxshell/bin comes first on PATH, so tools put there (uv) are found', () => {
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxbin-'));
+  fs.writeFileSync(path.join(dir, 'mytool'), '#!/bin/sh\necho from maxshell bin\n', { mode: 0o755 });
+  const env = { ...process.env, MAXSHELL_WRAPPER: path.join(dir, 'maxshell'), MAXSHELL_SETUP: '0' };
+  const bin = path.resolve(__dirname, '..', 'bin', 'maxshell.js');
+  const r = spawnSync(process.execPath, [bin, '-c', 'mytool; echo $PATH'], { encoding: 'utf8', env });
+  const [said, p] = r.stdout.trim().split('\n');
+  assert.strictEqual(said, 'from maxshell bin');
+  assert.strictEqual(p.split(':')[0], dir);
+  assert.strictEqual(p.split(':').filter((x) => x === dir).length, 1); // once
+  fs.rmSync(dir, { recursive: true });
+});
+
 test('login flags: -l, -i, -lc and friends', () => {
   const { spawnSync } = require('child_process');
   const bin = path.resolve(__dirname, '..', 'bin', 'maxshell.js');

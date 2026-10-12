@@ -9,7 +9,8 @@ const fs = require('fs');
 const { sleepSync } = require('../src/keys');
 
 const [cmdFile, mode] = process.argv.slice(2);
-const emit = (ev) => fs.writeSync(1, `${JSON.stringify(ev)}\n`);
+let conv = 'main'; // the conversation the command was for; events about it say so
+const emit = (ev) => fs.writeSync(1, `${JSON.stringify(ev.ev === 'loading' ? ev : { conv, ...ev })}\n`);
 const app = Number(process.env.MAXSHELL_SAGE_APP || 0);
 let pos = 0;
 let pending = '';
@@ -34,6 +35,7 @@ emit({ ev: 'loading', model: process.env.MAXSHELL_SAGE_NAME || 'E4B' });
 emit({ ev: 'ready', model: process.env.MAXSHELL_SAGE_NAME || 'E4B', device: 'cpu' });
 for (;;) {
   const cmd = next();
+  conv = cmd.conv || 'main';
   if (cmd.op === 'quit') process.exit(0);
   if (cmd.op === 'reset') { emit({ ev: 'ready' }); continue; }
   if (cmd.op === 'image-prompt') { emit({ ev: 'image-prompt', id: cmd.id, text: /mute/.test(cmd.prompt) ? '' : `DETAILED ${cmd.prompt}`, stopped: false }); continue; }
@@ -46,7 +48,9 @@ for (;;) {
     emit({ ev: 'text', s: ` Result: ${r.text}` });
   } else {
     emit({ ev: 'text', s: 'You said: ' });
+    if (/slow/.test(cmd.text)) sleepSync(600); // an answer that takes a while
     emit({ ev: 'text', s: cmd.text });
   }
   emit({ ev: 'done', stopped: false, tokens: 10, seconds: 1 });
+  if (/suggest/.test(cmd.text)) emit({ ev: 'suggest', text: 'tell me more' });
 }

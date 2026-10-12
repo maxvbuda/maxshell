@@ -51,6 +51,7 @@ final class Sage: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = Config.path
         env["MAXSHELL_IMAGE_NO_OPEN"] = "1"
+        env["MAXSHELL_SAGE_HISTORY"] = folder.path // the bridge keeps every conversation there
         p.environment = env
         p.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
         let inPipe = Pipe(), outPipe = Pipe()
@@ -87,8 +88,10 @@ final class Sage: ObservableObject {
             buffer.removeSubrange(buffer.startIndex...nl)
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any], let ev = obj["ev"] as? String else { continue }
             if ev == "state", let s = try? JSONDecoder().decode(SageState.self, from: line) {
+                let finished = Set(state.working ?? []).subtracting(s.working ?? []) // done in the background: saved by the bridge
                 state = s
                 scheduleSave()
+                if !finished.isEmpty { loadConversations() }
             } else if ev == "error", let text = obj["text"] as? String {
                 problem = text
             }
@@ -128,8 +131,7 @@ final class Sage: ObservableObject {
     // of it, so it remembers.
     func open(_ conv: Conversation) {
         guard conv.id != current else { return }
-        if state.busy || state.drawing { stop() }
-        mode = conv.mode
+        mode = conv.mode // the one you leave keeps working
         if conv.mode != .chat { root = conv.root }
         current = conv.id
         state = SageState.empty
@@ -199,19 +201,18 @@ final class Sage: ObservableObject {
         }
     }
 
+    // The sidebar entry of the conversation on screen (the bridge writes the file).
     private func saveCurrent() {
         guard let id = current, let first = state.items.first(where: { $0.type == "user" })?.text else { return }
         let title = String(first.split(separator: "\n").first ?? Substring(first)).prefix(80)
         let conv = Conversation(id: id, mode: mode, root: state.root, title: String(title), updated: Date(), model: state.model, items: state.items)
         if let i = conversations.firstIndex(where: { $0.id == id }) { conversations[i] = conv } else { conversations.insert(conv, at: 0) }
         conversations.sort { $0.updated > $1.updated }
-        let enc = JSONEncoder()
-        enc.dateEncodingStrategy = .iso8601
-        if let data = try? enc.encode(conv) { try? data.write(to: folder.appendingPathComponent("\(id.uuidString).json")) }
     }
 
     // Conversations are moved to the Trash, never deleted outright.
     func remove(_ conv: Conversation) {
+        send(["op": "close", "id": conv.id.uuidString]) // stop it first, so it isn't saved again
         let url = folder.appendingPathComponent("\(conv.id.uuidString).json")
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
         conversations.removeAll { $0.id == conv.id }

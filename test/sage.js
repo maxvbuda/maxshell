@@ -440,7 +440,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'ucall': U.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
   'uwait': U.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
   'uthought': [U.thought('\nThey want a sum.</thi'), U.thought('\nThey want a sum.\n</think>\n\nIt is 4.')],
-  'gthought': gemma.GemmaChat.thought('<|channel>thought\nplan it<channel|>Hi<|channel>more<chan'),
+  'gthought': [gemma.GemmaChat.thought('<|channel>thought\nplan it<channel|>Hi<|channel>thought\nmore<chan'), gemma.GemmaChat.thought('<|channel>thou')],
   'uturn': U.user_turn('hey'),
   'offturn': Off.user_turn('hey'), 'offscan': Off.scan('It is 4.<|im_end|>'), 'offthought': Off.thought('It is 4.'),
   'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
@@ -473,7 +473,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.deepStrictEqual(out.uthink, ['', [], null]);
   // …and its thinking, for the app to show apart (an end tag still coming is held back)
   assert.deepStrictEqual(out.uthought, ['They want a sum.', 'They want a sum.']);
-  assert.strictEqual(out.gthought, 'plan itmore');
+  assert.deepStrictEqual(out.gthought, ['plan itmore', '']); // nothing until its label is whole
   assert.deepStrictEqual(out.uanswer, ['It is 4.', [], null]);
   assert.deepStrictEqual(out.ucall.slice(0, 2), ['Let me look.\n', [['write_file', { path: 'a.py', content: 'x = 1\n' }]]]);
   assert.strictEqual(out.ucall[2], 'plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call>'.length);
@@ -707,6 +707,33 @@ const until = (f) => new Promise((res, rej) => { const t0 = Date.now(); const k 
   fs.rmSync(root, { recursive: true });
 });
 
+test('Sage suggests your next message: shown in the empty box, Tab takes it', () => {
+  const a = app();
+  a.onEvent({ ev: 'ready' });
+  a.setInput('hello');
+  a.submit();
+  a.onEvent({ ev: 'text', s: 'Hi!' });
+  a.onEvent({ ev: 'done', tokens: 2, seconds: 1 });
+  a.onEvent({ ev: 'suggest', text: 'What can you do?' });
+  let r = render(a, 70, 20, 0);
+  assert.match(text(r), /│ ❯ What can you do\?  ⇥/);
+  assert.match(text(r), /tab use suggestion/);
+  fits(r, 70);
+  for (const cols of [30, 45]) fits(render(a, cols, 20, 0), cols);
+  a.key({ name: 'tab' });
+  assert.strictEqual(a.input, 'What can you do?');
+  assert.strictEqual(a.suggestion, null);
+  // typing your own replaces it; a late one doesn't land over what you typed
+  a.setInput('');
+  a.setInput('x');
+  a.onEvent({ ev: 'suggest', text: 'late' });
+  assert.strictEqual(a.suggestion, null);
+  // /suggest off tells the engine
+  a.setInput('/suggest off');
+  a.submit();
+  assert.deepStrictEqual(a.started[0].e.sent[a.started[0].e.sent.length - 1], { op: 'suggest', on: false });
+});
+
 test('Sage remembers: conversations are kept, picked up, and survive a model switch', () => {
   const conversations = require('../src/conversations');
   const items = [
@@ -763,6 +790,42 @@ test('sage app: rebuilt when its sources are newer than the app', () => {
   assert.strictEqual(gemma.runApp(['--help'], (t) => out.push(t), () => {}), 0);
   assert.match(out.join(''), /sage app --build/);
   fs.rmSync(dir, { recursive: true });
+});
+
+test('Sage for Mac: a conversation keeps working while you look at another', () => {
+  const driver = String.raw`
+const { spawn } = require('child_process');
+const NL = String.fromCharCode(10);
+const b = spawn(process.execPath, [process.argv[1]], { stdio: ['pipe', 'pipe', 'inherit'] });
+const states = [];
+let buf = '';
+b.stdout.on('data', (d) => { buf += d; const ls = buf.split(NL); buf = ls.pop(); for (const l of ls) states.push(JSON.parse(l)); });
+const say = (o) => b.stdin.write(JSON.stringify(o) + NL);
+const until = (f) => new Promise((res, rej) => { const t0 = Date.now(); const k = setInterval(() => { const s = states.find(f); if (s) { clearInterval(k); res(s); } else if (Date.now() - t0 > 8000) { clearInterval(k); rej(new Error('timed out: ' + JSON.stringify(states[states.length - 1]))); } }, 10); });
+const said = (s, t) => s.items.some((i) => i.type === 'sage' && i.text.includes(t));
+(async () => {
+  say({ op: 'open', id: 'A', mode: 'chat', root: process.argv[2], model: 'e4b' });
+  await until((s) => s.id === 'A' && s.status === 'ready');
+  say({ op: 'submit', text: 'a slow one' });
+  await until((s) => s.id === 'A' && s.status === 'writing');
+  say({ op: 'open', id: 'B', mode: 'chat', root: process.argv[2], model: 'e4b' });   // look away mid-answer
+  await until((s) => s.id === 'B' && s.status === 'ready');
+  say({ op: 'submit', text: 'and another' });
+  const queued = await until((s) => s.id === 'B' && s.queued);
+  const working = queued.working;
+  await until((s) => s.id === 'B' && said(s, 'and another'));
+  say({ op: 'open', id: 'A' });                                                         // back again
+  const back = await until((s) => s.id === 'A' && s.status === 'ready' && said(s, 'a slow one'));
+  say({ op: 'quit' });
+  console.log(JSON.stringify({ working, back: back.items.filter((i) => i.type === 'sage').map((i) => i.text) }));
+})().catch((e) => { console.log(JSON.stringify({ error: e.message })); b.kill(); });
+`;
+  const env = { ...process.env, MAXSHELL_SAGE_ENGINE: path.join(__dirname, 'fake-sage-engine.js'), MAXSHELL_GEMMA_PYTHON: process.execPath };
+  const r = spawnSync(process.execPath, ['-e', driver, path.join(__dirname, '..', 'src', 'sagebridge.js'), os.tmpdir()], { env, encoding: 'utf8', timeout: 20000 });
+  const out = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.ok(!out.error, out.error);
+  assert.ok(out.working.includes('A'), 'A was still answering while B was shown');
+  assert.deepStrictEqual(out.back, ['You said: a slow one']); // it finished while you were away
 });
 
 test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in sage code', () => {
@@ -1063,7 +1126,7 @@ test('the engine writes /image prompts on request, apart from the chat', () => {
     e.send({ op: 'image-prompt', id: 3, prompt: 'a kite', edit: false, context: null });
     let got = null;
     for (let i = 0; i < 200 && !got; i++) { got = e.poll().find((ev) => ev.ev === 'image-prompt'); if (!got) sleepSync(20); }
-    assert.deepStrictEqual(got, { ev: 'image-prompt', id: 3, text: 'DETAILED a kite', stopped: false });
+    assert.deepStrictEqual(got, { conv: 'main', ev: 'image-prompt', id: 3, text: 'DETAILED a kite', stopped: false });
   } finally { e.close(); }
 });
 

@@ -78,10 +78,14 @@ struct SageState: Codable {
     var thinks: Bool
     var waiting: Bool
     var drawing: Bool
+    var suggestion: String?
+    var queued: Bool?            // its question waits for another conversation's answer
+    var working: [String]?       // every conversation still at it…
+    var asking: [String]?        // …or waiting for your OK
     var items: [Item]
 
     static let empty = SageState(mode: "chat", root: NSHomeDirectory(), model: "e4b", models: [], status: "loading", speed: 0,
-                                 thinking: "medium", thinks: false, waiting: false, drawing: false, items: [])
+                                 thinking: "medium", thinks: false, waiting: false, drawing: false, suggestion: nil, items: [])
 
     var busy: Bool { ["thinking", "writing", "waiting", "running", "stopping"].contains(status) }
 }

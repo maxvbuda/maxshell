@@ -162,6 +162,7 @@ class SageApp {
     this.history = [];
     this.historyAt = -1;
     this.thinking = firstThinking();
+    this.suggestion = null;     // Sage's guess at your next message, shown in the empty box
     this.useModel(model);
     if (resume) this.resume(resume);
   }
@@ -170,6 +171,7 @@ class SageApp {
   // model is told all of it, so Sage remembers.
   resume(conv) {
     this.id = conv.id;
+    this.suggestion = null;
     this.items = conversations.plain(conv.items || []);
     const last = (type) => [...this.items].reverse().find((i) => i.type === type && i.state === 'done' && i.out && fs.existsSync(i.out));
     if (this.mode === 'image' && last('image')) {
@@ -282,6 +284,9 @@ class SageApp {
         break;
       }
       case 'tool': this.endThought(); this.onTool(ev.name, ev.args || {}); break;
+      case 'suggest': // what you might say next: shown in the empty box, Tab takes it
+        if (this.status === 'ready' && !this.input && this.items.length && this.items[this.items.length - 1].type !== 'user') this.suggestion = String(ev.text || '');
+        break;
       case 'image-prompt': this.onImagePrompt(ev); break;
       case 'done': {
         this.endThought();
@@ -413,6 +418,7 @@ class SageApp {
   // --- user actions ---
 
   send(text, show = true) {
+    this.suggestion = null;
     if (show) this.items.push({ type: 'user', text });
     this.engine.send({ op: 'ask', text });
     this.status = 'thinking';
@@ -522,6 +528,14 @@ class SageApp {
         this.note(`Picked up “${conv.title}” — Sage remembers it.`);
         return true;
       }
+      case 'suggest': case 'suggestions': {
+        if (this.media) return false;
+        const on = !/^(off|no|0)$/i.test(text.slice(cmd.length + 1).trim());
+        this.engine.send({ op: 'suggest', on });
+        if (!on) this.suggestion = null;
+        this.note(on ? 'Sage suggests what you might say next (Tab takes it).' : 'No more suggestions.');
+        return true;
+      }
       case 'think': case 'thinking': {
         const arg = text.slice(cmd.length + 1).trim().toLowerCase();
         if (this.media) return false;
@@ -532,7 +546,7 @@ class SageApp {
       case 'help':
         if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
-        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /resume  pick up your last conversation  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /resume  pick up your last conversation  ·  /suggest off  no suggestions  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
@@ -557,6 +571,7 @@ class SageApp {
     this.items = [];
     this.allowAll = false;
     this.scroll = 0;
+    this.suggestion = null;
     this.id = conversations.newId(); // the old one stays kept
     if (this.status === 'ready') { this.engine.send({ op: 'reset' }); this.status = 'loading'; }
     this.changed();
@@ -570,6 +585,7 @@ class SageApp {
     const mi = modelInfo(this.mode, key);
     if (!m.ready) { this.note(`${mi.label} isn’t set up — run: sage --${mi.flag} --setup`, 'err'); return; }
     if (this.approval) this.answer('n');
+    this.suggestion = null;
     this.engine.close();
     if (this.items.some((i) => i.type === 'user')) this.note(`Switched to ${mi.label} — it has the conversation so far.`);
     this.useModel(key);
@@ -750,6 +766,7 @@ class SageApp {
   }
 
   setInput(text, cursor = text.length) {
+    if (text) this.suggestion = null;
     this.input = text;
     this.cursor = cursor;
     this.changed();
@@ -795,6 +812,7 @@ class SageApp {
     if (k.name === 'backspace') { if (c) this.setInput(s.slice(0, c - 1) + s.slice(c), c - 1); return; }
     if (k.name === 'delete') { this.setInput(s.slice(0, c) + s.slice(c + 1), c); return; }
     if (k.name === 'left') { this.cursor = Math.max(0, c - 1); this.changed(); return; }
+    if ((k.name === 'tab' || k.name === 'right') && !s && this.suggestion) { this.setInput(this.suggestion); return; } // take the suggestion
     if (k.name === 'right') { this.cursor = Math.min(s.length, c + 1); this.changed(); return; }
     if (k.name === 'home' || (k.ctrl && k.name === 'a')) { this.cursor = 0; this.changed(); return; }
     if (k.name === 'end' || (k.ctrl && k.name === 'e')) { this.cursor = s.length; this.changed(); return; }
@@ -1148,7 +1166,8 @@ function render(app, cols, rows, now = Date.now()) {
   const box = [];
   box.push(`${frame}╭${'─'.repeat(W - 2)}╮${RESET()}`);
   inputRows.forEach((l, i) => {
-    const content = !app.input && i === 0 ? `${muted}${fitText(prompt, inner)}${RESET()}` : fitText(l, inner);
+    const hint = app.suggestion && !app.approval && !app.busy ? `${app.suggestion}  ⇥` : prompt; // Sage's guess at your next message
+    const content = !app.input && i === 0 ? `${muted}${fitText(hint, inner)}${RESET()}` : fitText(l, inner);
     box.push(`${frame}│${RESET()} ${i === 0 ? `${theme.fg('accent2')}${ansi.bold()}❯${RESET()}` : ' '} ${content} ${frame}│${RESET()}`);
   });
   box.push(`${frame}╰${'─'.repeat(W - 2)}╯${RESET()}`);
@@ -1156,7 +1175,7 @@ function render(app, cols, rows, now = Date.now()) {
     : app.busy ? '^C stop · PgUp/PgDn scroll'
       : app.mode === 'video' ? `enter ${app.clip ? 'change' : 'film'} · /seconds 6 · /sound ${app.clipOpts.sound ? 'off' : 'on'} · /new · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
       : app.mode === 'image' ? `enter ${app.picture ? 'edit' : 'draw'} · /edit file · /new · /size 512 · /steps 20 · /open · ^C ${app.drawing() ? 'stop' : 'quit'}`
-        : `enter send · ⌥enter new line · ^O model${app.thinks ? ' · ^T thinking' : ''} · ^N new chat · /help · ^C quit`;
+        : `${app.suggestion && !app.input ? 'tab use suggestion · ' : ''}enter send · ⌥enter new line · ^O model${app.thinks ? ' · ^T thinking' : ''} · ^N new chat · /help · ^C quit`;
   const footer = `${muted}${fitText(` ${keysHelp}`, W).trimEnd()}${RESET()}`;
 
   // transcript

@@ -291,6 +291,7 @@ async function runRepl(opts = {}) {
   theme.loadSavedTheme();
   const shell = new Shell({ interactive: true });
   if (opts.login) loginSetup(shell);
+  ownBin(shell);
   sourceRcFile(shell);
 
   // The first time, offer to become the default shell (once, ever).
@@ -310,6 +311,7 @@ function runSource(src, name, args, opts = {}) {
   ansi.setEnabled(false);
   const shell = new Shell({ name, positional: args });
   if (opts.login) loginSetup(shell);
+  ownBin(shell);
   let status;
   try {
     status = shell.run(src);
@@ -320,6 +322,16 @@ function runSource(src, name, args, opts = {}) {
   shell.status = status;
   shell.runExitTrap();
   return status;
+}
+
+// ~/.maxshell/bin (beside the login wrapper) comes first on PATH in every
+// maxshell, so tools put there — uv, say — are always found.
+function ownBin(shell) {
+  const dir = path.dirname(require('../src/setup').wrapperPath());
+  const parts = String(shell.env.PATH || '').split(':').filter(Boolean);
+  if (!fs.existsSync(dir) || parts.includes(dir)) return;
+  shell.env.PATH = [dir, ...parts].join(':');
+  process.env.PATH = shell.env.PATH;
 }
 
 // Login shells get the system PATH (path_helper) and ~/.maxshell_profile,

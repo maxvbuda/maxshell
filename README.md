@@ -70,7 +70,10 @@ maxshell --update             # get the newest version from GitHub
 maxshell --version
 ```
 
-A login shell loads the system `PATH` and `~/.maxshell_profile` first. The
+A login shell loads the system `PATH` and `~/.maxshell_profile` first.
+`~/.maxshell/bin` (beside the login wrapper) always comes first on `PATH`,
+so a tool you put there is found in every maxshell — `uv` and `uvx` are
+linked in there. The
 interactive shell reads `~/.maxshellrc` at startup and saves input to
 `~/.maxshell_history`. Tab completion works for commands and file paths.
 
@@ -1078,6 +1081,13 @@ file, `git reset --hard`, `find -delete`, …), which are always asked and
 marked *careful*. Sage is told never to delete anything. Plain `sage` can't
 touch files or run commands at all.
 
+**Sage suggests what you'll say next.** After each answer, in `sage` and
+`sage code`, the box shows Sage's guess at your next message, muted — "How
+much water do they need?" after a list of houseplants. Tab (or →) takes
+it, so Enter sends it; just type to ignore it. It's written apart from the
+conversation in a second or two (Sage Ultra: a few more) and stops the
+moment you send something. `/suggest off` turns it off.
+
 **Sage remembers.** Every conversation is kept, in `~/Library/Application
 Support/Sage/Conversations` — on your Mac, nowhere else. `sage --continue`
 picks up your last chat (`sage code --continue`: the last session in this
@@ -1251,11 +1261,17 @@ first time with Swift's own tools (no Xcode), into `~/Applications/Sage.app`,
 so it's in Launchpad and Spotlight too. A sidebar starts a **new chat**,
 **code session** (pick a project folder), **picture** or **video**, and lists
 your earlier conversations by day, searchable — click one and Sage
-carries on, remembering it. Answers render as rich text
+carries on, remembering it. A conversation you leave **keeps working** —
+answering, waiting for your OK, drawing — and the sidebar shows a spinner
+on the ones still at it and a hand on the ones waiting for you;
+conversations on the same model share it, answering one at a time. Answers render as rich text
 — headings, tables, highlighted code with a Copy button, math — and Sage
 Ultra's thinking streams in a fold that closes to *Thought for 27s*. In a
 code session every tool shows as a card: what it read, a red/green **diff**
-for a change, the command and its output, with **Yes · Yes to all · No**.
+for a change, the command and its output, with **Yes · Yes to all · No** —
+or answer in the box: Return or `y` says yes, `a` yes to all, `n` or Esc
+no. After each answer a suggested next message sits above the box; click
+it or press Tab.
 Pictures appear in the conversation and clips
 play there; drop a picture in to edit it. The toolbar has the model menu and
 Sage Ultra's thinking level (⌘T), ⌘. stops, ⌘1–4 pick a model. It's the
