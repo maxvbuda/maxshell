@@ -864,7 +864,7 @@ snip add deploy 'npm run build && rsync -a dist/ server:/www'
 snip save last-build        # the command you just ran
 snip -l    snip mv a b    snip rm a
 mark                        # bookmark this folder (named after it)
-mark work                   # …or give it a name
+mark work                   # …or give it a name;  mark -d work removes it
 go work    go               # go there, or pick from a list;  marks lists them
 ```
 
