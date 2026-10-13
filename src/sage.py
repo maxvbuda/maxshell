@@ -878,6 +878,19 @@ def serve(cmd_path, mode):
     new_chat, device = open_engine()
     emit(ev='ready', model=NAME, device=device)
     parent = os.getppid()
+    app = int(os.environ.get('MAXSHELL_SAGE_APP') or 0)  # the app's own pid: sh, our parent, outlives it
+
+    def gone():
+        if os.getppid() != parent:
+            return True
+        try:
+            os.kill(app, 0) if app else None
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        return False
+
     cmds = open(cmd_path, encoding='utf-8')
     pending = ''
     later = collections.deque()  # commands for other conversations, while one waits on a tool
@@ -890,7 +903,7 @@ def serve(cmd_path, mode):
             if pending.endswith('\n'):
                 cmd, pending = pending, ''
                 return json.loads(cmd)
-            if os.getppid() != parent:  # the app is gone
+            if gone():  # the app quit (or crashed) without saying so
                 return {'op': 'quit'}
             time.sleep(0.03)
 
