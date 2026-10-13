@@ -1264,7 +1264,7 @@ your earlier conversations by day, searchable — click one and Sage
 carries on, remembering it. A conversation you leave **keeps working** —
 answering, waiting for your OK, drawing — and the sidebar shows a spinner
 on the ones still at it and a hand on the ones waiting for you;
-conversations on the same model share it, answering one at a time. Answers render as rich text
+conversations on the same model share it, answering one at a time. A model nobody has used for 10 minutes is let go, giving its memory back (Sage Ultra's is 16 GB); your next message starts it again with the conversation, after a few seconds' wait (Ultra about 15). Answers render as rich text
 — headings, tables, highlighted code with a Copy button, math — and Sage
 Ultra's thinking streams in a fold that closes to *Thought for 27s*. In a
 code session every tool shows as a card: what it read, a red/green **diff**

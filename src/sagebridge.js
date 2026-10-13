@@ -79,11 +79,20 @@ function sharedEngine(key, argv, opts) {
   // Loading another model: let go of the idle ones (each is GBs of memory);
   // their conversations start them again when you come back.
   for (const other of engines.values()) {
-    if (!other.queue.length && ![...other.views.values()].some((v) => v.app && (v.app.approval || v.app.busy))) retire(other);
+    if (!working(other)) retire(other);
   }
-  s = { key, engine: new sage.Engine(argv, opts), views: new Map(), queue: [], ready: null, dead: false };
+  s = { key, engine: new sage.Engine(argv, opts), views: new Map(), queue: [], ready: null, dead: false, used: Date.now() };
   engines.set(key, s);
   return s;
+}
+
+// A model nobody has used for a while is let go too: it holds GBs (Ultra
+// 16) while the app sits in the background. The next message starts it
+// again with the conversation (a few seconds; Ultra about 15).
+const IDLE_MS = (Number(process.env.MAXSHELL_SAGE_IDLE) || 600) * 1000;
+const working = (s) => s.queue.length > 0 || [...s.views.values()].some((v) => v.app && (v.app.approval || v.app.busy));
+function retireIdle() {
+  for (const s of [...engines.values()]) if (!working(s) && Date.now() - s.used > IDLE_MS) retire(s);
 }
 
 function retire(s) {
@@ -102,6 +111,7 @@ function view(s, conv) {
     send(cmd) {
       if (v.closed) return;
       if (cmd.op === 'ask') s.queue.push(conv);
+      s.used = Date.now();
       s.engine.send({ ...cmd, conv });
     },
     poll() { const e = v.events; v.events = []; return e; },
@@ -129,6 +139,7 @@ function view(s, conv) {
 function pump() {
   for (const s of [...engines.values()]) {
     for (const ev of s.engine.poll()) {
+      s.used = Date.now();
       if (ev.ev === 'ready' && (!ev.conv || ev.conv === 'main')) s.ready = ev.device || 'gpu'; // the engine's own, not a conversation's
       if (ev.ev === 'done') { const i = s.queue.indexOf(ev.conv); if (i >= 0) s.queue.splice(i, 1); }
       if (ev.ev === 'exit') { s.dead = true; engines.delete(s.key); }
@@ -220,7 +231,9 @@ function act(cmd) {
   const app = current();
   if (!app) return;
   switch (cmd.op) {
-    case 'submit': app.setInput(String(cmd.text || '')); app.submit(); break;
+    case 'submit':
+      if (!app.media && app.engine.closed) { app.useModel(app.model); app.engine.app = app; app.remember(); } // its model was let go while idle
+      app.setInput(String(cmd.text || '')); app.submit(); break;
     case 'answer': app.answer(cmd.choice); break;
     case 'stop': if (app.busy || app.approval || app.drawing()) app.interrupt(); break;
     case 'model': app.switchModel(cmd.key); app.engine.app = app; break;
@@ -293,6 +306,7 @@ function main() {
   setInterval(() => {
     try {
       pump();
+      retireIdle();
       for (const app of apps.values()) { // every conversation keeps going, shown or not
         for (const ev of app.engine.poll()) app.onEvent(ev);
         app.tick();

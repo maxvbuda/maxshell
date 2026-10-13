@@ -14,6 +14,7 @@ const emit = (ev) => fs.writeSync(1, `${JSON.stringify(ev.ev === 'loading' ? ev 
 const app = Number(process.env.MAXSHELL_SAGE_APP || 0);
 let pos = 0;
 let pending = '';
+const known = {}; // conv → how many earlier exchanges it was told or had
 
 function next() {
   for (;;) {
@@ -39,6 +40,7 @@ for (;;) {
   if (cmd.op === 'quit') process.exit(0);
   if (cmd.op === 'reset') { emit({ ev: 'ready' }); continue; }
   if (cmd.op === 'image-prompt') { emit({ ev: 'image-prompt', id: cmd.id, text: /mute/.test(cmd.prompt) ? '' : `DETAILED ${cmd.prompt}`, stopped: false }); continue; }
+  if (cmd.op === 'restore') { known[conv] = (known[conv] || 0) + cmd.turns.length; continue; }
   if (cmd.op !== 'ask') continue;
   if (mode === 'code' && /edit/.test(cmd.text)) {
     emit({ ev: 'text', s: 'Changing it.' });
@@ -50,7 +52,9 @@ for (;;) {
     emit({ ev: 'text', s: 'You said: ' });
     if (/slow/.test(cmd.text)) sleepSync(600); // an answer that takes a while
     emit({ ev: 'text', s: cmd.text });
+    if (/recall/.test(cmd.text)) emit({ ev: 'text', s: ` (I remember ${known[conv] || 0} before this, pid ${process.pid})` });
   }
+  known[conv] = (known[conv] || 0) + 1;
   emit({ ev: 'done', stopped: false, tokens: 10, seconds: 1 });
   if (/suggest/.test(cmd.text)) emit({ ev: 'suggest', text: 'tell me more' });
 }

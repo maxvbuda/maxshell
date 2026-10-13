@@ -828,6 +828,41 @@ const said = (s, t) => s.items.some((i) => i.type === 'sage' && i.text.includes(
   assert.deepStrictEqual(out.back, ['You said: a slow one']); // it finished while you were away
 });
 
+test('Sage for Mac lets go of a model nobody is using, and brings it back with the conversation', () => {
+  const driver = String.raw`
+const { spawn } = require('child_process');
+const NL = String.fromCharCode(10);
+const b = spawn(process.execPath, [process.argv[1]], { stdio: ['pipe', 'pipe', 'inherit'] });
+const states = [];
+let buf = '';
+b.stdout.on('data', (d) => { buf += d; const ls = buf.split(NL); buf = ls.pop(); for (const l of ls) states.push(JSON.parse(l)); });
+const say = (o) => b.stdin.write(JSON.stringify(o) + NL);
+const until = (f) => new Promise((res, rej) => { const t0 = Date.now(); const k = setInterval(() => { const s = states.find(f); if (s) { clearInterval(k); res(s); } else if (Date.now() - t0 > 8000) { clearInterval(k); rej(new Error('timed out: ' + JSON.stringify(states[states.length - 1]))); } }, 10); });
+const said = (s, t) => s.items.filter((i) => i.type === 'sage').map((i) => i.text).find((x) => x.includes(t));
+const engines = () => require('child_process').execSync('ps -Ao ppid,command').toString().split(NL).filter((l) => l.includes('fake-sage-engine') && !l.includes('/bin/sh')).length;
+(async () => {
+  say({ op: 'open', id: 'A', mode: 'chat', root: process.argv[2], model: 'e4b' });
+  await until((s) => s.status === 'ready');
+  say({ op: 'submit', text: 'hello' });
+  await until((s) => said(s, 'hello') && s.status === 'ready');
+  const running = engines();
+  await new Promise((r) => setTimeout(r, 2500));      // idle longer than MAXSHELL_SAGE_IDLE
+  const after = engines();
+  say({ op: 'submit', text: 'recall' });
+  const back = await until((s) => said(s, 'recall'));
+  say({ op: 'quit' });
+  console.log(JSON.stringify({ running, after, answer: said(back, 'recall') }));
+})().catch((e) => { console.log(JSON.stringify({ error: e.message })); b.kill(); });
+`;
+  const env = { ...process.env, MAXSHELL_SAGE_ENGINE: path.join(__dirname, 'fake-sage-engine.js'), MAXSHELL_GEMMA_PYTHON: process.execPath, MAXSHELL_SAGE_IDLE: '1' };
+  const r = spawnSync(process.execPath, ['-e', driver, path.join(__dirname, '..', 'src', 'sagebridge.js'), os.tmpdir()], { env, encoding: 'utf8', timeout: 20000 });
+  const out = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.ok(!out.error, out.error);
+  assert.ok(out.running >= 1);
+  assert.strictEqual(out.after, out.running - 1, 'the idle engine quit');
+  assert.match(out.answer, /I remember 1 before this/); // started again, told the conversation
+});
+
 test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in sage code', () => {
   const gemma = require('../src/gemma');
   for (const mode of ['chat', 'code']) {
