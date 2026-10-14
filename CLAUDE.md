@@ -96,7 +96,7 @@ snapshot the cache before each answer). At a terminal, `sage` / `sage code` open
 a full-screen app (`SageApp` state + `render()`, model dropdown) that runs
 `sage.py --serve` as a separate process: JSON commands appended to a file,
 JSON events read back from another (`Engine`), so it stays synchronous.
-`sage code` gives the model tools (Gemma's native calls, Mistral's
+Sage's chat prompt includes `MAXSHELL_BRIEF` (sage.py), a short guide to maxshell's commands — update it when a command changes (a test checks every command it names exists). `ai/sage/eval.py` is Sage's exam (real engine, real tools): run it before and after any change to a model, its sampling, thinking or prompt. `sage code` gives the model tools (Gemma's native calls, Mistral's
 `[TOOL_CALLS]`, or Qwen-style `<tool_call>` JSON / a ```json block found by
 `ultra_scan`; generation stops at the call) that the app runs via `src/sagetools.js` — reads in
 the project are free; writes, edits and commands show a diff / the command

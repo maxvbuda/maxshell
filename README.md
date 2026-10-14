@@ -1097,6 +1097,12 @@ the conversation too — the new model is told everything so far. Sage for
 Mac lists the same conversations, terminal ones included; click one to
 carry on.
 
+**It knows maxshell.** Ask Sage how to do something in maxshell — "how do I
+remove a bookmark?", "which key opens the palette?" — and it answers with
+the real command: a short guide to maxshell is part of what it's told
+(`MAXSHELL_BRIEF` in `src/sage.py`). On Sage's exam that took maxshell
+questions from about 1 in 12 right to 10–12 in 12.
+
 **Private, and quick to follow up.** Sage keeps what it has read of the
 conversation (its KV cache), so each follow-up reads only your new message
 and answers in seconds, however long the chat.

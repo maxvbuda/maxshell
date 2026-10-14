@@ -163,6 +163,26 @@ IMAGE_EDIT_PROMPT = (
     "Reply with the instruction only: no title, no preamble, no quotes around it, no markdown.")
 
 
+# What Sage knows about maxshell, in its chat prompt (about 350 tokens, read
+# once a conversation): on ai/sage/eval.py it took maxshell questions from
+# 0-1 of 12 to 10-12, without hurting the rest. Keep it in step with the
+# README when a command changes.
+MAXSHELL_BRIEF = (
+    'maxshell, in brief (for questions about it): a zsh-like shell written in Node.js. Config ~/.maxshellrc; '
+    '~/.maxshell/bin is first on PATH. `theme` lists colour themes, `theme nord` switches (maxshell, dracula, '
+    'nord, gruvbox, solarized, tokyo-night, sunset, mono). Keys at the prompt: → accepts the grey suggestion, Tab'
+    ' opens the completion menu, Ctrl-R fuzzy history search, Ctrl-P command palette, Alt-H explains the line '
+    "without running it (also `explain 'cmd'`), Alt-S saves it as a snippet, Alt-Enter new line. Folders: `j "
+    'NAME` jumps to the most-visited match (`j -l` lists), `back` / `forward`, `mark [name]` bookmarks this '
+    'folder, `go name` goes there, `marks` lists, `mark -d name` removes one; a folder name alone cds there. '
+    "Snippets: `snip`, `snip add NAME 'cmd'`, `snip rm NAME`. Tools: `edit FILE` (nano-style editor; ^O save, ^X "
+    'exit, ^T run), `files` (Finder-style browser), `view FILE` (pager), `top` (processes), `gitui` (git: space '
+    "stages, c commits, ^T pushes), `dash` (dashboard), `cleanup` (quit what isn't needed), `abbr gco='git "
+    "checkout'`. Jobs: Ctrl-Z, `bg`, `fg`, `jobs`. AIs: `sage` (you), `sage code` (edits the project, asking "
+    'first), `sage image "…"`, `sage video "…"`, `sage app` (Mac app), `ai` (mx, a tiny model), `bot` (rules). '
+    '`maxshell --update` updates, `maxshell --make-default` makes it the login shell.')
+
+
 def system_prompt(mode):
     if mode == 'image':
         return IMAGE_PROMPT
@@ -192,7 +212,7 @@ def system_prompt(mode):
             f"you're based on an open model from {MAKER}. {when} You're warm, sharp and "
             f"concise. Only write code when it's asked for or really helps; then make it complete and runnable, in "
             f"fenced blocks that name the language. Write math in LaTeX between $ signs. You can't save or change "
-            f"files here; if asked to, show the text and suggest `sage code`, which can.")
+            f"files here; if asked to, show the text and suggest `sage code`, which can. " + MAXSHELL_BRIEF)
 
 
 def free_memory():

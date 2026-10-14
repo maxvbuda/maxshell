@@ -878,6 +878,16 @@ const engines = () => require('child_process').execSync('ps -Ao ppid,command').t
   assert.match(out.answer, /I remember 1 before this/); // started again, told the conversation
 });
 
+test('Sage’s maxshell brief names only commands maxshell has', () => {
+  const r = spawnSync('python3', ['-I', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); import sage; print(sage.MAXSHELL_BRIEF)', path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
+  const brief = r.stdout;
+  assert.match(brief, /mark -d name/);
+  const { BUILTINS } = require('../src/builtins');
+  const named = [...brief.matchAll(/`([a-z0-9-]+)[ `]/g)].map((m) => m[1]);
+  assert.ok(named.length > 15);
+  for (const cmd of named) assert.ok(BUILTINS[cmd] || ['sage', 'maxshell', 'explain'].includes(cmd), `${cmd} isn't a maxshell command`);
+});
+
 test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in sage code', () => {
   const gemma = require('../src/gemma');
   for (const mode of ['chat', 'code']) {
