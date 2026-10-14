@@ -1125,7 +1125,13 @@ exact arithmetic and trick questions it got all 22 (Sage Pro 21), and in
 steps through *off* (answers straight away), *low*, *medium* (the default)
 and *high* (thinks longest, for the hardest questions), or type `/think
 high`. It applies from the next answer, keeping the conversation;
-`MAXSHELL_SAGE_EFFORT=high` sets where it starts. Sage Pro did every
+`MAXSHELL_SAGE_EFFORT=high` sets where it starts. **Sage Pro and Flash
+think too, when a question needs it**: sums, puzzles, comparisons and code
+get a hidden think first (shown muted, as Ultra's), while small talk, facts
+and rewrites are answered straight away — on Sage's exam (`ai/sage/eval.py`)
+that's just as right as thinking every time, and plain questions come back
+4–5× sooner (Pro: 5 s instead of 21). The same button sets it: *high* always
+thinks, *off* never does (quicker still, but sums slip). Sage Pro did every
 `sage code` task too, in a third of the memory. Sage Lite in a chat answers in a moment and
 gets its sums right (21 of 22 on a hard set of sums and facts); in `sage
 code` it's Ministral, the smallest model that reliably reads a file before

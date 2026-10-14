@@ -167,7 +167,7 @@ struct Toolbar: ToolbarContent {
                     Label("Thinking: \((sage.state.thinking ?? "medium").capitalized)", systemImage: "brain")
                         .labelStyle(.titleAndIcon)
                 }
-                .help("How much Sage Ultra thinks before it answers (⌘T)")
+                .help("How much Sage thinks before it answers (⌘T); Pro and Flash think only when a question needs it, unless High")
             }
             if !sage.state.models.isEmpty {
                 Menu {

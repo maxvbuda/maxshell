@@ -44,6 +44,7 @@ NEED_FREE = {'ULTRA': 60, 'E4B': 30, 'E2B': 20, 'LITE': 10, 'LITE-CODE': 15}.get
 # How much Sage Ultra thinks at first: off, low, medium or high (xhigh is high).
 THINKING = {'xhigh': 'high'}.get(os.environ.get('MAXSHELL_SAGE_EFFORT', ''), os.environ.get('MAXSHELL_SAGE_EFFORT', ''))
 THINKING = THINKING if THINKING in ('off', 'low', 'medium', 'high') else 'medium'
+GEMMA_THINKING = THINKING if os.environ.get('MAXSHELL_SAGE_EFFORT') else 'medium'  # Gemma's default: see GemmaChat.level
 MAKER = {'ULTRA': 'Alibaba', 'LITE': 'Alibaba', 'LITE-CODE': 'Mistral AI'}.get(NAME, 'Google')
 COLORS = {'accent': '', 'accent2': '', 'muted': '', 'bold': '', 'reset': ''}
 COLORS.update(json.loads(os.environ.get('MAXSHELL_SAGE_COLORS') or '{}'))
@@ -56,6 +57,17 @@ CODE_TEMPERATURE = 0.3  # steadier code than Gemma's usual 1.0
 CODING = re.compile(r'```|\b(code|coding|program|script|function|method|class|bug|error|exception|traceback|compile|'
                     r'regex|sql|python|javascript|typescript|java|swift|rust|golang|c\+\+|ruby|php|bash|shell|zsh|'
                     r'html|css|json|yaml|api|algorithm|implement|refactor|debug|unit tests?)\b', re.I)
+
+
+NEEDS_THOUGHT = re.compile(r'\d|\b(how (many|much|long|far|old)|calculate|compute|solve|equation|puzzle|riddle|logic(al)?|'
+                           r'prove|probability|percent(age)?|average|sum|total|cost|price|faster|older|younger|taller|shorter|'
+                           r'heavier|which (is|was) (more|less|bigger|smaller)|step by step|plan|compare|why)\b', re.I)
+
+
+def needs_thought(question):
+    """Whether a question is worth thinking about first: numbers, puzzles,
+    comparisons, code — not small talk, facts or a quick rewrite."""
+    return bool(NEEDS_THOUGHT.search(question) or CODING.search(question))
 
 
 def is_coding(turns):
@@ -463,11 +475,16 @@ class MlxChat:
             self.mark()
         sampler = make_sampler(temp=temperature, **self.SAMPLING)
         processors = make_logits_processors(repetition_penalty=self.REPEAT)
+        first = self.not_first() if ban else []
         if ban:
             ids = [self.tok.convert_tokens_to_ids(t) for t in ban]
+            step = [0]
 
             def banned(tokens, logits):
                 logits[:, ids] = -float('inf')
+                if not step[0] and first:
+                    logits[:, first] = -float('inf')  # an answer, not an empty turn
+                step[0] += 1
                 return logits
             processors = [*processors, banned]
         raw, shown, thought, out, cut = '', 0, 0, [], None
@@ -538,7 +555,8 @@ class MlxChat:
         self.mark()
         saved = getattr(self, 'saved', None)
         try:
-            ask = self.user_turn(self.SUGGEST[self.mode]) + self.no_thought() + self.SUGGEST_START
+            ask = self.user_turn(self.SUGGEST[self.mode])
+            ask += ('' if ask.endswith(self.no_thought()) else self.no_thought()) + self.SUGGEST_START
             raw = self.generate(ask, lambda s: None, {'hit': False}, 0.7, halt, 40, self.NO_THOUGHT)
         finally:
             if saved is not None:
@@ -551,6 +569,14 @@ class MlxChat:
         return clean_suggestion(raw)
 
     NO_THOUGHT = ()  # tokens that would start thinking, not wanted in a suggestion
+
+    def banned(self):
+        """Tokens never written in an answer (Gemma's thinking, when it's off)."""
+        return ()
+
+    def not_first(self):
+        """Token ids that may not start an answer when some are banned."""
+        return []
 
     def no_thought(self):
         """What makes the answer skip thinking (most chats already do)."""
@@ -592,7 +618,7 @@ class MlxChat:
         for _ in range(self.max_calls + 1):
             old = signal.signal(signal.SIGINT, lambda *a: stop.update(hit=True))
             try:
-                raw = self.generate(text_after, show, stop, temperature)
+                raw = self.generate(text_after, show, stop, temperature, ban=self.banned())
             finally:
                 signal.signal(signal.SIGINT, old)
             shown, calls, _ = self.scan(raw)
@@ -650,12 +676,42 @@ class GemmaChat(MlxChat):
         return f'<|turn>user\n{question}<turn|>\n<|turn>model\n'
 
     def past_turn(self, question, said):
-        return f'{self.user_turn(question)}{said}<turn|>\n'
+        return f'<|turn>user\n{question}<turn|>\n<|turn>model\n{said}<turn|>\n'
 
     NO_THOUGHT = ('<|channel>',)
 
     def no_thought(self):
         return '<|channel>thought\n<channel|>'  # an empty thought
+
+    # Gemma 4 (this 4-bit build) thinks before every answer, even with
+    # thinking off in its template; taking away the token that starts a
+    # thought stops it. Off never thinks (several times quicker, but sums
+    # slip); low and medium (the default) think only when the question needs
+    # it — sums, puzzles, code — and answer the rest straight away (4-5x
+    # quicker, as right on ai/sage/eval.py); high always thinks (it has no
+    # effort setting). Sage Code always thinks unless off.
+    level = GEMMA_THINKING
+
+    def set_thinking(self, level):
+        if level in ('off', 'low', 'medium', 'high'):
+            self.level = level
+
+    def thinking_now(self):
+        if self.level == 'off' or self.mode.startswith(('image', 'video')):
+            return self.level != 'off'
+        if self.level == 'high' or self.mode == 'code':
+            return True
+        question = next((text for who, text in reversed(self.turns) if who == 'user'), '')
+        return needs_thought(question)
+
+    def banned(self):
+        if self.thinking_now():
+            return ()
+        return self.NO_THOUGHT + (() if self.tools else ('<|tool_call>',))  # it reaches for a call it hasn't got
+
+    def not_first(self):
+        # with its thinking taken away it sometimes ends the turn at once
+        return [self.im_end, *self.tok.eos_token_ids] if not self.thinking_now() else []
 
 
 THINK = re.compile(r'<think>.*?(</think>|\Z)\s*', re.S)

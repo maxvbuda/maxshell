@@ -156,7 +156,8 @@ test('messages wait for the model, then go to it; answers stream in', () => {
   const e = a.started[0].e;
   a.setInput('hello?');
   a.submit();
-  assert.strictEqual(e.sent.length, 0);
+  assert.deepStrictEqual(e.sent, [{ op: 'think', level: 'medium' }]); // Sage Pro hears its thinking level, nothing else yet
+  e.sent.length = 0;
   a.onEvent({ ev: 'ready' });
   assert.deepStrictEqual(e.sent, [{ op: 'ask', text: 'hello?' }]);
   assert.strictEqual(a.status, 'thinking');
@@ -215,12 +216,18 @@ test('Sage Ultra’s thinking level: the header button, ^T and /think', () => {
   a.mouse({ button: 0, release: false }, r.hits.find((h) => h.action === 'menu'));
   assert.ok(a.menu);
   // a fresh engine (switching back to Ultra) hears the level chosen
-  a.switchModel('e4b');
+  a.switchModel('lite');
   assert.strictEqual(text(render(a, 90, 24, 0)).split('\n')[0].includes('thinking'), false);
   a.key({ name: 't', ctrl: true });
-  assert.match(a.items[a.items.length - 1].text, /Only Sage Ultra thinks/);
+  assert.match(a.items[a.items.length - 1].text, /Sage Lite doesn’t think/);
   a.switchModel('ultra');
   assert.deepStrictEqual(a.started[2].e.sent, [{ op: 'think', level: 'low' }]);
+  // Sage Pro and Flash think too, when a question needs it
+  a.switchModel('e4b');
+  assert.deepStrictEqual(a.started[3].e.sent, [{ op: 'think', level: 'low' }]);
+  a.setInput('/think medium');
+  a.submit();
+  assert.match(text(render(a, 90, 24, 0)), /Thinking: medium — thinks when a question needs it/);
 });
 
 test('the model dropdown opens by click or ^O and switches models', () => {
@@ -264,6 +271,7 @@ test('sage code asks before a change; y applies it, n tells Sage no', () => {
   const a = app({ mode: 'code', root });
   const e = a.started[0].e;
   a.onEvent({ ev: 'ready' });
+  e.sent.length = 0; // (its thinking level)
   a.onEvent({ ev: 'tool', name: 'read_file', args: { path: 'a.py' } });
   assert.match(e.sent.pop().text, /return 1/); // reads in the project don't ask
   a.onEvent({ ev: 'tool', name: 'edit_file', args: { path: 'a.py', old_text: 'return 1', new_text: 'return 2' } });
@@ -417,6 +425,9 @@ import sage as gemma
 raw = 'Sure!<|tool_call>call:edit_file{new_text:<|"|>x = {1: 2}<|"|>,old_text:<|"|>x = 1<|"|>,path:<|"|>a.py<|"|>}<tool_call|>'
 U = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); U.level = 'medium'
 Off = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); Off.level = 'off'
+def G(level, question, mode='chat'):
+    g = gemma.GemmaChat.__new__(gemma.GemmaChat); g.level, g.mode, g.tools, g.turns = level, mode, None, [('user', question)]
+    return list(g.banned())
 print(json.dumps({'call': gemma.parse_call(raw),
   'seen': gemma.visible(raw + gemma.tool_response('edit_file', 'ok') + 'Done.<turn|>'),
   'partial': gemma.visible('Sure!<|tool_call>call:edit_fi'),
@@ -430,6 +441,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'holding': gemma.ultra_scan('x\n\x60\x60\x60jso')[0],
   'gscan': gemma.GemmaChat.scan('Hi <|channel>thought\nthey want a greeting<channel|>there<turn|>'),
   'gturn': gemma.GemmaChat.user_turn(None, 'hey'),
+  'gthink': [G('medium', 'what is the capital of Peru?'), G('medium', 'what is 17 * 23?'), G('high', 'hi'), G('off', 'what is 17 * 23?'), G('medium', 'hi', 'code')],
   'qscan': gemma.QwenLiteChat.scan('<think>\n\n</think>\n\nHi there.<|im_end|>'),
   'qturn': gemma.QwenLiteChat.user_turn(gemma.QwenLiteChat.__new__(gemma.QwenLiteChat), 'hey'),
   'mcall': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"path": "a.py"}</s>'),
@@ -468,6 +480,9 @@ print(json.dumps({'call': gemma.parse_call(raw),
   // Sage Pro and Flash (Gemma 4 on MLX): Gemma's turns, any thinking hidden
   assert.deepStrictEqual(out.gscan, ['Hi there', [], null]);
   assert.strictEqual(out.gturn, '<|turn>user\nhey<turn|>\n<|turn>model\n');
+  // Gemma thinks only when a question needs it (a sum, not a fact) — unless high or off; Sage Code always
+  const noThought = ['<|channel>', '<|tool_call>'];
+  assert.deepStrictEqual(out.gthink, [noThought, [], [], noThought, []]);
   // Sage Ultra (Qwen3.8-27B): nothing shows while it thinks; then the answer, and
   // XML tool calls, cut where the call ends (one newline trimmed round each value)
   assert.deepStrictEqual(out.uthink, ['', [], null]);

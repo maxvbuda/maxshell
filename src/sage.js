@@ -30,16 +30,18 @@ const conversations = require('./conversations');
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
   ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra', thinks: true },
-  e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro' },
-  e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash' },
+  e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro', thinks: true, when: true },
+  e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash', thinks: true, when: true },
   lite: { label: 'Sage Lite', blurb: 'fastest · ~3 GB', flag: 'lite' }, // sage code's
 };
 // In a chat, Sage Lite is a different, smaller model than in sage code.
 const CHAT_INFO = { lite: { label: 'Sage Lite', blurb: 'fastest · ~1 GB', flag: 'lite' } };
 const modelInfo = (mode, key) => (mode !== 'code' && CHAT_INFO[key]) || MODEL_INFO[key];
-// How much Sage Ultra thinks before answering (^T, the header, /think).
+// How much Sage thinks before answering (^T, the header, /think). Sage Pro
+// and Flash ("when") think only when a question needs it, below high.
 const THINKING = ['off', 'low', 'medium', 'high'];
 const THINK_INFO = { off: 'answers straight away', low: 'a quick think first', medium: 'thinks it through', high: 'thinks longest, for the hardest questions' };
+const WHEN_INFO = { off: 'answers straight away', low: 'thinks when a question needs it — sums, puzzles, code', medium: 'thinks when a question needs it — sums, puzzles, code', high: 'always thinks first' };
 const firstThinking = () => { const v = { xhigh: 'high' }[process.env.MAXSHELL_SAGE_EFFORT] || process.env.MAXSHELL_SAGE_EFFORT; return THINKING.includes(v) ? v : 'medium'; };
 
 // --- the engine -----------------------------------------------------------------
@@ -211,12 +213,14 @@ class SageApp {
     if (!THINKING.includes(level)) { this.note(`Thinking can be ${THINKING.join(', ')}.`, 'err'); return; }
     this.thinking = level;
     if (this.thinks) this.engine.send({ op: 'think', level });
-    if (say) this.note(`Thinking: ${level} — ${THINK_INFO[level]}${this.thinks ? '.' : '. Only Sage Ultra thinks; it applies there.'}`);
+    if (say) this.note(`Thinking: ${level} — ${this.thinkInfo(level)}${this.thinks ? '.' : '. Sage Lite doesn’t think; it applies to the others.'}`);
     this.changed();
   }
 
+  thinkInfo(level) { return ((modelInfo(this.mode, this.model) || {}).when ? WHEN_INFO : THINK_INFO)[level]; }
+
   cycleThinking() {
-    if (!this.thinks) { this.note('Only Sage Ultra thinks before it answers — pick it with ^O.'); return; }
+    if (!this.thinks) { this.note('Sage Lite doesn’t think before it answers — pick another model with ^O.'); return; }
     this.setThinking(THINKING[(THINKING.indexOf(this.thinking) + 1) % THINKING.length]);
   }
 
@@ -539,14 +543,14 @@ class SageApp {
       case 'think': case 'thinking': {
         const arg = text.slice(cmd.length + 1).trim().toLowerCase();
         if (this.media) return false;
-        if (!arg) { this.note(`Thinking: ${this.thinking} — ${THINK_INFO[this.thinking]}. /think ${THINKING.join(' | ')} (or ^T) changes it${this.thinks ? '' : '; only Sage Ultra thinks'}.`); return true; }
+        if (!arg) { this.note(`Thinking: ${this.thinking} — ${this.thinkInfo(this.thinking)}. /think ${THINKING.join(' | ')} (or ^T) changes it${this.thinks ? '' : '; Sage Lite doesn’t think'}.`); return true; }
         this.setThinking({ xhigh: 'high', on: 'medium', none: 'off', no: 'off' }[arg] || arg, true);
         return true;
       }
       case 'help':
         if (this.mode === 'video') { this.note('Describe a clip; then say how to change it (a new version), or “keep going” to make it longer.\n/seconds 6  ·  /sound off  ·  /exact  your words as they are  ·  /open  play the latest  ·  /new  ·  /exit'); return true; }
         if (this.mode === 'image') { this.note('Describe a picture, then say how to change it.\n/edit <file>  change a picture of yours (or drag it in)  ·  /exact  your words as they are, not Sage’s prompt  ·  /size 512  ·  /steps 20  ·  /open  ·  /new  ·  /exit'); return true; }
-        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage Ultra thinks  ·  /resume  pick up your last conversation  ·  /suggest off  no suggestions  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
+        this.note(`/new  a fresh conversation  ·  /image <prompt>  draw a picture  ·  /model [ultra|pro|flash|lite]  switch models  ·  /think [off|low|medium|high]  how much Sage thinks  ·  /resume  pick up your last conversation  ·  /suggest off  no suggestions  ·  /exit  leave\n^O models · ^T thinking · ^N new chat · PgUp/PgDn or the wheel scroll · ^C stops an answer (or leaves)${this.mode === 'code' ? ' · y / a / n answer a change' : ''}`);
         return true;
       default: return false;
     }
