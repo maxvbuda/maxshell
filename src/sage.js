@@ -226,6 +226,23 @@ class SageApp {
 
   get busy() { return ['thinking', 'writing', 'waiting', 'running', 'stopping'].includes(this.status); }
 
+  // Lets the model go while nobody is using it (it holds GBs — Ultra 16):
+  // the loop calls this after IDLE_MS without a key or an answer. The next
+  // message starts it again and tells it the conversation.
+  rest() {
+    if (this.media || this.resting || this.busy || this.approval || this.status !== 'ready') return false;
+    this.engine.close();
+    this.resting = true;
+    return true;
+  }
+
+  wake() {
+    if (!this.resting) return;
+    this.resting = false;
+    this.useModel(this.model);
+    this.remember();
+  }
+
   useModel(key) {
     this.model = key;
     if (this.media) { this.engine = IDLE; this.status = 'ready'; this.changed(); return; }
@@ -454,6 +471,7 @@ class SageApp {
       this.draw(text);
       return;
     }
+    this.wake();
     if (this.status === 'loading') { this.pendingAsk = text; this.items.push({ type: 'user', text, queued: true }); this.setInput(''); return; }
     if (this.busy) { this.note('Sage is still answering — ^C stops it.'); return; }
     if (this.status === 'error') { this.note('Sage isn’t running — pick a model above (^O) to start it again.', 'err'); return; }
@@ -1251,6 +1269,8 @@ function render(app, cols, rows, now = Date.now()) {
 
 // --- running it -----------------------------------------------------------------
 
+const IDLE_MS = (Number(process.env.MAXSHELL_SAGE_IDLE) || 600) * 1000; // the model rests after this long unused
+
 function loop(app, { input = 0, output = process.stdout, keep = true } = {}) {
   const reader = new KeyReader(input);
   // The conversation is kept as it goes (src/conversations.js), so Sage remembers it.
@@ -1280,8 +1300,11 @@ function loop(app, { input = 0, output = process.stdout, keep = true } = {}) {
     output.write(s);
   };
   draw(true);
+  let used = Date.now();
   while (!app.done) {
     const k = reader.next(40);
+    if (k.name !== 'timeout' || app.busy || app.status === 'loading') used = Date.now();
+    else if (Date.now() - used > IDLE_MS && app.rest()) used = Date.now();
     if (k.name === 'mouse') {
       const hit = last && last.hits.find((h) => h.y === k.y - 1 && k.x - 1 >= h.x0 && k.x - 1 < h.x1);
       app.mouse(k, hit);

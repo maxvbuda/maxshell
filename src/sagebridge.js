@@ -232,7 +232,7 @@ function act(cmd) {
   if (!app) return;
   switch (cmd.op) {
     case 'submit':
-      if (!app.media && app.engine.closed) { app.useModel(app.model); app.engine.app = app; app.remember(); } // its model was let go while idle
+      if (!app.media && app.engine.closed && !app.resting) { app.useModel(app.model); app.engine.app = app; app.remember(); } // its model was let go while idle
       app.setInput(String(cmd.text || '')); app.submit(); break;
     case 'answer': app.answer(cmd.choice); break;
     case 'stop': if (app.busy || app.approval || app.drawing()) app.interrupt(); break;

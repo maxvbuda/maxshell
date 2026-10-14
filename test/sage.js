@@ -878,6 +878,31 @@ const engines = () => require('child_process').execSync('ps -Ao ppid,command').t
   assert.match(out.answer, /I remember 1 before this/); // started again, told the conversation
 });
 
+test('a model nobody is using rests, and the next message wakes it with the conversation', () => {
+  const a = app();
+  const e = a.started[0].e;
+  a.onEvent({ ev: 'ready' });
+  a.setInput('hello');
+  a.submit();
+  a.onEvent({ ev: 'text', s: 'Hi!' });
+  a.onEvent({ ev: 'done', stopped: false, tokens: 2, seconds: 1 });
+  assert.strictEqual(a.rest(), true);
+  assert.strictEqual(e.closed, true); // its memory handed back
+  assert.strictEqual(a.rest(), false);
+  a.setInput('still there?');
+  a.submit();
+  const e2 = a.started[1].e;
+  assert.strictEqual(a.status, 'loading');
+  assert.deepStrictEqual(e2.sent.find((c) => c.op === 'restore').turns, [['hello', 'Hi!']]); // it remembers
+  a.onEvent({ ev: 'ready' });
+  assert.ok(e2.sent.some((c) => c.op === 'ask' && c.text === 'still there?')); // and gets the question once awake
+  const b = app();
+  b.onEvent({ ev: 'ready' });
+  b.setInput('a long one');
+  b.submit();
+  assert.strictEqual(b.rest(), false); // never in the middle of an answer
+});
+
 test('Sage’s maxshell brief names only commands maxshell has', () => {
   const r = spawnSync('python3', ['-I', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); import sage; print(sage.MAXSHELL_BRIEF)', path.join(__dirname, '..', 'src')], { encoding: 'utf8' });
   const brief = r.stdout;

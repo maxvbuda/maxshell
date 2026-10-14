@@ -1103,6 +1103,12 @@ the real command: a short guide to maxshell is part of what it's told
 (`MAXSHELL_BRIEF` in `src/sage.py`). On Sage's exam that took maxshell
 questions from about 1 in 12 right to 10–12 in 12.
 
+**It doesn't hog memory.** A model nobody has used for 10 minutes is let
+go, in the terminal and in Sage for Mac — Sage Ultra alone holds 16 GB. Your
+next message starts it again (a few seconds; Ultra about 15) and tells it
+the conversation, so nothing is forgotten. `MAXSHELL_SAGE_IDLE=1800` waits
+half an hour instead.
+
 **Private, and quick to follow up.** Sage keeps what it has read of the
 conversation (its KV cache), so each follow-up reads only your new message
 and answers in seconds, however long the chat.
