@@ -29,7 +29,7 @@ const conversations = require('./conversations');
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODEL_INFO = {
-  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra', thinks: true },
+  ultra: { label: 'Sage Ultra', blurb: 'smartest · ~16 GB', flag: 'ultra', thinks: true, when: true },
   e4b: { label: 'Sage Pro', blurb: 'smart all-rounder · ~5 GB', flag: 'pro', thinks: true, when: true },
   e2b: { label: 'Sage Flash', blurb: 'fast · ~3 GB', flag: 'flash', thinks: true, when: true },
   lite: { label: 'Sage Lite', blurb: 'fastest · ~3 GB', flag: 'lite' }, // sage code's

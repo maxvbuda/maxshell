@@ -206,7 +206,7 @@ test('Sage Ultra’s thinking level: the header button, ^T and /think', () => {
   a.setInput('/think low');
   a.submit();
   assert.deepStrictEqual(e.sent.slice(1), [{ op: 'think', level: 'high' }, { op: 'think', level: 'off' }, { op: 'think', level: 'low' }]);
-  assert.match(text(render(a, 90, 24, 0)), /Thinking: low — a quick think first\./);
+  assert.match(text(render(a, 90, 24, 0)), /Thinking: low — thinks when a question needs it/);
   a.setInput('/think lots');
   a.submit();
   assert.match(a.items[a.items.length - 1].text, /Thinking can be off, low, medium, high/);
@@ -423,7 +423,7 @@ import sys, json
 sys.path.insert(0, sys.argv[1])
 import sage as gemma
 raw = 'Sure!<|tool_call>call:edit_file{new_text:<|"|>x = {1: 2}<|"|>,old_text:<|"|>x = 1<|"|>,path:<|"|>a.py<|"|>}<tool_call|>'
-U = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); U.level = 'medium'
+U = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); U.level = 'medium'; U.now = True; U.mode = 'chat'
 Off = gemma.QwenUltraChat.__new__(gemma.QwenUltraChat); Off.level = 'off'
 def G(level, question, mode='chat'):
     g = gemma.GemmaChat.__new__(gemma.GemmaChat); g.level, g.mode, g.tools, g.turns = level, mode, None, [('user', question)]
@@ -448,12 +448,13 @@ print(json.dumps({'call': gemma.parse_call(raw),
   'mwait': gemma.MistralChat.scan('Let me look.[TOOL_CALLS]read_file[ARGS]{"pa'),
   'mplain': gemma.MistralChat.scan('Done.</s>'),
   'uthink': U.scan('they want a sum, 2 + 2'),
+  'uwhen': [U.thinks_about('What is 347 × 286?'), U.thinks_about('Who wrote Dune?')],
   'uanswer': U.scan('2 + 2\n</think>\n\nIt is 4.<|im_end|>'),
   'ucall': U.scan('plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call><|im_end|>'),
   'uwait': U.scan('plan</think>Let me look.<tool_call>\n<function=read_fi'),
   'uthought': [U.thought('\nThey want a sum.</thi'), U.thought('\nThey want a sum.\n</think>\n\nIt is 4.')],
   'gthought': [gemma.GemmaChat.thought('<|channel>thought\nplan it<channel|>Hi<|channel>thought\nmore<chan'), gemma.GemmaChat.thought('<|channel>thou')],
-  'uturn': U.user_turn('hey'),
+  'uturn': [U.user_turn('add 2 + 2'), U.user_turn('hey')],
   'offturn': Off.user_turn('hey'), 'offscan': Off.scan('It is 4.<|im_end|>'), 'offthought': Off.thought('It is 4.'),
   'gcall': gemma.GemmaChat.scan('Let me look.<|tool_call>call:read_file{path:<|"|>a.py<|"|>}<tool_call|><|tool_response>'),
   'ganswer': gemma.GemmaChat.answer(None, [('read_file', {})], ['x = 1']),
@@ -486,6 +487,7 @@ print(json.dumps({'call': gemma.parse_call(raw),
   // Sage Ultra (Qwen3.8-27B): nothing shows while it thinks; then the answer, and
   // XML tool calls, cut where the call ends (one newline trimmed round each value)
   assert.deepStrictEqual(out.uthink, ['', [], null]);
+  assert.deepStrictEqual(out.uwhen, [true, false]); // Ultra thinks when a question needs it
   // …and its thinking, for the app to show apart (an end tag still coming is held back)
   assert.deepStrictEqual(out.uthought, ['They want a sum.', 'They want a sum.']);
   assert.deepStrictEqual(out.gthought, ['plan itmore', '']); // nothing until its label is whole
@@ -493,7 +495,8 @@ print(json.dumps({'call': gemma.parse_call(raw),
   assert.deepStrictEqual(out.ucall.slice(0, 2), ['Let me look.\n', [['write_file', { path: 'a.py', content: 'x = 1\n' }]]]);
   assert.strictEqual(out.ucall[2], 'plan\n</think>\n\nLet me look.\n<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx = 1\n\n</parameter>\n</function>\n</tool_call>'.length);
   assert.deepStrictEqual(out.uwait, ['Let me look.', [], null]);
-  assert.strictEqual(out.uturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n');
+  assert.deepStrictEqual(out.uturn, ['<|im_start|>user\nadd 2 + 2<|im_end|>\n<|im_start|>assistant\n<think>\n',
+    '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n']); // a sum is thought about, a hello isn't
   // thinking off: an empty thought written for it, and everything it writes is the answer
   assert.strictEqual(out.offturn, '<|im_start|>user\nhey<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n');
   assert.deepStrictEqual([out.offscan, out.offthought], [['It is 4.', [], null], '']);

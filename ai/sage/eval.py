@@ -172,7 +172,7 @@ CHAT = [
     ('jump', 'maxshell', ["What's the maxshell command to hop straight to my most-used folder called recipes?"], has(r'(?m)(^|`)j rec')),
     ('theme', 'maxshell', ['how can i switch maxshell to the dracula colours'], has(r'theme dracula')),
     ('explain', 'maxshell', ['In maxshell, how can I see what a command line would do without running it?'], has(r'alt-h|⌥h|`explain')),
-    ('palette', 'maxshell', ['Which key opens the command palette in maxshell?'], has(r'ctrl-p|\^p|⌃p|control-p')),
+    ('palette', 'maxshell', ['Which key opens the command palette in maxshell?'], has(r'ctrl[-+ ]?p\b|\^p|⌃p|control[-+ ]p')),
     ('gitui', 'maxshell', ["What's the name of maxshell's built-in git screen?"], has(r'gitui')),
 ]
 

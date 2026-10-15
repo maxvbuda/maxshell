@@ -59,6 +59,9 @@ CODING = re.compile(r'```|\b(code|coding|program|script|function|method|class|bu
                     r'html|css|json|yaml|api|algorithm|implement|refactor|debug|unit tests?)\b', re.I)
 
 
+STAMP = re.compile(r'It is [A-Z][a-z]+day, ')  # where a system prompt's time begins: only what's before it is shared
+
+
 NEEDS_THOUGHT = re.compile(r'\d|\b(how (many|much|long|far|old)|calculate|compute|solve|equation|puzzle|riddle|logic(al)?|'
                            r'prove|probability|percent(age)?|average|sum|total|cost|price|faster|older|younger|taller|shorter|'
                            r'heavier|which (is|was) (more|less|bigger|smaller)|step by step|plan|compare|why)\b', re.I)
@@ -196,7 +199,7 @@ def system_prompt(mode):
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
         return (f"You are Sage Code, a coding agent inside maxshell, running entirely on the user's Mac. Your name is "
-                f"Sage; don't call yourself by the model underneath. {when} You work in the project folder {os.getcwd()}. "
+                f"Sage; don't call yourself by the model underneath. "
                 f"Use your tools: look around with list_files, read_file and search_files before changing anything; "
                 f"use edit_file for changes to existing files and write_file for new files. To make a folder, run "
                 f"mkdir -p with run_command; use run_command too for running code and tests, installing packages "
@@ -205,14 +208,15 @@ def system_prompt(mode):
                 f"ask what they'd like instead. Never ask whether to go ahead or wait for a "
                 f"go-ahead: once you know the change, call edit_file or write_file right away — the app shows the "
                 f"user the change and asks them for you. Call one tool at a time and wait for its result — never say you did "
-                f"something until a tool's result shows it worked. When you're done, say briefly what you changed.")
+                f"something until a tool's result shows it worked. When you're done, say briefly what you changed. "
+                f"{when} You work in the project folder {os.getcwd()}.")
     return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "
             f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not by the model "
             f"underneath, and don't bring it up; only if someone asks directly what model you're built on, say "
-            f"you're based on an open model from {MAKER}. {when} You're warm, sharp and "
+            f"you're based on an open model from {MAKER}. You're warm, sharp and "
             f"concise. Only write code when it's asked for or really helps; then make it complete and runnable, in "
             f"fenced blocks that name the language. Write math in LaTeX between $ signs. You can't save or change "
-            f"files here; if asked to, show the text and suggest `sage code`, which can. " + MAXSHELL_BRIEF)
+            f"files here; if asked to, show the text and suggest `sage code`, which can. " + MAXSHELL_BRIEF + ' ' + when)
 
 
 def free_memory():
@@ -395,6 +399,25 @@ class Engine:
         # Mistral's tokenizer splits words wrongly without its fixed pattern
         self.model, self.tok = load(path, tokenizer_config={'fix_mistral_regex': True} if NAME == 'LITE-CODE' else {})
         self.device = 'cpu' if device == 'cpu' else 'gpu'
+        self.primes = {}  # system prompts read already → their caches
+
+    def primed(self, head):
+        """A KV cache that has read head — the part of a system prompt before
+        the time, the same in every conversation — read once and copied after:
+        Sage Ultra takes ~20 s to read it, the others a second or two."""
+        import copy
+        from mlx_lm.models.cache import make_prompt_cache
+        if not head:
+            return make_prompt_cache(self.model)
+        key = tuple(head)
+        if key not in self.primes:
+            cache = make_prompt_cache(self.model)
+            self.model(self.mx.array(head)[None], cache=cache)
+            self.mx.eval([c.state for c in cache])
+            self.primes[key] = cache
+            while len(self.primes) > 4:  # chat and code, at a thinking level or two
+                del self.primes[next(iter(self.primes))]
+        return copy.deepcopy(self.primes[key])  # as mlx-lm's own prompt cache does: some caches write in place
 
     def chat(self, mode, system, tools=None, max_calls=40, max_tokens=8192):
         return CHATS.get(NAME, GemmaChat)(self, mode, system, tools, max_calls, max_tokens)
@@ -411,7 +434,7 @@ class MlxChat:
     REPEAT = 1.05  # repetition penalty
 
     def __init__(self, engine, mode, system, tools, max_calls, max_tokens):
-        from mlx_lm.models.cache import make_prompt_cache, can_trim_prompt_cache
+        from mlx_lm.models.cache import can_trim_prompt_cache
         self.e, self.mode, self.max_calls, self.max_tokens = engine, mode, max_calls, max_tokens
         self.system, self.tools = system, tools
         self.tok = engine.tok
@@ -420,13 +443,24 @@ class MlxChat:
         self.think = None  # shows the thinking, if given
         self.generated = 0  # tokens written in the last answer…
         self.seconds = 0.0  # …and the time spent writing them (not waiting on tools)
-        self.cache = make_prompt_cache(engine.model)
-        self.tokens = self.encode(self.prefix(system, tools))  # the whole conversation
+        self.tokens = self.begin(self.prefix(system, tools))  # the whole conversation
         # Linear-attention layers (Qwen 3.5's) can't trim their cache back, so
         # the cache is remembered before each answer and wound back from there.
         self.trimmable = can_trim_prompt_cache(self.cache)
-        self.feed(self.tokens)  # read the system prompt now
+        self.feed(self.tokens[self.fed():])  # read the rest of the system prompt now
         self.mark()
+
+    def split(self, prefix):
+        """The system turn's tokens before the time, and from it."""
+        at = STAMP.search(prefix)
+        return (self.encode(prefix[:at.start()]), self.encode(prefix[at.start():])) if at else (self.encode(prefix), [])
+
+    def begin(self, prefix):
+        """The system turn's tokens, with self.cache started on a copy of one
+        that has read them up to the time (Engine.primed)."""
+        head, tail = self.split(prefix)
+        self.cache = self.e.primed(head)
+        return head + tail
 
     def prefix(self, system, tools):
         """The system turn (with the tools), in the model's chat template."""
@@ -778,7 +812,10 @@ class QwenUltraChat(MlxChat):
     """Sage Ultra: Qwen3.8-27B. ChatML, and it thinks before every answer
     (<think>…</think>, hidden; the app says "thinking" meanwhile) at the
     reasoning effort its template is given. Tool calls are XML in
-    <tool_call> tags, read by ultra_scan; results come back in a user turn."""
+    <tool_call> tags, read by ultra_scan; results come back in a user turn.
+    On this Mac it writes ~4-6 tokens a second, so in a chat low and medium
+    think only when the question needs it (as Pro does) and answer the rest
+    straight after an empty thought; high, and Sage Code, always think."""
     SAMPLING = {'top_p': 0.95, 'top_k': 20}  # Qwen's settings for thinking
     REPEAT = None
     EFFORTS = {'low': 'low', 'medium': 'medium', 'high': 'xhigh'}  # the template's names
@@ -786,6 +823,7 @@ class QwenUltraChat(MlxChat):
 
     def __init__(self, *args):
         self.level = THINKING
+        self.now = self.level != 'off'  # whether this answer starts with a thought
         super().__init__(*args)
         self.max_tokens = max(self.max_tokens, 32768)  # room to think
 
@@ -799,16 +837,15 @@ class QwenUltraChat(MlxChat):
     def set_thinking(self, level):
         """The level is in the system prompt, so the conversation is kept and
         the cache starts over: the next answer reads it all again first."""
-        from mlx_lm.models.cache import make_prompt_cache
         if level not in ('off', *self.EFFORTS) or level == self.level:
             return
-        head = len(self.encode(self.prefix(self.system, self.tools)))
+        head = sum(map(len, self.split(self.prefix(self.system, self.tools))))
         self.level = level
-        self.tokens = self.encode(self.prefix(self.system, self.tools)) + self.tokens[head:]
-        self.cache = make_prompt_cache(self.e.model)
+        self.tokens = self.begin(self.prefix(self.system, self.tools)) + self.tokens[head:]
+        self.mark()
 
     def scan(self, raw):
-        if self.level == 'off':
+        if not self.now:
             return ultra_scan(raw)
         end = raw.find('</think>')
         if end < 0:
@@ -819,27 +856,33 @@ class QwenUltraChat(MlxChat):
         return shown, calls, None if cut is None else start + cut
 
     def thought(self, raw):
-        if self.level == 'off':
+        if not self.now:
             return ''
         end = raw.find('</think>')
         return (held(raw, '</think>') if end < 0 else raw[:end].rstrip()).lstrip()
 
     def temperature(self):
-        if self.level == 'off':
+        if not self.now:
             return 0.7
         return 0.6 if self.mode == 'code' else 1.0  # Qwen's advice for thinking
 
     def suggest(self, halt=None):
-        level, self.level = self.level, 'off'  # a quick line: no thinking
+        level, now, self.level = self.level, self.now, 'off'  # a quick line: no thinking
         try:
             return super().suggest(halt)
         finally:
-            self.level = level
+            self.level, self.now = level, now
+
+    def thinks_about(self, question):
+        if self.level == 'off':
+            return False
+        return self.level == 'high' or self.mode != 'chat' or needs_thought(question)
 
     def start(self):
-        return self.NO_THINKING if self.level == 'off' else '<think>\n'
+        return '<think>\n' if self.now else self.NO_THINKING
 
     def user_turn(self, question):
+        self.now = self.thinks_about(question)
         return super().user_turn(question) + self.start()
 
     def past_turn(self, question, said):
@@ -1021,6 +1064,7 @@ def serve(cmd_path, mode):
 
     thinking = THINKING
     suggesting = os.environ.get('MAXSHELL_SAGE_SUGGEST') != '0'
+    new_chat(mode)  # reads the system prompt now, while the user types, for every chat to start from
     chats = {}      # conversation → its chat, the most recently used last
     forgotten = {}  # conversation → its turns, once its memory was let go
     MAX_CHATS = 4   # each keeps a KV cache in memory

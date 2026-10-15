@@ -1121,7 +1121,7 @@ the tests and report.
 
 | | In a chat | In `sage code` | Memory | Speed here |
 |---|---|---|---|---|
-| **Sage Ultra** | Qwen3.8-27B (Alibaba) | the same | ~16 GB | ~4 tokens/s, thinks first |
+| **Sage Ultra** | Qwen3.8-27B (Alibaba) | the same | ~16 GB | ~4 tokens/s, thinks when it's needed |
 | **Sage Pro** (default) | Gemma 4 E4B (Google) | the same | ~5 GB | ~16 tokens/s |
 | **Sage Flash** | Gemma 4 E2B (Google) | the same | ~3 GB | ~34 tokens/s |
 | **Sage Lite** | Qwen3-1.7B (Alibaba) | Ministral 3 3B (Mistral AI) | ~1 / ~3 GB | ~50 / ~20 tokens/s |
@@ -1132,7 +1132,7 @@ and 6 `sage code` tasks, with the real engine and tools. As shipped:
 
 | | Questions | Time each (median) | `sage code` tasks |
 |---|---|---|---|
-| Sage Ultra | 35 of 35 | ~54 s (thinking medium) | every one tried |
+| Sage Ultra | 35 of 35 | ~34 s, ~12 s when it needn't think | every one tried |
 | Sage Pro | 68 of 70 (twice each) | ~12 s, ~5 s when it needn't think | 11 of 12 |
 | Sage Flash | 64 of 70 | ~6 s, ~1.5 s when it needn't think | 10 of 12 |
 | Sage Lite | 55 of 70 | ~2.5 s | 8 of 12 |
@@ -1142,19 +1142,22 @@ Lite (no better, twice the memory), and a LoRA fine-tune of Sage Lite
 (worse than the maxshell guide in its prompt).
 
 Sage Ultra is raw power over speed: the strongest open model that fits
-this Mac's GPU, all 27 billion parameters working on every word, and it
-thinks before every answer — you watch it think, in muted text under
-**◇ Thinking…**, which becomes **◇ Thought for 42s** once it answers — most
-answers take a minute or two, hard ones longer. On a hard set of puzzles,
+this Mac's GPU, all 27 billion parameters working on every word. It thinks
+before answering anything that needs it — you watch it think, in muted text
+under **◇ Thinking…**, which becomes **◇ Thought for 42s** once it answers —
+and hard answers take a minute or two; a plain question or a hello is
+answered in seconds. Every model reads Sage's instructions once, when it
+starts, and each new chat begins from that (Ultra used to spend ~15 s on
+them at the start of every chat). On a hard set of puzzles,
 exact arithmetic and trick questions it got all 22 (Sage Pro 21), and in
 `sage code` it did every task. **You choose how much it thinks**: the
 **◇ thinking medium** button in the header (click it, or press **^T**)
-steps through *off* (answers straight away), *low*, *medium* (the default)
-and *high* (thinks longest, for the hardest questions), or type `/think
-high`. It applies from the next answer, keeping the conversation;
-`MAXSHELL_SAGE_EFFORT=high` sets where it starts. **Sage Pro and Flash
-think too, when a question needs it**: sums, puzzles, comparisons and code
-get a hidden think first (shown muted, as Ultra's), while small talk, facts
+steps through *off* (answers straight away), *low* and *medium* (the
+default; both think only when a question needs it) and *high* (always
+thinks, longest, for the hardest questions), or type `/think high`. It applies from the next answer, keeping the conversation;
+`MAXSHELL_SAGE_EFFORT=high` sets where it starts. **Sage Ultra, Pro and Flash
+think when a question needs it**: sums, puzzles, comparisons and code
+get a think first (shown muted), while small talk, facts
 and rewrites are answered straight away — on Sage's exam (`ai/sage/eval.py`)
 that's just as right as thinking every time, and plain questions come back
 4–5× sooner (Pro: 5 s instead of 21). The same button sets it: *high* always
