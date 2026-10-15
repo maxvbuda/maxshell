@@ -232,6 +232,11 @@ is lost. Use a temp dir for all scratch output, and when removing one, write
   has no Anthropic API key, and the user chose to skip it. `bot` is not
   that: it's deliberately fake — scored rules, README retrieval and a
   trigram Markov chain over bundled text — no API, network or dependencies.
+- LoRA for Sage was tried (2026-10-14, `ai/sage/lora.py` + `knowledge.py`:
+  maxshell Q&A plus the model's own answers as replay) and **lost**: Lite
+  with the adapter scored 36/70 vs 53/70 with `MAXSHELL_BRIEF` alone, and
+  made things up about itself. The brief in the prompt is how Sage knows
+  maxshell; don't ship an adapter unless it beats that on eval.py.
 - `view` and `top` deliberately shadow the system commands inside maxshell;
   `command view` / `command top` reach the originals.
 - Command position completes commands only (like zsh/fish); files complete
