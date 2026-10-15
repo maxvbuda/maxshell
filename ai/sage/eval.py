@@ -204,7 +204,7 @@ CODE = [
 def load(model, args):
     name, sub = MODELS[model]
     os.environ['MAXSHELL_SAGE_NAME'] = name
-    os.environ['MAXSHELL_GEMMA'] = os.path.expanduser('~/.maxshell/gemma/' + sub)
+    os.environ['MAXSHELL_GEMMA'] = args.dir or os.path.expanduser('~/.maxshell/gemma/' + sub)
     os.environ['MAXSHELL_SAGE_EFFORT'] = args.think
     sys.path.insert(0, SRC)
     import sage
@@ -291,6 +291,7 @@ def main():
     p.add_argument('--append', default='')
     p.add_argument('--system', help='a file with a chat system prompt to try instead')
     p.add_argument('--adapter')
+    p.add_argument('--dir', help="another build of the model to try (a folder like ~/.maxshell/gemma/<model>)")
     p.add_argument('--json')
     p.add_argument('--rescore', action='store_true', help='score the answers in --json again, without a model')
     args = p.parse_args()
