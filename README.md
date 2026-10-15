@@ -1126,6 +1126,21 @@ the tests and report.
 | **Sage Flash** | Gemma 4 E2B (Google) | the same | ~3 GB | ~34 tokens/s |
 | **Sage Lite** | Qwen3-1.7B (Alibaba) | Ministral 3 3B (Mistral AI) | ~1 / ~3 GB | ~50 / ~20 tokens/s |
 
+**Sage's exam.** `ai/sage/eval.py` puts every model through the same 35
+questions (sums, logic, facts, following instructions, memory, code, maxshell)
+and 6 `sage code` tasks, with the real engine and tools. As shipped:
+
+| | Questions | Time each (median) | `sage code` tasks |
+|---|---|---|---|
+| Sage Ultra | 35 of 35 | ~54 s (thinking medium) | every one tried |
+| Sage Pro | 68 of 70 (twice each) | ~12 s, ~5 s when it needn't think | 11 of 12 |
+| Sage Flash | 64 of 70 | ~6 s, ~1.5 s when it needn't think | 10 of 12 |
+| Sage Lite | 55 of 70 | ~2.5 s | 8 of 12 |
+
+Tried and not kept: lower or higher temperatures (no better), 8-bit Sage
+Lite (no better, twice the memory), and a LoRA fine-tune of Sage Lite
+(worse than the maxshell guide in its prompt).
+
 Sage Ultra is raw power over speed: the strongest open model that fits
 this Mac's GPU, all 27 billion parameters working on every word, and it
 thinks before every answer — you watch it think, in muted text under
