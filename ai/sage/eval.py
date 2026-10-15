@@ -53,12 +53,14 @@ def stated(n):
     def check(a):
         t = plain(re.sub(r'```.*?(```|\Z)', '', a, flags=re.S))
         t = re.sub(r'\^\{?\d+\}?|[²³]|\\text\{[^}]*\}', ' ', t)  # cm^2: not a number of the answer
-        marked = re.findall(r'\\boxed\{([^}]*)\}', t) + re.findall(r'\*\*(.*?)\*\*', plain(a))
+        marked = re.findall(r'\\boxed\{([^}]*)\}', t) + re.findall(r'\*\*(.*?)\*\*', a)
         nums = [float(x) for m in marked for x in re.findall(NUM, plain(m))]
-        if nums:
-            return any(abs(x - float(n)) < 1e-6 for x in nums)
+        if any(abs(x - float(n)) < 1e-6 for x in nums):
+            return True
+        same = lambda x: abs(float(x) - float(n)) < 1e-6  # noqa: E731
+        first = re.findall(NUM, t.strip().split('\n')[0])  # "5 cents." then the working
         last = re.findall(NUM, t)
-        return bool(last) and abs(float(last[-1]) - float(n)) < 1e-6
+        return bool(first and same(first[0])) or bool(last and same(last[-1]))
     return check
 
 
@@ -107,7 +109,13 @@ def python_passes(tests):
         blocks = re.findall(r'```(?:python|py)?\n(.*?)```', a, re.S)
         if not blocks:
             return False
-        code = max(blocks, key=len) + '\n\n' + tests
+        def parses(b):
+            try:
+                compile(b, 'answer', 'exec')
+                return True
+            except SyntaxError:
+                return False
+        code = '\n\n'.join(b for b in blocks if parses(b)) + '\n\n' + tests  # the function and examples, not shown output
         try:
             return subprocess.run([sys.executable, '-c', code], capture_output=True, timeout=20).returncode == 0
         except subprocess.TimeoutExpired:
@@ -161,7 +169,7 @@ CHAT = [
     # maxshell itself
     # maxshell itself (worded unlike anything in ai/sage/knowledge.py)
     ('bookmark', 'maxshell', ['I bookmarked a folder as proj with mark in maxshell. How do I get rid of that bookmark?'], has(r'mark -d proj')),
-    ('jump', 'maxshell', ["What's the maxshell command to hop straight to my most-used folder called recipes?"], has(r'`j rec')),
+    ('jump', 'maxshell', ["What's the maxshell command to hop straight to my most-used folder called recipes?"], has(r'(?m)(^|`)j rec')),
     ('theme', 'maxshell', ['how can i switch maxshell to the dracula colours'], has(r'theme dracula')),
     ('explain', 'maxshell', ['In maxshell, how can I see what a command line would do without running it?'], has(r'alt-h|⌥h|`explain')),
     ('palette', 'maxshell', ['Which key opens the command palette in maxshell?'], has(r'ctrl-p|\^p|⌃p|control-p')),
