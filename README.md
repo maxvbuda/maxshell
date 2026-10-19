@@ -1172,8 +1172,8 @@ it edits it.
 too old) with `mlx-lm`, and Sage Pro, `mlx-community/gemma-4-e4b-it-4bit`
 (5.2 GB), in `~/.maxshell/gemma/pro`. `sage --ultra --setup`, `sage --flash
 --setup` and `sage --lite --setup` add the others (`ultra`, `flash`,
-`lite`), and `sage code --lite --setup` adds Sage Code's Lite
-(`lite-code`); then `sage --ultra` and so on, or pick one from the
+`lite`, 1 GB), and `sage code --lite --setup` adds Sage Code's Lite
+(`lite-code`, 2.6 GB) — `sage --setup --lite` works too; then `sage --ultra` and so on, or pick one from the
 dropdown. `MAXSHELL_SAGE_MODEL=flash` makes another the default (`--pro`
 and `pro` pick Sage Pro; `--e4b`/`--e2b` work too). Each model won't start
 without room for it — Ultra with less than 60% of memory free, Pro 30% —

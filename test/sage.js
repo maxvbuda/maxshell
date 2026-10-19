@@ -933,6 +933,13 @@ test('the models: Qwen3.8 for Ultra, Gemma 4 for Pro and Flash; Lite differs in 
   assert.match(r.stderr, /Sage Ultra isn’t set up — run: sage --ultra --setup/);
   const c = spawnSync('node', [sh, '-c', 'sage code --lite hello'], { env, encoding: 'utf8' });
   assert.match(c.stderr, /Sage Lite isn’t set up — run: sage code --lite --setup/);
+  // --setup before the model or after it: the same download
+  const fakePy = path.join(gem, 'python');
+  fs.writeFileSync(fakePy, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  for (const [cmd, repo] of [['sage --setup --lite', 'Qwen3-1.7B'], ['sage --lite --setup', 'Qwen3-1.7B'], ['sage --setup code --lite', 'Ministral-3-3B'], ['sage --setup', 'gemma-4-e4b']]) {
+    const s = spawnSync('node', [sh, '-c', cmd], { env: { ...env, MAXSHELL_GEMMA_PYTHON: fakePy }, encoding: 'utf8' });
+    assert.match(s.stdout, new RegExp(`Downloading mlx-community/${repo}`), cmd);
+  }
   // the shards the index names must all be there
   const d = path.join(gem, 'ultra');
   fs.mkdirSync(d);
