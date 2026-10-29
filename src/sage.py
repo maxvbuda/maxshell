@@ -33,6 +33,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sageweb  # noqa: E402
+
 DIR = os.environ.get('MAXSHELL_GEMMA') or os.path.expanduser('~/.maxshell/gemma')
 NAME = os.environ.get('MAXSHELL_SAGE_NAME') or 'E4B'
 # Ultra is Qwen3.8-27B; Pro and Flash are Gemma 4 (E4B, E2B); Lite is
@@ -102,6 +105,15 @@ CODE_TOOLS = [
           'folders (mkdir -p), run tests or scripts, install packages, use git. It runs without input and stops '
           'after 2 minutes. The user is asked first.', ['command'], command='the command line, e.g. mkdir -p src/utils'),
 ]
+# On the web (src/sageweb.py), while the Mac is online: run here, not by the app.
+WEB_TOOLS = [
+    _tool('web_search', "Search the web (DuckDuckGo) for facts you don't know or that change: news, prices, "
+          'weather, sports, recent releases, what something looks like. Returns titles, links and snippets.',
+          ['query'], query='what to search for, as you would type it into a search engine'),
+    _tool('open_page', 'Read a web page — a search result — when its snippet is not enough.', ['url'],
+          url='the full address, from a search result'),
+]
+WEB_NAMES = {t['function']['name'] for t in WEB_TOOLS}
 QUOTE = '<|"|>'
 CALL = re.compile(r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>', re.S)
 # Hidden too: Gemma's thinking.
@@ -186,15 +198,21 @@ MAXSHELL_BRIEF = (
     '`maxshell --update` updates, `maxshell --make-default` makes it the login shell.')
 
 
-def system_prompt(mode):
-    if mode == 'image':
-        return IMAGE_PROMPT
-    if mode == 'image-edit':
-        return IMAGE_EDIT_PROMPT
-    if mode == 'video':
-        return VIDEO_PROMPT
-    if mode == 'video-from-image':
-        return VIDEO_FROM_IMAGE_PROMPT
+WEB_CHAT = (" You're online now: when a question needs facts you don't know or that change — news, prices, "
+            "weather, sports, anything recent or very specific — call web_search first (open_page reads a result), "
+            "then answer from what you found and say where it came from. Don't search for what you already know.")
+WEB_PROMPT = (" If the request names a particular real thing — a landmark or building, a product, a brand, a "
+              "character, a vehicle, a recent event — first call web_search for what it looks like, then write the "
+              "prompt from what you found. Ordinary things (a cat, a beach, a red car) need no search.")
+WEB_CODE = " You can also look things up — docs, error messages, APIs — with web_search and open_page."
+
+
+def system_prompt(mode, web=False):
+    """Sage's instructions for a mode; web adds how to use the web tools
+    (after the time, so the part before it is read once for both)."""
+    if mode in ('image', 'image-edit', 'video', 'video-from-image'):
+        return {'image': IMAGE_PROMPT, 'image-edit': IMAGE_EDIT_PROMPT, 'video': VIDEO_PROMPT,
+                'video-from-image': VIDEO_FROM_IMAGE_PROMPT}[mode] + (WEB_PROMPT if web else '')
     now = datetime.datetime.now()
     when = f"It is {now:%A, %B} {now.day}, {now.year}, {now:%-I:%M %p}."
     if mode == 'code':
@@ -209,14 +227,14 @@ def system_prompt(mode):
                 f"go-ahead: once you know the change, call edit_file or write_file right away — the app shows the "
                 f"user the change and asks them for you. Call one tool at a time and wait for its result — never say you did "
                 f"something until a tool's result shows it worked. When you're done, say briefly what you changed. "
-                f"{when} You work in the project folder {os.getcwd()}.")
+                f"{when} You work in the project folder {os.getcwd()}." + (WEB_CODE if web else ''))
     return (f"You are Sage, the AI assistant built into maxshell, a shell on the user's Mac. You run entirely on this "
-            f"Mac — private, offline, no account. Your name is Sage: introduce yourself as Sage, not by the model "
+            f"Mac — private, no account. Your name is Sage: introduce yourself as Sage, not by the model "
             f"underneath, and don't bring it up; only if someone asks directly what model you're built on, say "
             f"you're based on an open model from {MAKER}. You're warm, sharp and "
             f"concise. Only write code when it's asked for or really helps; then make it complete and runnable, in "
             f"fenced blocks that name the language. Write math in LaTeX between $ signs. You can't save or change "
-            f"files here; if asked to, show the text and suggest `sage code`, which can. " + MAXSHELL_BRIEF + ' ' + when)
+            f"files here; if asked to, show the text and suggest `sage code`, which can. " + MAXSHELL_BRIEF + ' ' + when + (WEB_CHAT if web else ''))
 
 
 def free_memory():
@@ -271,7 +289,7 @@ class Printer:
 # read by ultra_scan below; Gemma's and Mistral's by their chat classes.
 
 ULTRA_SPECIAL = re.compile(r'<\|im_(start|end)\|>|<\|endoftext\|>')
-TOOL_NAMES = {t['function']['name'] for t in CODE_TOOLS}
+TOOL_NAMES = {t['function']['name'] for t in CODE_TOOLS + WEB_TOOLS}
 
 
 XML_FUNCTION = re.compile(r'<function=([\w.-]+)>(.*?)</function>', re.S)
@@ -465,6 +483,13 @@ class MlxChat:
     def prefix(self, system, tools):
         """The system turn (with the tools), in the model's chat template."""
         return self.tok.apply_chat_template([{'role': 'system', 'content': system}], tools=tools, tokenize=False)
+
+    def reprefix(self, system, tools):
+        """A new system turn (and tools), keeping the conversation."""
+        head = sum(map(len, self.split(self.prefix(self.system, self.tools))))
+        self.system, self.tools = system, tools
+        self.tokens = self.begin(self.prefix(system, tools)) + self.tokens[head:]
+        self.mark()
 
     def set_thinking(self, level):
         """How much the model thinks: off, low, medium or high. Only Sage
@@ -785,15 +810,25 @@ class QwenLiteChat(MlxChat):
     SAMPLING = {'top_p': 0.9}
     REPEAT = None
 
+    NO_THINKING = '<think>\n\n</think>\n\n'
+
     @staticmethod
     def scan(raw):
-        return ULTRA_SPECIAL.sub('', THINK.sub('', raw)), [], None
+        m = re.match(r'\s*<think>.*?(</think>\s*|\Z)', raw, re.S)  # a thought it wrote anyway: hidden
+        at = m.end() if m else 0
+        if m and not m.group(1):
+            return '', [], None
+        shown, calls, cut = ultra_scan(raw[at:])
+        return shown, calls, None if cut is None else at + cut
 
     def temperature(self):
         return 0.7 if self.mode.startswith(('image', 'video')) else 0.3
 
     def user_turn(self, question):
-        return super().user_turn(question) + '<think>\n\n</think>\n\n'
+        return super().user_turn(question) + self.NO_THINKING
+
+    def answer(self, calls, results):
+        return super().answer(calls, results) + self.NO_THINKING
 
 
 def clean_suggestion(text):
@@ -954,9 +989,29 @@ def problem():
 def open_engine():
     """Loads the model once; returns new_chat(mode) and the device it runs on."""
     engine = Engine(DIR, os.environ.get('MAXSHELL_SAGE_DEVICE'))
-    new_chat = lambda mode: engine.chat(mode, system_prompt(mode), CODE_TOOLS if mode == 'code' else None,  # noqa: E731
-                                        MAX_CALLS, MAX_TOKENS)
+
+    def new_chat(mode):
+        chat = engine.chat(mode, *chat_setup(mode, sageweb.online()), MAX_CALLS, MAX_TOKENS)
+        chat.web = sageweb.online()
+        return chat
     return new_chat, engine.device
+
+
+def chat_setup(mode, web):
+    """(system prompt, tools) for a chat in mode, online or not."""
+    tools = (CODE_TOOLS if mode == 'code' else []) + (WEB_TOOLS if web else [])
+    return system_prompt(mode, web), tools or None
+
+
+def keep_online(chat):
+    """Gives a chat the web tools when the Mac comes online, and takes them
+    away when it goes off (the conversation is kept; the cache reads the new
+    system turn)."""
+    web = sageweb.online()
+    if getattr(chat, 'web', web) != web:
+        chat.reprefix(*chat_setup(chat.mode, web))
+        chat.web = web
+    return web
 
 
 def quiet():
@@ -1060,7 +1115,10 @@ def serve(cmd_path, mode):
                         sys.exit(0)
                     later.append(cmd)  # for after this answer
             return run
-        return {t['function']['name']: tool(t['function']['name']) for t in CODE_TOOLS} if mode == 'code' else None
+        found = web_tools(lambda **ev: emit(ev='web', conv=conv, **ev))
+        if mode == 'code':
+            found.update({t['function']['name']: tool(t['function']['name']) for t in CODE_TOOLS})
+        return found
 
     thinking = THINKING
     suggesting = os.environ.get('MAXSHELL_SAGE_SUGGEST') != '0'
@@ -1108,13 +1166,14 @@ def serve(cmd_path, mode):
             thinking = cmd.get('level')
             chat_for(conv).set_thinking(thinking)
         elif op == 'image-prompt':
-            text, stopped = write_image_prompt(new_chat, cmd)
+            text, stopped = write_image_prompt(new_chat, cmd, lambda **ev: emit(ev='web', conv=conv, **ev))
             emit(ev='image-prompt', conv=conv, id=cmd.get('id'), text=text, stopped=stopped)
         elif op == 'ask':
             if cancelled(conv):  # stopped before its turn came
                 emit(ev='done', conv=conv, stopped=True, tokens=0, seconds=0)
                 continue
             chat = chat_for(conv)
+            keep_online(chat)
             stopped = chat.reply(cmd.get('text', ''), lambda s: emit(ev='text', conv=conv, s=s), tools_for(conv),
                                  lambda s: emit(ev='think', conv=conv, s=s))
             emit(ev='done', conv=conv, stopped=stopped, tokens=chat.generated, seconds=round(chat.seconds, 2))
@@ -1135,11 +1194,72 @@ def clean_prompt(text):
     return re.sub(r'\s+', ' ', text)
 
 
-def write_image_prompt(new_chat, req):
+def web_tools(report=None):
+    """The web tools, each telling report(name, title, state, detail) as it
+    starts ('running') and ends ('ok' / 'fail')."""
+    return sageweb.tools(report and (lambda name, args, state, detail: report(
+        name=name, title=sageweb.describe(name, args), state=state, detail=detail)))
+
+
+COMMON_START = {'a', 'an', 'the', 'i', 'my', 'me', 'draw', 'make', 'show', 'paint', 'picture', 'photo', 'create',
+                'generate', 'imagine', 'please', 'add', 'put', 'give', 'turn', 'now', 'then', 'and', 'with', 'in', 'on', 'at'}
+LINKS = {'of', 'the', 'de', 'du', 'la', 'le', 'von', 'van', 'del', 'da', '&'}
+
+
+def named(request):
+    """The particular things a picture request names — "Las Vegas Sphere",
+    "Tesla Cybertruck", "iPhone 17 Pro" — found by their capitals; words in
+    quotes (text to be written in the picture) and a sentence's ordinary
+    first word don't count."""
+    text = re.sub(r'"[^"]*"|“[^”]*”', ' , ', request)
+    words = re.findall(r"[\w'’&-]+|[^\w\s]", text)
+    runs, run, start = [], [], True
+    for w in words:
+        name = bool(re.match(r"[A-Z]|[a-z]+[A-Z]", w)) and not (start and w.lower() in COMMON_START)
+        if name or (run and (w.isdigit() or w.lower() in LINKS)):
+            run.append(w)
+        else:
+            if run:
+                runs.append(run)
+            run = []
+        start = w in '.!?:;' if not w[0].isalnum() else False
+    if run:
+        runs.append(run)
+    out = []
+    for r in runs:
+        while r and (r[-1].lower() in LINKS):
+            r = r[:-1]
+        name = ' '.join(r)
+        if r and name not in ('I', 'OK') and not (len(r) == 1 and r[0].isdigit()) and name not in out:
+            out.append(name)
+    return out[:2]
+
+
+def look_up(request, report=None):
+    """What the web says about what a picture request names, for the prompt
+    writer — small models seldom search on their own — or ''."""
+    names = named(request)
+    if not names or not sageweb.online():
+        return ''
+    search = web_tools(report)['web_search']
+    found = [f'{name}:\n{search(query=name)}' for name in names]
+    found = [f for f in found if re.search(r'(?m)^1\. ', f)]
+    return ('\n\nWhat the web says about what it names (use it for how things really look):\n\n' + '\n\n'.join(found)) if found else ''
+
+
+def write_image_prompt(new_chat, req, report=None):
     """Sage's detailed prompt (or edit instruction) for a request {prompt,
     edit, context, kind: image | video}, written in a conversation of its
     own; and whether Ctrl-C stopped it. For a video, edit means it starts
-    from a picture."""
+    from a picture. Online, it may search the web first (report hears it)."""
+    parts = []
+
+    def fresh(fn):  # what it said before a search isn't the prompt
+        def run(**args):
+            parts.clear()
+            return fn(**args)
+        return run
+    tools = {name: fresh(fn) for name, fn in web_tools(report).items()}
     edit = bool(req.get('edit'))
     if req.get('kind') == 'video':
         chat = new_chat('video-from-image' if edit else 'video')
@@ -1149,8 +1269,9 @@ def write_image_prompt(new_chat, req):
                    f"Write the whole prompt for the new version, keeping everything they didn't ask to change.")
         if req.get('seconds'):
             ask += f"\n\n(The clip is {req['seconds']:g} seconds long.)"
-        parts = []
-        stopped = chat.reply(ask, parts.append)
+        if not edit:
+            ask += look_up(req.get('prompt', ''), report)
+        stopped = chat.reply(ask, parts.append, tools)
         return clean_prompt(''.join(parts)), stopped
     chat = new_chat('image-edit' if edit else 'image')
     ask = req.get('prompt', '')
@@ -1158,8 +1279,8 @@ def write_image_prompt(new_chat, req):
         ask = f"The picture now shows: {req['context']}\n\nThe change the user wants: {ask}"
     elif edit:
         ask = f'The change the user wants: {ask}'
-    parts = []
-    stopped = chat.reply(ask, parts.append)
+    ask += look_up(req.get('prompt', ''), report)
+    stopped = chat.reply(ask, parts.append, tools)
     return clean_prompt(''.join(parts)), stopped
 
 
@@ -1174,7 +1295,12 @@ def image_prompt(req_path, out_path):
         return 1
     quiet()
     new_chat, _ = open_engine()
-    text, _ = write_image_prompt(new_chat, req)
+
+    def report(name, title, state, detail):
+        if state == 'running':
+            sys.stderr.write(f'✦ {title}…\n')
+            sys.stderr.flush()
+    text, _ = write_image_prompt(new_chat, req, report)
     if not text:
         sys.stderr.write('Sage wrote nothing\n')
         return 1
@@ -1206,11 +1332,17 @@ def main():
 
     printer = Printer(tty)
 
+    def searching(name, title, state, detail):
+        if state == 'running':
+            sys.stderr.write(f'{C.muted}{title}…{C.reset}\n' if not tty else f'\r\x1b[K{C.muted}{title}…{C.reset}\n{TAG}')
+            sys.stderr.flush()
+
     def answer(question):
         if tty:
             sys.stdout.write(TAG)
             sys.stdout.flush()
-        stopped = chat.reply(question, printer.write)
+        keep_online(chat)
+        stopped = chat.reply(question, printer.write, web_tools(searching))
         printer.done()
         sys.stdout.write(f"{C.reset}{f'{C.muted} (stopped){C.reset}' if stopped else ''}\n")
         sys.stdout.flush()

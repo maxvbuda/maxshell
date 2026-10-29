@@ -621,11 +621,11 @@ test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps;
     process.env.MAXSHELL_IMAGE_MODEL = 'lite';
     assert.strictEqual(img.choose(null), 'lite');
     assert.match(img.HELP, /--lite/);
-    // Sage Lite writes Lite's prompts; Sage Pro (or Flash) the full model's.
+    // Sage Lite writes every prompt: quick to load, and it leaves the memory to the image model
     const gemma = require('../src/gemma');
     process.env.MAXSHELL_SAGE_WRITER = path.join(__dirname, 'fake-sage-writer.js');
     assert.strictEqual(gemma.promptWriter({ env: {} }, { lite: true }).label, 'Sage Lite');
-    assert.strictEqual(gemma.promptWriter({ env: {} }).label, 'Sage Pro');
+    assert.strictEqual(gemma.promptWriter({ env: {} }).label, 'Sage Lite');
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in was)) delete process.env[k];
     Object.assign(process.env, was);
@@ -933,6 +933,89 @@ const engines = () => require('child_process').execSync('ps -Ao ppid,command').t
   assert.match(out.answer, /I remember 1 before this/); // started again, told the conversation
 });
 
+test('Sage searches the web with ddgr, only when it’s online', () => {
+  const script = String.raw`
+import sys, os, json
+sys.path.insert(0, sys.argv[1])
+import sageweb, sage
+seen = []
+tools = sage.web_tools(lambda **ev: seen.append([ev['title'], ev['state'], ev['detail']]))
+searches = [tools['web_search'](query='dune author') for _ in range(6)]
+L = sage.QwenLiteChat.__new__(sage.QwenLiteChat)
+head = lambda p: p[:sage.STAMP.search(p).start()]
+print(json.dumps({
+  'found': searches[0], 'enough': searches[-1], 'seen': seen[:2], 'count': len(seen),
+  'offline': sageweb.search('offline'), 'none': sageweb.search('nothing here'),
+  'page': sageweb.page_text('<html><title> A  page </title><nav>Menu</nav><p>Hello <b>there</b></p><script>x()</script><p>Bye</p></html>'),
+  'notweb': sageweb.open_page('file:///etc/hosts'),
+  'read': [sageweb.describe('open_page', {'url': 'https://www.example.com/a/b'}), sageweb.summary('open_page', "Couldn't open x: 404")],
+  'named': [sage.named(r) for r in ['the Las Vegas Sphere at night', 'a cat on a windowsill', 'Darth Vader in New York', 'a sign saying "OPEN"', 'an iPhone 17 Pro on a desk']],
+  'prompt': ['web_search' in sage.system_prompt('chat', True), 'web_search' in sage.system_prompt('chat'), 'web_search' in sage.system_prompt('image', True)],
+  'shared': head(sage.system_prompt('chat', True)) == head(sage.system_prompt('chat')),
+  'setup': [sage.chat_setup('chat', False)[1], [t['function']['name'] for t in sage.chat_setup('code', True)[1]][-2:]],
+  'lite': L.scan('<tool_call>\n{"name": "web_search", "arguments": {"query": "f1 champion"}}\n</tool_call>'),
+}))
+os.environ['MAXSHELL_SAGE_WEB'] = '0'
+print(json.dumps(sageweb.online()))
+`;
+  const env = { ...process.env, MAXSHELL_DDGR: path.join(__dirname, 'fake-ddgr.js'), MAXSHELL_SAGE_WEB: '1' };
+  const r = spawnSync('python3', ['-I', '-c', script, path.join(__dirname, '..', 'src')], { encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const [out, off] = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
+  assert.match(out.found, /^1\. dune author — result 1\nhttps:\/\/example\.com\/1\nWhat page 1 says about dune author\./);
+  assert.strictEqual((out.found.match(/^\d+\. /gm) || []).length, 5); // five results
+  assert.match(out.enough, /enough searching/); // at most five searches an answer
+  assert.deepStrictEqual(out.seen, [['Search the web for “dune author”', 'running', ''], ['Search the web for “dune author”', 'ok', '5 results']]);
+  assert.strictEqual(out.count, 10);
+  assert.match(out.offline, /didn’t work/);
+  assert.strictEqual(out.none, 'No results for "nothing here".');
+  assert.deepStrictEqual(out.page, ['A page', 'Hello there\n\nBye']); // no menu, no script
+  assert.match(out.notweb, /full web address/);
+  assert.deepStrictEqual(out.read, ['Read example.com', 'failed']);
+  assert.deepStrictEqual(out.named, [['Las Vegas Sphere'], [], ['Darth Vader', 'New York'], [], ['iPhone 17 Pro']]);
+  assert.deepStrictEqual(out.prompt, [true, false, true]);
+  assert.strictEqual(out.shared, true); // online or not, the start of the prompt is read once
+  assert.deepStrictEqual(out.setup, [null, ['web_search', 'open_page']]);
+  assert.deepStrictEqual(out.lite[1], [['web_search', { query: 'f1 champion' }]]); // Lite calls tools too
+  assert.strictEqual(off, false); // MAXSHELL_SAGE_WEB=0: never
+});
+
+test('the app shows Sage searching the web, in a chat and while it writes a picture’s prompt', () => {
+  const a = app();
+  a.onEvent({ ev: 'ready' });
+  a.setInput('who won the race?');
+  a.submit();
+  a.onEvent({ ev: 'text', s: 'Let me look.' });
+  a.onEvent({ ev: 'web', name: 'web_search', title: 'Search the web for “race winner”', state: 'running', detail: '' });
+  assert.strictEqual(a.status, 'searching');
+  assert.ok(a.busy);
+  let r = render(a, 60, 20, 0);
+  fits(r, 60);
+  assert.match(text(r), /● Search the web for “race winner” · searching…/);
+  assert.match(text(render(a, 100, 20, 0)), /searching the web/); // the header
+  a.onEvent({ ev: 'web', name: 'web_search', title: 'Search the web for “race winner”', state: 'ok', detail: '5 results' });
+  assert.strictEqual(a.status, 'thinking');
+  a.onEvent({ ev: 'text', s: 'Ann won.' });
+  a.onEvent({ ev: 'done', stopped: false, tokens: 3, seconds: 1 });
+  assert.deepStrictEqual(a.items.slice(1).map((i) => i.type), ['sage', 'tool', 'sage']); // before, the search, after
+  assert.match(text(render(a, 60, 20, 0)), /● Search the web for “race winner” · 5 results/);
+  // a picture's prompt: the search is said on the picture
+  const p = app({ mode: 'image' });
+  p.items.push({ type: 'image', prompt: 'the Sphere', size: '768×768', state: 'running', phase: 'prompt', writer: 'Sage Lite', step: 0, total: 4, started: 0, job: { poll: () => ({ state: 'running', phase: 'prompt', step: 0, total: 4 }) } });
+  p.onEvent({ ev: 'web', name: 'web_search', title: 'Search the web for “Las Vegas Sphere”', state: 'running', detail: '' });
+  r = render(p, 80, 20, 0);
+  fits(r, 80);
+  assert.match(text(r), /Sage Lite: Search the web for “Las Vegas Sphere”…/);
+  // …and from sage image's own writer, through its log
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-look-'));
+  const job = Object.assign(Object.create(require('../src/sageimage').Job.prototype), {
+    log: path.join(dir, 'log'), exit: path.join(dir, 'exit'), wrote: path.join(dir, 'wrote'), detailed: path.join(dir, 'detailed'),
+    writerLog: path.join(dir, 'writer.log'), writer: { label: 'Sage Lite' }, options: { steps: 4 }, parse: () => ({}) });
+  fs.writeFileSync(job.writerLog, 'loading\n✦ Search the web for “Las Vegas Sphere”…\n');
+  assert.strictEqual(job.poll().searching, 'Search the web for “Las Vegas Sphere”');
+  fs.rmSync(dir, { recursive: true });
+});
+
 test('a model nobody is using rests, and the next message wakes it with the conversation', () => {
   const a = app();
   const e = a.started[0].e;
@@ -1162,7 +1245,7 @@ test('sage image --edit changes a picture of yours from the shell', () => {
 test('Sage writes a detailed prompt first, and the image model draws from it', () => {
   const img = require('../src/sageimage');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-writer-'));
-  const writer = { label: 'Sage Pro', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
+  const writer = { label: 'Sage Lite', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
   process.env.MAXSHELL_IMAGE_BIN = path.join(__dirname, 'fake-mflux.js');
   const finish = (job) => { let p; for (let i = 0; i < 300; i++) { p = job.poll(); if (p.state !== 'running') break; sleepSync(20); } return p; };
   try {
@@ -1200,7 +1283,7 @@ test('sage image from the shell: Sage’s prompt first, --exact skips it', () =>
   const env = { ...process.env, MAXSHELL_SETUP: '0', MAXSHELL_GEMMA: gem, MAXSHELL_IMAGE_BIN: path.join(__dirname, 'fake-mflux.js'), MAXSHELL_SAGE_WRITER: path.join(__dirname, 'fake-sage-writer.js'), MAXSHELL_SAGE_FREE: '80' };
   const r = spawnSync('node', [sh, '-c', `cd ${work} && sage image --steps 1 a tiny boat`], { env, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout, /Sage Pro is writing a detailed prompt…\n {2}DETAILED: a tiny boat, in warm evening light/);
+  assert.match(r.stdout, /Sage Lite is writing a detailed prompt…\n {2}DETAILED: a tiny boat, in warm evening light/);
   assert.match(r.stderr, /prompt: DETAILED: a tiny boat/);
   assert.match(r.stdout, /saved sage-a-tiny-boat\.png/);
   const exact = spawnSync('node', [sh, '-c', `cd ${work} && sage image --exact --steps 1 a tiny boat`], { env, encoding: 'utf8' });
@@ -1222,7 +1305,7 @@ test('image chat shows Sage’s prompt, and edits are written knowing the pictur
     const out = path.join(root, o.output);
     started.push(o);
     return {
-      out, writer: o.exact ? null : { label: 'Sage Pro' }, stop() {}, cleanup() {},
+      out, writer: o.exact ? null : { label: 'Sage Lite' }, stop() {}, cleanup() {},
       poll: () => {
         if (polled.phase === 'prompt') return { state: 'running', phase: 'prompt', step: 0, total: 8 };
         fs.writeFileSync(out, PNG);
@@ -1234,7 +1317,7 @@ test('image chat shows Sage’s prompt, and edits are written knowing the pictur
   a.setInput('a fox');
   a.submit();
   a.tick();
-  assert.match(text(render(a, 90, 30, 0)), /● Image 768×768 {2}Sage Pro is writing a detailed prompt…/);
+  assert.match(text(render(a, 90, 30, 0)), /● Image 768×768 {2}Sage Lite is writing a detailed prompt…/);
   polled = { phase: 'draw' };
   a.tick();
   let r = text(render(a, 90, 40, 0));
@@ -1314,7 +1397,7 @@ test('sage video from the shell: Sage’s prompt, then a clip here', () => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(r.stdout, /adding sound…\nsound 1\/1/);
   assert.strictEqual(fs.readFileSync(path.join(work, 'sage-a-paper-boat.mp4'), 'utf8'), 'not really an mp4+sound(a paper boat)');
-  assert.match(r.stdout, /Sage Pro is writing a detailed prompt…\n {2}MOTION: a paper boat, the camera slowly pushes in\./);
+  assert.match(r.stdout, /Sage Lite is writing a detailed prompt…\n {2}MOTION: a paper boat, the camera slowly pushes in\./);
   assert.match(r.stdout, /prompt: MOTION: a paper boat[\s\S]*frames: 49/);
   assert.match(r.stdout, /saved sage-a-paper-boat\.mp4/);
   assert.ok(fs.existsSync(path.join(work, 'sage-a-paper-boat.mp4')));
@@ -1340,7 +1423,7 @@ test('a background video job: Sage writes about motion, then Wan films it', () =
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-vjob-'));
   process.env.MAXSHELL_VIDEO_BIN = path.join(__dirname, 'fake-wan.js');
   process.env.MAXSHELL_AUDIO_BIN = path.join(__dirname, 'fake-mmaudio.js');
-  const writer = { label: 'Sage Pro', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
+  const writer = { label: 'Sage Lite', cmd: [process.execPath, path.join(__dirname, 'fake-sage-writer.js')], env: {} };
   try {
     const job = video.job({ ...video.parseArgs(['--steps', '3', 'a', 'kite']), words: 'a kite' }, dir, { writer });
     let p;
@@ -1380,7 +1463,7 @@ test('video chat: film, change it, keep going — with progress, sound and a fra
       { state: 'done', phase: 'draw', stage: 'sound', step: 4, total: 4, detailed: o.exact ? null : `DETAILED ${o.prompt}` },
     ];
     return {
-      out, writer: o.exact ? null : { label: 'Sage Pro' }, stop() {}, cleanup() {},
+      out, writer: o.exact ? null : { label: 'Sage Lite' }, stop() {}, cleanup() {},
       poll: () => { const p = polls.shift() || { state: 'done' }; if (p.state === 'done') { fs.writeFileSync(out, 'mp4'); fs.writeFileSync(o.poster, PNG); } return p; },
     };
   };
@@ -1397,7 +1480,7 @@ test('video chat: film, change it, keep going — with progress, sound and a fra
   a.submit();
   assert.deepStrictEqual([started[0].prompt, started[0].seconds, started[0].sound, started[0].output, started[0].previous], ['a puppy in sunflowers', 6, true, 'sage-a-puppy-in-sunflowers.mp4', undefined]);
   a.tick();
-  assert.match(text(render(a, 90, 30, 0)), /● Clip 1280×704 · 6 s {2}Sage Pro is writing a detailed prompt…/);
+  assert.match(text(render(a, 90, 30, 0)), /● Clip 1280×704 · 6 s {2}Sage Lite is writing a detailed prompt…/);
   assert.match(text(render(a, 90, 30, 0)).split('\n')[0], /writing a prompt/);
   a.tick();
   r = text(render(a, 90, 30, 0));

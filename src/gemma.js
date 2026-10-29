@@ -126,15 +126,14 @@ function setup(m, write, err) {
 // What the engine is told: which model, and where it is.
 const engineEnv = (m, shell) => ({ ...shell.env, MAXSHELL_GEMMA: dir(m), MAXSHELL_SAGE_NAME: m.name, MAXSHELL_NODE: process.execPath });
 
-// sage image's prompt writer: Sage Pro (Sage Flash when memory is short or
-// Pro isn't set up) as a command that turns a request into a detailed
-// prompt — { label, cmd, env } — or null when neither is set up. For Sage
-// Image Lite ({ lite: true }), Sage Lite writes it, so the whole picture
-// stays small and quick; Pro or Flash if Lite isn't set up.
-function promptWriter(shell, { lite = false } = {}) {
+// sage image's and sage video's prompt writer: Sage Lite, so it loads in a
+// moment and leaves the memory to the image model (Sage Pro, or Flash when
+// memory is short, if Lite isn't set up), as a command that turns a request
+// into a detailed prompt — { label, cmd, env } — or null when none is set up.
+function promptWriter(shell) {
   const fake = process.env.MAXSHELL_SAGE_WRITER; // tests: a stand-in for sage.py
-  if (fake) return { label: lite ? 'Sage Lite' : 'Sage Pro', cmd: [process.execPath, fake], env: {} };
-  if (lite && ready(MODELS.lite)) return { label: MODELS.lite.label, cmd: [python(), path.join(__dirname, 'sage.py')], env: engineEnv(MODELS.lite, shell) };
+  if (fake) return { label: 'Sage Lite', cmd: [process.execPath, fake], env: {} };
+  if (ready(MODELS.lite)) return { label: MODELS.lite.label, cmd: [python(), path.join(__dirname, 'sage.py')], env: engineEnv(MODELS.lite, shell) };
   let key = fallback(DEFAULT, false).key;
   if (!ready(MODELS[key])) key = ['e4b', 'e2b'].find((k) => ready(MODELS[k]));
   if (!key) return null;

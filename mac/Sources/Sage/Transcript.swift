@@ -151,6 +151,8 @@ struct ToolCard: View {
         case "write_file": return "doc.badge.plus"
         case "edit_file": return "pencil"
         case "run_command": return "terminal"
+        case "web_search": return "globe"
+        case "open_page": return "safari"
         default: return "wrench"
         }
     }
@@ -338,6 +340,7 @@ struct MediaCard<Content: View>: View {
         case "failed": return item.error ?? "Failed"
         case "stopped": return "Stopped"
         default:
+            if item.phase == "prompt", let look = item.searching { return "\(item.writer ?? "Sage"): \(look)…" }
             if item.phase == "prompt" { return "\(item.writer ?? "Sage") is writing a detailed prompt…" }
             if item.stage == "sound" { return "Adding sound…" }
             if item.stage == "decode" { return "Decoding…" }

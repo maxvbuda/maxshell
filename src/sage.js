@@ -225,7 +225,7 @@ class SageApp {
     this.setThinking(THINKING[(THINKING.indexOf(this.thinking) + 1) % THINKING.length]);
   }
 
-  get busy() { return ['thinking', 'writing', 'waiting', 'running', 'stopping'].includes(this.status); }
+  get busy() { return ['thinking', 'writing', 'searching', 'waiting', 'running', 'stopping'].includes(this.status); }
 
   // Lets the model go while nobody is using it (it holds GBs — Ultra 16):
   // the loop calls this after IDLE_MS without a key or an answer. The next
@@ -306,6 +306,7 @@ class SageApp {
         break;
       }
       case 'tool': this.endThought(); this.onTool(ev.name, ev.args || {}); break;
+      case 'web': this.endThought(); this.onWeb(ev); break;
       case 'suggest': // what you might say next: shown in the empty box, Tab takes it
         if (this.status === 'ready' && !this.input && this.items.length && this.items[this.items.length - 1].type !== 'user') this.suggestion = String(ev.text || '');
         break;
@@ -333,6 +334,27 @@ class SageApp {
       default: return;
     }
     this.changed();
+  }
+
+  // Sage searching the web or reading a page (sage.py runs it; this shows it):
+  // { name, title, state: 'running' | 'ok' | 'fail', detail }
+  onWeb(ev) {
+    const writing = this.drawing();
+    if (writing && writing.phase === 'prompt') { // for a picture's prompt: said on the picture
+      writing.searching = ev.state === 'running' ? ev.title : null;
+      writing.v = (writing.v || 0) + 1;
+      return;
+    }
+    if (ev.state === 'running') {
+      const said = this.lastSage();
+      if (said) said.done = true; // what it said before it looked
+      this.items.push({ type: 'tool', name: ev.name, title: ev.title, state: 'running', web: true });
+      if (this.status !== 'stopping') this.status = 'searching';
+      return;
+    }
+    const item = [...this.items].reverse().find((i) => i.type === 'tool' && i.web && i.state === 'running');
+    if (item) { item.state = ev.state; item.detail = ev.detail; item.v = (item.v || 0) + 1; }
+    if (this.status === 'searching') this.status = 'thinking';
   }
 
   onTool(name, args) {
@@ -742,9 +764,9 @@ class SageApp {
     if (!item || !item.job) return; // no job yet: Sage is writing its prompt
     const p = item.job.poll();
     const detailed = p.detailed || item.detailed; // from the job's writer, or from the chat's model
-    const where = [p.step, p.total, p.phase, p.stage, p.segment, p.piece].join();
+    const where = [p.step, p.total, p.phase, p.stage, p.segment, p.piece, p.searching].join();
     if (p.state === 'running' && where === item.where && detailed === item.detailed) return;
-    Object.assign(item, { where, step: p.step, total: p.total, phase: p.phase, stage: p.stage, segment: p.segment, segments: p.segments, detailed, unwritten: p.unwritten || item.unwritten });
+    Object.assign(item, { where, step: p.step, total: p.total, phase: p.phase, stage: p.stage, segment: p.segment, segments: p.segments, detailed, unwritten: p.unwritten || item.unwritten, searching: p.searching || null });
     if (p.state !== 'running') {
       item.state = p.state;
       item.seconds = Math.round((Date.now() - item.started) / 1000);
@@ -952,7 +974,7 @@ function itemLines(item, w, app) {
     const part = item.segments > 1 ? `part ${item.segment}/${item.segments} · ` : '';
     let detail;
     if (item.state === 'running') {
-      if (item.phase === 'prompt') detail = `${item.writer} is writing a detailed prompt…`;
+      if (item.phase === 'prompt') detail = item.searching ? `${item.writer}: ${item.searching}…` : `${item.writer} is writing a detailed prompt…`;
       else if (item.stage === 'sound') detail = 'adding sound…';
       else if (item.stage === 'decode') detail = `${part}developing the frames…`;
       else if (item.stage === 'denoise') {
@@ -986,7 +1008,7 @@ function itemLines(item, w, app) {
     const color = { running: theme.fg('accent'), done: theme.fg('ok'), failed: theme.fg('err') }[item.state] || muted;
     const time = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
     let detail;
-    if (item.state === 'running' && item.phase === 'prompt') detail = `${item.writer} is writing a detailed prompt…`;
+    if (item.state === 'running' && item.phase === 'prompt') detail = item.searching ? `${item.writer}: ${item.searching}…` : `${item.writer} is writing a detailed prompt…`;
     else if (item.state === 'running') {
       const barW = Math.max(4, Math.min(20, w - 30));
       const f = item.total ? item.step / item.total : 0;
@@ -1014,7 +1036,7 @@ function itemLines(item, w, app) {
   }
   // a tool
   const dot = { ok: theme.fg('ok'), fail: theme.fg('err'), ask: theme.fg('warn'), running: theme.fg('accent'), declined: muted }[item.state] || muted;
-  const detail = item.state === 'declined' ? 'declined' : item.state === 'running' ? 'running…' : item.detail;
+  const detail = item.state === 'declined' ? 'declined' : item.state === 'running' ? (item.web ? 'searching…' : 'running…') : item.detail;
   if (item.command !== undefined) {
     // a command: $ line(s), then what it printed
     lines.push({ s: `${dot}●${RESET()} ${ansi.bold()}Run${RESET()}${detail ? `${muted} · ${detail}${RESET()}` : ''}${item.risky && item.state === 'ask' ? `  ${theme.fg('warn')}careful: this can delete or overwrite things${RESET()}` : ''}` });
@@ -1127,7 +1149,7 @@ function render(app, cols, rows, now = Date.now()) {
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
     loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} ${working(app.drawing())}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',
-    thinking: `${spin} thinking`, writing: `${spin} writing`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
+    thinking: `${spin} thinking`, writing: `${spin} writing`, searching: `${spin} searching the web`, waiting: 'waiting for you', running: `${spin} running a command`, stopping: `${spin} stopping`, error: 'not running',
   }[app.status] || app.status;
   const brand = ' ✦ Sage';
   const pill = ` ${app.mode} `;

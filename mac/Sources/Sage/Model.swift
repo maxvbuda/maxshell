@@ -65,6 +65,7 @@ struct Item: Codable, Hashable {
     var edit: Bool?
     var loaded: Bool?
     var writer: String?
+    var searching: String?
 }
 
 struct SageState: Codable {

@@ -15,8 +15,8 @@ maxshell %~ % for f in src/*.js; do
 ```
 
 > **✦ Meet Sage — an AI that lives in your shell.** Type `sage` and talk to
-> an AI that runs entirely on your Mac: private, offline, no
-> account, no API key. Type `sage code` and it builds and fixes your
+> an AI that runs entirely on your Mac: private, no
+> account, no API key — and when you're online it can search the web. Type `sage code` and it builds and fixes your
 > project with you — reading your files, proposing edits as diffs, running
 > commands, and changing nothing until you say yes. [More below.](#sage--an-ai-on-your-mac)
 
@@ -1103,6 +1103,22 @@ the real command: a short guide to maxshell is part of what it's told
 (`MAXSHELL_BRIEF` in `src/sage.py`). On Sage's exam that took maxshell
 questions from about 1 in 12 right to 10–12 in 12.
 
+**It can search the web.** While the Mac is online, Sage can look things up
+— news, prices, weather, sports, anything recent — with DuckDuckGo, through
+[ddgr](https://github.com/jarun/ddgr) (`brew install ddgr`; no account or
+key). It decides when a question needs it, may read a result's page too,
+and says where it found things; each search shows in the conversation as
+**● Search the web for “…” · 5 results** (✦ Sage's header says *searching
+the web* meanwhile). Offline, or without ddgr, it isn't offered and Sage
+answers from what it knows. Only the search words and the pages it opens
+leave the Mac; the model still runs here. Up to five searches an answer.
+It works in `sage code` (docs, error messages), in `sage <question>`, and
+when Sage writes a picture's or clip's prompt: a request that names
+something particular — "the Las Vegas Sphere", "an iPhone 17 Pro" — is
+looked up first, so the prompt describes the real thing.
+`MAXSHELL_SAGE_WEB=0` turns it off. Sage Pro and Ultra read results well;
+Sage Lite, at 1.7B, sometimes misreads them.
+
 **It doesn't hog memory.** A model nobody has used for 10 minutes is let
 go, in the terminal and in Sage for Mac — Sage Ultra alone holds 16 GB. Your
 next message starts it again (a few seconds; Ultra about 15) and tells it
@@ -1220,16 +1236,16 @@ With no flag, `sage image` uses Sage Image if it's set up, else Lite;
 **Apache 2.0**: free to use, commercially too.
 
 **Sage writes the prompt.** The image model follows a detailed prompt much
-better than a short one, so Sage Pro goes first: it turns your words into a
+better than a short one, so Sage Lite goes first: it turns your words into a
 detailed prompt — every subject you named, how many, their colours and
 places in the frame, the setting, light, camera angle and style — and the
 image model draws from that. For an edit, it writes a precise instruction:
 exactly what to change, and what to keep (in image chat it knows what the
 picture shows and what's been changed so far). Sage's prompt is shown before
-the picture is drawn. Sage Pro and the image model don't fit in memory
-together, so Sage runs first and quits: it adds about 30 seconds (Sage Flash
-writes it when memory is short or Pro isn't set up; if neither can run, your
-words are used as they are). `--exact` (`/exact` in image chat) skips it. The
+the picture is drawn. Sage runs first and quits, so it never shares memory
+with the image model; Lite loads in a moment and adds about 10 seconds (Sage
+Pro, or Flash when memory is short, writes it if Lite isn't set up; if none
+can run, your words are used as they are). `--exact` (`/exact` in image chat) skips it. The
 file is still named after your words. `/image` in a Sage chat does the same
 with the model you're chatting with — it writes the prompt on the side, so
 the conversation isn't touched (`/image --exact …` skips it).
@@ -1265,7 +1281,7 @@ your words, never over a file) and opens it. `--image photo.jpg` brings a
 picture to life — say what moves. Clips can be **any length**:
 `--seconds 30` films it 2 seconds at a time, each part carrying on from the
 last frame of the one before, and joins them, so memory stays that of one
-part and only the time grows. As with pictures, Sage Pro first writes a
+part and only the time grows. As with pictures, Sage Lite first writes a
 detailed prompt — what moves, how, and what the camera does (`--exact`
 skips it). `--size`, `--steps`, `--seed`, `-o`, `--no-open` work as for
 `sage image`. It's slow: on an M3 with 24 GB, each 2 seconds takes about 18

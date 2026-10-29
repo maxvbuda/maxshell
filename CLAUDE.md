@@ -96,14 +96,14 @@ snapshot the cache before each answer). At a terminal, `sage` / `sage code` open
 a full-screen app (`SageApp` state + `render()`, model dropdown) that runs
 `sage.py --serve` as a separate process: JSON commands appended to a file,
 JSON events read back from another (`Engine`), so it stays synchronous.
-Sage's chat prompt includes `MAXSHELL_BRIEF` (sage.py), a short guide to maxshell's commands — update it when a command changes (a test checks every command it names exists). `ai/sage/eval.py` is Sage's exam (real engine, real tools): run it before and after any change to a model, its sampling, thinking or prompt. `sage code` gives the model tools (Gemma's native calls, Mistral's
+Sage's chat prompt includes `MAXSHELL_BRIEF` (sage.py), a short guide to maxshell's commands — update it when a command changes (a test checks every command it names exists). Online, every chat gets `WEB_TOOLS` (`web_search` via ddgr, `open_page`; `src/sageweb.py`), run by sage.py itself — not the app — and shown as `{ev: 'web'}` tool items; `keep_online` swaps them in or out per question, and picture prompts look up what a request names first (`look_up`). Tests use `test/fake-ddgr.js` (`MAXSHELL_DDGR`; `MAXSHELL_SAGE_WEB=0/1`). `ai/sage/eval.py` is Sage's exam (real engine, real tools): run it before and after any change to a model, its sampling, thinking or prompt. `sage code` gives the model tools (Gemma's native calls, Mistral's
 `[TOOL_CALLS]`, or Qwen-style `<tool_call>` JSON / a ```json block found by
 `ultra_scan`; generation stops at the call) that the app runs via `src/sagetools.js` — reads in
 the project are free; writes, edits and commands show a diff / the command
 and ask; replaced files go to the Trash. Tests use
 `test/fake-sage-engine.js` (`MAXSHELL_SAGE_ENGINE`). `sage image`
 (`src/sageimage.js`, Qwen-Image 2.1 via mflux; `src/png.js` draws
-thumbnails) first has Sage Pro write a detailed prompt (`sage.py
+thumbnails) first has Sage Lite write a detailed prompt (`sage.py
 --image-prompt`, then it exits — the two don't fit in memory together);
 tests swap in `test/fake-mflux.js` and `test/fake-sage-writer.js`
 (`MAXSHELL_IMAGE_BIN`, `MAXSHELL_SAGE_WRITER`). `sage video`

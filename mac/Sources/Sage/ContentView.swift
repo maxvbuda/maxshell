@@ -216,6 +216,7 @@ struct StatusPill: View {
         case "writing": return "writing"
         case "waiting": return "waiting for you"
         case "running": return "running a command"
+        case "searching": return "searching the web"
         case "stopping": return "stopping"
         default: return s.drawing ? (s.mode == "video" ? "filming" : "drawing") : s.status
         }

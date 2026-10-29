@@ -45,12 +45,15 @@ def number(n):
 
 
 NUM = r'-?\d+(?:\.\d+)?'
+WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']
+NUMBER_WORD = re.compile(r'\b(' + '|'.join(WORDS) + r')\b', re.I)
 
 
 def stated(n):
     """n is the answer it gives: a boxed or bold number, else the last
     number outside code."""
     def check(a):
+        a = NUMBER_WORD.sub(lambda m: str(WORDS.index(m.group(1).lower())), a)  # "**one** sister"
         t = plain(re.sub(r'```.*?(```|\Z)', '', a, flags=re.S))
         t = re.sub(r'\^\{?\d+\}?|[²³]|\\text\{[^}]*\}', ' ', t)  # cm^2: not a number of the answer
         marked = re.findall(r'\\boxed\{([^}]*)\}', t) + re.findall(r'\*\*(.*?)\*\*', a)

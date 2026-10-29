@@ -258,6 +258,10 @@ class Job {
     const writing = this.writer && !finished && !fs.existsSync(this.wrote);
     const detailed = read(this.detailed);
     const sage = { phase: writing ? 'prompt' : 'draw', detailed: detailed && detailed.trim() };
+    if (writing) { // what it's looking up on the web first, if anything (sage.py writes "✦ Search the web for …")
+      const look = String(read(this.writerLog) || '').split('\n').filter((l) => l.startsWith('✦ ')).pop();
+      if (look) sage.searching = look.slice(2).replace(/…$/, '');
+    }
     if (this.writer && !writing && !detailed) sage.unwritten = lastLine(read(this.writerLog)) || 'Sage didn’t answer';
     if (!finished) return { state: 'running', ...p, ...sage };
     const code = Number(read(this.exit).trim());
