@@ -46,10 +46,12 @@ const MODELS = {
     license: 'Qwen-Image 2.1 — Qwen Research License: research and evaluation, not commercial use.',
   },
   // FLUX.2 [klein] is distilled to 4 steps (guidance stays 1.0, mflux's default).
+  // It draws through src/sageflux.py, a worker that keeps it loaded between
+  // pictures (mflux's own command when memory is short: it has low-RAM mode).
   lite: {
     key: 'lite', label: 'Sage Image Lite', repo: 'mflux-community/flux2-klein-4b-mflux-q4', size: '4.6 GB', folder: 'image-lite',
     draw: 'mflux-generate-flux2', edit: 'mflux-generate-flux2-edit', parts: ['transformer', 'text_encoder', 'vae', 'tokenizer'],
-    steps: 4, needFree: 15, eta: 'about a minute',
+    steps: 4, needFree: 15, eta: 'about a minute, less once it’s warm', worker: 'sageflux.py',
     license: 'FLUX.2 [klein] 4B — Apache 2.0: free to use, commercially too.',
   },
 };
@@ -163,11 +165,14 @@ function argv(opts, out, free = 100) {
   const m = MODELS[o.model];
   const editing = !!(o.images && o.images.length);
   const seed = o.seed ?? Math.floor(Math.random() * 1e9);
-  const a = [bin(o.model, editing), '--model', dir(o.model), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
+  const short = free < m.needFree;
+  const warm = m.worker && !short && !process.env.MAXSHELL_IMAGE_BIN;
+  const cmd = warm ? [python(), path.join(__dirname, m.worker)] : [bin(o.model, editing)];
+  const a = [...cmd, '--model', dir(o.model), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
   if (editing) a.push('--image-paths', ...o.images); // edit these
-  if (free < m.needFree) a.push('--low-ram');
+  if (short) a.push('--low-ram');
   return a;
 }
 

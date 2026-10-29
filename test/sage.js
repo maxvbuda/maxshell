@@ -594,14 +594,17 @@ test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps;
     for (const b of ['python', 'mflux-generate-flux2', 'mflux-generate-flux2-edit', 'mflux-generate-qwen-2.1-edit']) fs.writeFileSync(path.join(bin, b), '');
     const o = img.parseArgs(['--lite', 'a', 'red', 'panda']);
     assert.deepStrictEqual([o.model, o.steps, o.prompt], ['lite', null, 'a red panda']);
+    // Drawn by the warm worker; mflux's own command, in low-RAM mode, when memory is short.
     const a = img.argv(o, '/tmp/x.png', 80);
-    assert.strictEqual(path.basename(a[0]), 'mflux-generate-flux2');
+    assert.deepStrictEqual([path.basename(a[0]), path.basename(a[1])], ['python', 'sageflux.py']);
+    assert.strictEqual(path.basename(img.argv(o, '/tmp/x.png', 10)[0]), 'mflux-generate-flux2');
     assert.strictEqual(a[a.indexOf('--model') + 1], path.join(gem, 'image-lite'));
     assert.strictEqual(a[a.indexOf('--steps') + 1], '4');
     assert.ok(!a.includes('--low-ram'), 'Lite fits where Sage Image needs low-RAM mode');
     assert.ok(img.argv(o, '/tmp/x.png', 10).includes('--low-ram'));
     const edit = img.argv({ ...o, steps: 6, images: ['/tmp/in.png'] }, '/tmp/x.png');
-    assert.strictEqual(path.basename(edit[0]), 'mflux-generate-flux2-edit');
+    assert.strictEqual(path.basename(edit[1]), 'sageflux.py');
+    assert.strictEqual(path.basename(img.argv({ ...o, images: ['/tmp/in.png'] }, '/tmp/x.png', 10)[0]), 'mflux-generate-flux2-edit');
     assert.deepStrictEqual([edit[edit.indexOf('--steps') + 1], edit[edit.indexOf('--image-paths') + 1]], ['6', '/tmp/in.png']);
     // Sage Image keeps its own 8 steps and pipeline.
     const full = img.argv(img.parseArgs(['a', 'cat']), '/tmp/x.png');

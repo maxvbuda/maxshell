@@ -1203,7 +1203,15 @@ with Black Forest Labs' FLUX.2 [klein] 4B instead: the 4-bit
 `~/.maxshell/gemma/image-lite`; `sage image --lite --setup` downloads it). It's
 distilled to 4 steps, so on an M3 a 768×768 picture takes about a minute
 start to finish (about 45 seconds of drawing) in 3.4 GB of memory, and it
-needs low-RAM mode only below 15% free. **Sage Lite** writes its detailed
+needs low-RAM mode only below 15% free. It draws through a **warm worker**
+(`src/sageflux.py`): the first picture starts it, and it keeps the model
+loaded so the next ones skip starting Python, loading 4.6 GB and compiling —
+only the drawing is left, and that is about a quarter quicker than mflux's
+own command because the prompt isn't padded to 512 tokens (the pictures look
+the same). 512×512 (`--size 512`, `/size 512`) is about twice as fast again.
+The worker leaves after 5 idle minutes (`MAXSHELL_FLUX_IDLE`, in seconds),
+freeing its memory; stopping a picture (^C) stops it at the next step. With
+memory short, mflux's own command runs instead, in low-RAM mode. **Sage Lite** writes its detailed
 prompt, so the whole picture stays small and quick (Sage Pro or Flash if
 Lite isn't set up). Everything else works the same — `--edit`, image chat,
 `/size`, `/steps` — and the image chat's title says which model is drawing.
