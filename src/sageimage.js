@@ -48,10 +48,13 @@ const MODELS = {
   // FLUX.2 [klein] is distilled to 4 steps (guidance stays 1.0, mflux's default).
   // It draws through src/sageflux.py, a worker that keeps it loaded between
   // pictures (mflux's own command when memory is short: it has low-RAM mode).
+  // At 384² (side) a warm picture takes ~8.5 s on an M3 MacBook Air; 512² is
+  // ~17 s and 768² ~50 s — the steps are compute-bound, so fewer pixels is
+  // what makes it quick, and at 384 it still looks right.
   lite: {
     key: 'lite', label: 'Sage Image Lite', repo: 'mflux-community/flux2-klein-4b-mflux-q4', size: '4.6 GB', folder: 'image-lite',
     draw: 'mflux-generate-flux2', edit: 'mflux-generate-flux2-edit', parts: ['transformer', 'text_encoder', 'vae', 'tokenizer'],
-    steps: 4, needFree: 15, eta: 'about a minute, less once it’s warm', worker: 'sageflux.py',
+    steps: 4, needFree: 15, eta: 'about 10 seconds once it’s warm', worker: 'sageflux.py', side: 384,
     license: 'FLUX.2 [klein] 4B — Apache 2.0: free to use, commercially too.',
   },
 };
@@ -75,10 +78,19 @@ function choose(want) {
   return modelReady('image') || !modelReady('lite') ? 'image' : 'lite';
 }
 
-// Options with the model and its steps filled in.
+// Options with the model, its steps and its size filled in. A model with its
+// own size (Lite: 384, for speed) shrinks the picture to it — keeping the
+// shape of a photo being edited — unless a size was asked for.
 function resolve(o) {
   const model = choose(o.model);
-  return { ...o, model, steps: o.steps || MODELS[model].steps };
+  const m = MODELS[model];
+  const r = { ...o, model, steps: o.steps || m.steps };
+  const long = Math.max(r.width, r.height);
+  if (m.side && !o.sizeSet && long > m.side) {
+    const fit = (v) => Math.max(192, Math.round((v * m.side) / long / 32) * 32);
+    Object.assign(r, { width: fit(r.width), height: fit(r.height) });
+  }
+  return r;
 }
 
 // "a red panda, reading!" → sage-a-red-panda-reading.png, or -2, -3… if taken.
@@ -139,6 +151,7 @@ function parseArgs(args, { chat = false } = {}) {
       o.width = Number(m[1]);
       o.height = Number(m[2] || m[1]);
       o.sized = !!m[2]; // WxH is exact; one number is the long side when editing
+      o.sizeSet = true; // asked for: no model's own size replaces it
     } else if (a === '--edit' || a === '-e') o.images.push(next() || '');
     else if (a === '--steps') o.steps = Number(next());
     else if (a === '--seed') o.seed = Number(next());
@@ -357,14 +370,14 @@ function runImage(args, io, shell) {
     const tui = require('./tui');
     const free = () => require('./gemma').freeMemory();
     const app = new sage.SageApp({
-      mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE, imageLabel: m.label,
+      mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE, imageLabel: m.label, imageModel: o.model,
       startImage: (opts) => new Job({ ...opts, model: o.model }, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell, { lite: o.model === 'lite' }) }),
     });
     if (mine) app.load(mine);
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
   if (!ready(o.model)) return unready();
-  if (!o.steps) o.steps = m.steps;
+  Object.assign(o, resolve(o)); // the model's steps, and Lite's size
   const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd); // named after your words
   if (fs.existsSync(out)) { err(`sage image: ${o.output} is already there — pick another name\n`); return 1; }
   const muted = theme.style(theme.current().ui.muted);

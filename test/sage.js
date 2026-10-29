@@ -621,6 +621,13 @@ test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps;
     process.env.MAXSHELL_IMAGE_MODEL = 'lite';
     assert.strictEqual(img.choose(null), 'lite');
     assert.match(img.HELP, /--lite/);
+    // Lite draws at 384² unless a size is asked for; a photo keeps its shape; Sage Image keeps 768.
+    const size = (args, extra = {}) => { const r = img.resolve({ ...img.parseArgs(args), ...extra }); return `${r.width}×${r.height}`; };
+    assert.strictEqual(size(['--lite', 'a', 'cat']), '384×384');
+    assert.strictEqual(size(['--lite', '--size', '768', 'a', 'cat']), '768×768');
+    assert.strictEqual(size(['--lite', 'a', 'cat'], { width: 768, height: 512 }), '384×256');
+    assert.strictEqual(size(['--lite', '--size', '256', 'a', 'cat']), '256×256');
+    assert.strictEqual(size(['a', 'cat'], { model: 'image' }), '768×768');
     // Sage Lite writes every prompt: quick to load, and it leaves the memory to the image model
     const gemma = require('../src/gemma');
     process.env.MAXSHELL_SAGE_WRITER = path.join(__dirname, 'fake-sage-writer.js');

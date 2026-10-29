@@ -128,10 +128,11 @@ const IDLE = { send() {}, poll: () => [], close() {}, interrupt() {}, errors: ()
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null, imageLabel = 'Sage Image' }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null, imageLabel = 'Sage Image', imageModel = null }) {
     this.id = conversations.newId(); // where this conversation is kept (src/conversations.js)
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
     this.imageLabel = imageLabel; // image chat's model: Sage Image or Sage Image Lite
+    this.imageModel = imageModel; // …its key ('lite'), so sizes and steps are that model's
     this.startVideo = startVideo; // video chat: (options) → a sagevideo job
     this.clip = null;             // video chat: the latest clip, which the next message changes or extends
     this.clipName = null;         // …and the first prompt, which names every version
@@ -519,7 +520,7 @@ class SageApp {
         if (this.mode !== 'image') return false;
         const o = require('./sageimage').parseArgs([`--${cmd}`, arg || '', 'x']);
         if (o.error) { this.note(o.error, 'err'); return true; }
-        Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height } : { steps: o.steps });
+        Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height, sizeSet: true } : { steps: o.steps });
         if (cmd === 'size' && this.fitted) { // your picture keeps its shape unless WxH says otherwise
           this.fitted = o.sized ? null : require('./sageimage').fitSize(this.fitted.width, this.fitted.height, o.width);
         }
@@ -657,7 +658,8 @@ class SageApp {
       if (!o.sized) Object.assign(o, img.fitSize(p.width, p.height, Math.max(o.width, o.height)));
     }
     o.output = path.basename(img.outputPath(o.output || o.prompt, this.root)); // named after your words
-    const item = { type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job: null, state: 'running', step: 0, total: img.resolve(o).steps, started: Date.now() };
+    const r = img.resolve(o);
+    const item = { type: 'image', prompt: o.prompt, size: `${r.width}×${r.height}`, job: null, state: 'running', step: 0, total: r.steps, started: Date.now() };
     this.items.push(item);
     this.scroll = 0;
     if (!o.exact && this.status !== 'error') {
@@ -720,14 +722,15 @@ class SageApp {
     const img = require('./sageimage');
     const edit = !!this.picture;
     if (!edit) this.pictureName = text;
-    const o = { ...this.drawOpts, ...(edit && this.fitted), prompt: text, seed: null, open: false, images: edit ? [this.picture] : null, exact: this.exact };
+    const o = { ...this.drawOpts, ...(edit && this.fitted), prompt: text, seed: null, open: false, images: edit ? [this.picture] : null, exact: this.exact, model: this.imageModel };
     if (edit && (this.scene || this.changes.length)) {
       o.context = [this.scene, this.changes.length && `It has since been changed: ${this.changes.join('; ')}.`].filter(Boolean).join(' ');
     }
     o.output = path.basename(img.outputPath(this.pictureName, this.root));
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
-    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: (job.options && job.options.steps) || img.resolve(o).steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
+    const r = img.resolve(o); // the size and steps it's really drawn at
+    this.items.push({ type: 'image', edit, prompt: text, size: `${r.width}×${r.height}`, job, state: 'running', step: 0, total: (job.options && job.options.steps) || r.steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
     this.scroll = 0;
     this.changed();
   }

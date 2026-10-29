@@ -1217,19 +1217,24 @@ low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 with Black Forest Labs' FLUX.2 [klein] 4B instead: the 4-bit
 `mflux-community/flux2-klein-4b-mflux-q4` build (4.6 GB, in
 `~/.maxshell/gemma/image-lite`; `sage image --lite --setup` downloads it). It's
-distilled to 4 steps, so on an M3 a 768×768 picture takes about a minute
-start to finish (about 45 seconds of drawing) in 3.4 GB of memory, and it
-needs low-RAM mode only below 15% free. It draws through a **warm worker**
-(`src/sageflux.py`): the first picture starts it, and it keeps the model
-loaded so the next ones skip starting Python, loading 4.6 GB and compiling —
-only the drawing is left, and that is about a quarter quicker than mflux's
-own command because the prompt isn't padded to 512 tokens (the pictures look
-the same). 512×512 (`--size 512`, `/size 512`) is about twice as fast again.
+distilled to 4 steps and draws at **384×384** by default, which is what
+makes it quick: on an M3 MacBook Air a picture takes **about 8 seconds**
+from the command to the saved file once Lite is warm (about 17 s at 512×512
+and 50 s at 768×768 — the steps are compute-bound, so fewer pixels is the
+only way to go faster, and at 384 pictures still look right). `--size 768`
+or `/size 768` draws bigger; a photo you edit keeps its shape, its long side
+at 384. It needs about 3.4 GB of memory, and low-RAM mode only below 15%
+free. It draws through a **warm worker** (`src/sageflux.py`): the first
+picture starts it, and it keeps the model loaded so the next ones skip
+starting Python, loading 4.6 GB and compiling — only the drawing is left,
+and that is about a quarter quicker than mflux's own command because the
+prompt isn't padded to 512 tokens (the pictures look the same).
 The worker leaves after 5 idle minutes (`MAXSHELL_FLUX_IDLE`, in seconds),
 freeing its memory; stopping a picture (^C) stops it at the next step. With
 memory short, mflux's own command runs instead, in low-RAM mode. **Sage Lite** writes its detailed
-prompt, so the whole picture stays small and quick (Sage Pro or Flash if
-Lite isn't set up). Everything else works the same — `--edit`, image chat,
+prompt, so the whole picture stays small and quick — it adds about 7
+seconds, and `--exact` skips it (Sage Pro or Flash writes it if Lite isn't
+set up). Everything else works the same — `--edit`, image chat,
 `/size`, `/steps` — and the image chat's title says which model is drawing.
 With no flag, `sage image` uses Sage Image if it's set up, else Lite;
 `MAXSHELL_IMAGE_MODEL=lite` makes Lite the default. FLUX.2 [klein] 4B is
