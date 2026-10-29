@@ -581,6 +581,55 @@ test('sage image: options, file names that never overwrite, progress', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
+test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps; picked when it’s the one set up', () => {
+  const img = require('../src/sageimage');
+  const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
+  const was = { ...process.env };
+  process.env.MAXSHELL_GEMMA = gem;
+  delete process.env.MAXSHELL_IMAGE_MODEL;
+  delete process.env.MAXSHELL_IMAGE_BIN;
+  try {
+    const bin = path.join(gem, 'venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    for (const b of ['python', 'mflux-generate-flux2', 'mflux-generate-flux2-edit', 'mflux-generate-qwen-2.1-edit']) fs.writeFileSync(path.join(bin, b), '');
+    const o = img.parseArgs(['--lite', 'a', 'red', 'panda']);
+    assert.deepStrictEqual([o.model, o.steps, o.prompt], ['lite', null, 'a red panda']);
+    const a = img.argv(o, '/tmp/x.png', 80);
+    assert.strictEqual(path.basename(a[0]), 'mflux-generate-flux2');
+    assert.strictEqual(a[a.indexOf('--model') + 1], path.join(gem, 'image-lite'));
+    assert.strictEqual(a[a.indexOf('--steps') + 1], '4');
+    assert.ok(!a.includes('--low-ram'), 'Lite fits where Sage Image needs low-RAM mode');
+    assert.ok(img.argv(o, '/tmp/x.png', 10).includes('--low-ram'));
+    const edit = img.argv({ ...o, steps: 6, images: ['/tmp/in.png'] }, '/tmp/x.png');
+    assert.strictEqual(path.basename(edit[0]), 'mflux-generate-flux2-edit');
+    assert.deepStrictEqual([edit[edit.indexOf('--steps') + 1], edit[edit.indexOf('--image-paths') + 1]], ['6', '/tmp/in.png']);
+    // Sage Image keeps its own 8 steps and pipeline.
+    const full = img.argv(img.parseArgs(['a', 'cat']), '/tmp/x.png');
+    assert.strictEqual(path.basename(full[0]), 'mflux-generate-qwen-2.1-edit');
+    assert.strictEqual(full[full.indexOf('--steps') + 1], '8');
+    // With only Lite downloaded, it's the one used — and ready() says Sage can draw.
+    assert.ok(!img.ready());
+    for (const part of img.MODELS.lite.parts) fs.mkdirSync(path.join(gem, 'image-lite', part), { recursive: true });
+    assert.ok(img.ready() && img.ready('lite') && !img.ready('image'));
+    assert.strictEqual(img.choose(null), 'lite');
+    assert.strictEqual(img.resolve(img.parseArgs(['a', 'cat'])).steps, 4);
+    for (const part of img.MODELS.image.parts) fs.mkdirSync(path.join(gem, 'image', part), { recursive: true });
+    assert.strictEqual(img.choose(null), 'image');
+    process.env.MAXSHELL_IMAGE_MODEL = 'lite';
+    assert.strictEqual(img.choose(null), 'lite');
+    assert.match(img.HELP, /--lite/);
+    // Sage Lite writes Lite's prompts; Sage Pro (or Flash) the full model's.
+    const gemma = require('../src/gemma');
+    process.env.MAXSHELL_SAGE_WRITER = path.join(__dirname, 'fake-sage-writer.js');
+    assert.strictEqual(gemma.promptWriter({ env: {} }, { lite: true }).label, 'Sage Lite');
+    assert.strictEqual(gemma.promptWriter({ env: {} }).label, 'Sage Pro');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in was)) delete process.env[k];
+    Object.assign(process.env, was);
+    fs.rmSync(gem, { recursive: true });
+  }
+});
+
 test('a background image job reports progress, then the saved picture', () => {
   const img = require('../src/sageimage');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-img-'));

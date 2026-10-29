@@ -128,9 +128,10 @@ const IDLE = { send() {}, poll: () => [], close() {}, interrupt() {}, errors: ()
 
 class SageApp {
   // models: [{ key, ready }]; start(key) returns an Engine-like object.
-  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null }) {
+  constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null, imageLabel = 'Sage Image' }) {
     this.id = conversations.newId(); // where this conversation is kept (src/conversations.js)
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
+    this.imageLabel = imageLabel; // image chat's model: Sage Image or Sage Image Lite
     this.startVideo = startVideo; // video chat: (options) → a sagevideo job
     this.clip = null;             // video chat: the latest clip, which the next message changes or extends
     this.clipName = null;         // …and the first prompt, which names every version
@@ -142,7 +143,7 @@ class SageApp {
     this.scene = null;            // what the picture shows (Sage's prompt for it), and…
     this.changes = [];            // …the changes asked for since: what Sage writes edits from
     this.exact = false;           // /exact: draw from the words as they are, not Sage's prompt
-    this.drawOpts = { width: 768, height: 768, steps: 8 };
+    this.drawOpts = { width: 768, height: 768, steps: null }; // steps: the model's own unless /steps
     this.mode = mode;
     this.root = root;
     this.models = models;
@@ -501,7 +502,7 @@ class SageApp {
           this.fitted = o.sized ? null : require('./sageimage').fitSize(this.fitted.width, this.fitted.height, o.width);
         }
         const now = this.fitted || this.drawOpts;
-        this.note(`From now on: ${now.width}×${now.height}, ${this.drawOpts.steps} steps.`);
+        this.note(`From now on: ${now.width}×${now.height}${this.drawOpts.steps ? `, ${this.drawOpts.steps} steps` : ''}.`);
         return true;
       }
       case 'edit': case 'load': {
@@ -634,7 +635,7 @@ class SageApp {
       if (!o.sized) Object.assign(o, img.fitSize(p.width, p.height, Math.max(o.width, o.height)));
     }
     o.output = path.basename(img.outputPath(o.output || o.prompt, this.root)); // named after your words
-    const item = { type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job: null, state: 'running', step: 0, total: o.steps, started: Date.now() };
+    const item = { type: 'image', prompt: o.prompt, size: `${o.width}×${o.height}`, job: null, state: 'running', step: 0, total: img.resolve(o).steps, started: Date.now() };
     this.items.push(item);
     this.scroll = 0;
     if (!o.exact && this.status !== 'error') {
@@ -704,7 +705,7 @@ class SageApp {
     o.output = path.basename(img.outputPath(this.pictureName, this.root));
     let job;
     try { job = this.startImage(o); } catch (e) { this.note(`Couldn’t start drawing: ${e.message}`, 'err'); return; }
-    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: o.steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
+    this.items.push({ type: 'image', edit, prompt: text, size: `${o.width}×${o.height}`, job, state: 'running', step: 0, total: (job.options && job.options.steps) || img.resolve(o).steps, started: Date.now(), writer: job.writer ? job.writer.label : null });
     this.scroll = 0;
     this.changed();
   }
@@ -1122,7 +1123,7 @@ function render(app, cols, rows, now = Date.now()) {
     : d.type !== 'video' ? `drawing ${d.step}/${d.total}`
     : d.stage === 'sound' ? 'adding sound'
     : `filming${d.segments > 1 ? ` part ${d.segment}/${d.segments}` : ''}`);
-  const drop = app.mode === 'video' ? ' ◆ Sage Video ' : app.mode === 'image' ? ' ◆ Sage Image ' : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
+  const drop = app.mode === 'video' ? ' ◆ Sage Video ' : app.mode === 'image' ? ` ◆ ${app.imageLabel} ` : ` ◆ ${info.label} ${app.menu ? '▴' : '▾'} `;
   const spin = SPIN[Math.floor(now / 90) % SPIN.length];
   const status = {
     loading: `${spin} waking ${info.label}…`, ready: app.drawing() ? `${spin} ${working(app.drawing())}` : app.speed ? `ready · ${app.speed.toFixed(1)} tok/s` : 'ready',

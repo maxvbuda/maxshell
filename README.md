@@ -1197,6 +1197,20 @@ conversation while you keep chatting; ^C stops it. On an M3 a picture takes abou
 low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
 
+**Sage Image Lite.** `sage image --lite …` (or `sage --lite image …`) draws
+with Black Forest Labs' FLUX.2 [klein] 4B instead: the 4-bit
+`mflux-community/flux2-klein-4b-mflux-q4` build (4.6 GB, in
+`~/.maxshell/gemma/image-lite`; `sage image --lite --setup` downloads it). It's
+distilled to 4 steps, so on an M3 a 768×768 picture takes about a minute
+start to finish (about 45 seconds of drawing) in 3.4 GB of memory, and it
+needs low-RAM mode only below 15% free. **Sage Lite** writes its detailed
+prompt, so the whole picture stays small and quick (Sage Pro or Flash if
+Lite isn't set up). Everything else works the same — `--edit`, image chat,
+`/size`, `/steps` — and the image chat's title says which model is drawing.
+With no flag, `sage image` uses Sage Image if it's set up, else Lite;
+`MAXSHELL_IMAGE_MODEL=lite` makes Lite the default. FLUX.2 [klein] 4B is
+**Apache 2.0**: free to use, commercially too.
+
 **Sage writes the prompt.** The image model follows a detailed prompt much
 better than a short one, so Sage Pro goes first: it turns your words into a
 detailed prompt — every subject you named, how many, their colours and

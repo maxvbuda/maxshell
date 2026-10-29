@@ -2,7 +2,11 @@
 
 // sage image: pictures from a prompt, made on this Mac by Qwen-Image 2.1
 // (Alibaba's open image model; 4-bit, run with mflux on MLX). The model is
-// in ~/.maxshell/gemma/image; mflux is in Sage's Python. A picture is saved
+// in ~/.maxshell/gemma/image; mflux is in Sage's Python. `sage image --lite`
+// is Sage Image Lite: Black Forest Labs' FLUX.2 [klein] 4B (4-bit, the
+// mflux-community build) in ~/.maxshell/gemma/image-lite — under half the
+// size, 4 steps instead of 8, Apache 2.0. With no flag, Sage Image if it's
+// set up, else Lite ($MAXSHELL_IMAGE_MODEL=lite picks Lite). A picture is saved
 // as a PNG in the current folder, named after the prompt — never over a
 // file that's there — and opened in Preview (or shown inline in iTerm2).
 //
@@ -17,7 +21,7 @@
 // your own (--edit, /edit, or a file dragged in) can be the starting point.
 //
 // The image model follows a detailed prompt far better than a short one, so
-// first Sage Pro (src/sage.py --image-prompt) turns your words into one —
+// first Sage Pro (Sage Lite, for Sage Image Lite; src/sage.py --image-prompt) turns your words into one —
 // the subjects, their places, setting, light, framing and style — or, for an
 // edit, into a precise instruction of what to change and what to keep. It
 // runs before the image model and exits, so the two never share memory.
@@ -28,21 +32,52 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
-const REPO = 'OsaurusAI/Qwen-Image-2.1-mflux-4bit';
 const MFLUX = '0.21.0';
-const SIZE = '10.6 GB';
-const PARTS = ['transformer', 'text_encoder', 'vae'];
-// 8 steps already look finished; on an M3 a step takes ~9 s at 512² and ~20 s at 768².
-const DEFAULTS = { width: 768, height: 768, steps: 8 };
-const NEED_FREE = 35; // % of memory free; below it, mflux's low-RAM mode
+// The image models: where each comes from, the mflux commands that run it
+// (draw, and edit a picture), and how many steps look finished.
+const MODELS = {
+  // 8 steps already look finished; on an M3 a step takes ~9 s at 512² and ~20 s at 768².
+  // Only the edit pipeline works with this build (the plain qwen-2.1 one
+  // makes noise), and it does plain text-to-image too.
+  image: {
+    key: 'image', label: 'Sage Image', repo: 'OsaurusAI/Qwen-Image-2.1-mflux-4bit', size: '10.6 GB', folder: 'image',
+    draw: 'mflux-generate-qwen-2.1-edit', edit: 'mflux-generate-qwen-2.1-edit', parts: ['transformer', 'text_encoder', 'vae'],
+    steps: 8, needFree: 35, eta: 'usually a few minutes',
+    license: 'Qwen-Image 2.1 — Qwen Research License: research and evaluation, not commercial use.',
+  },
+  // FLUX.2 [klein] is distilled to 4 steps (guidance stays 1.0, mflux's default).
+  lite: {
+    key: 'lite', label: 'Sage Image Lite', repo: 'mflux-community/flux2-klein-4b-mflux-q4', size: '4.6 GB', folder: 'image-lite',
+    draw: 'mflux-generate-flux2', edit: 'mflux-generate-flux2-edit', parts: ['transformer', 'text_encoder', 'vae', 'tokenizer'],
+    steps: 4, needFree: 15, eta: 'about a minute',
+    license: 'FLUX.2 [klein] 4B — Apache 2.0: free to use, commercially too.',
+  },
+};
+const REPO = MODELS.image.repo;
+const DEFAULTS = { width: 768, height: 768, steps: MODELS.image.steps };
 
 const base = () => process.env.MAXSHELL_GEMMA || path.join(os.homedir(), '.maxshell', 'gemma');
-const dir = () => path.join(base(), 'image');
+const dir = (key = 'image') => path.join(base(), MODELS[key].folder);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
-// The edit pipeline: it also does plain text-to-image, and it's the one this
-// build is made for (the plain qwen-2.1 pipeline makes only noise with it).
-const bin = () => process.env.MAXSHELL_IMAGE_BIN || path.join(path.dirname(python()), 'mflux-generate-qwen-2.1-edit');
-const ready = () => fs.existsSync(bin()) && PARTS.every((p) => fs.existsSync(path.join(dir(), p)));
+const bin = (key = 'image', editing = false) => process.env.MAXSHELL_IMAGE_BIN
+  || path.join(path.dirname(python()), MODELS[key][editing ? 'edit' : 'draw']);
+const modelReady = (key) => fs.existsSync(bin(key)) && MODELS[key].parts.every((p) => fs.existsSync(path.join(dir(key), p)));
+// ready(): can Sage draw at all; ready('lite'): is that model set up.
+const ready = (key) => (key ? modelReady(key) : Object.keys(MODELS).some(modelReady));
+
+// The model for a picture: the one asked for (--lite, $MAXSHELL_IMAGE_MODEL),
+// else Sage Image if it's set up, else Lite if that is.
+function choose(want) {
+  const asked = want || process.env.MAXSHELL_IMAGE_MODEL;
+  if (asked && MODELS[asked]) return asked;
+  return modelReady('image') || !modelReady('lite') ? 'image' : 'lite';
+}
+
+// Options with the model and its steps filled in.
+function resolve(o) {
+  const model = choose(o.model);
+  return { ...o, model, steps: o.steps || MODELS[model].steps };
+}
 
 // "a red panda, reading!" → sage-a-red-panda-reading.png, or -2, -3… if taken.
 function outputPath(prompt, folder, ext = '.png') {
@@ -87,10 +122,11 @@ function droppedPath(text, cwd = process.cwd()) {
   return fs.existsSync(full) ? full : null;
 }
 
-// sage image's options: { prompt, width, height, steps, seed, output, open, images } or { error }.
+// sage image's options: { prompt, model, width, height, steps, seed, output, open, images } or { error }.
+// steps is null unless asked for: each model has its own (resolve fills it in).
 // With `chat`, no prompt is fine (it opens image chat).
 function parseArgs(args, { chat = false } = {}) {
-  const o = { ...DEFAULTS, seed: null, output: null, open: true, images: [], sized: false };
+  const o = { ...DEFAULTS, steps: null, model: null, seed: null, output: null, open: true, images: [], sized: false };
   const words = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -107,6 +143,7 @@ function parseArgs(args, { chat = false } = {}) {
     else if (a === '-o' || a === '--output') o.output = next();
     else if (a === '--no-open') o.open = false;
     else if (a === '--exact') o.exact = true;
+    else if (a === '--lite') o.model = 'lite';
     else words.push(a);
   }
   o.prompt = words.join(' ').trim();
@@ -115,19 +152,22 @@ function parseArgs(args, { chat = false } = {}) {
     if (!(o[k] >= 256 && o[k] <= 2048)) return { error: 'sizes go from 256 to 2048' };
     o[k] = Math.round(o[k] / 32) * 32; // the model works in multiples of 32
   }
-  if (!(o.steps >= 1 && o.steps <= 100)) return { error: 'steps go from 1 to 100' };
+  if (o.steps !== null && !(o.steps >= 1 && o.steps <= 100)) return { error: 'steps go from 1 to 100' };
   if (o.seed !== null && !Number.isInteger(o.seed)) return { error: 'the seed is a whole number' };
   return o;
 }
 
 // The mflux command line for a picture.
-function argv(o, out, free = 100) {
+function argv(opts, out, free = 100) {
+  const o = resolve(opts);
+  const m = MODELS[o.model];
+  const editing = !!(o.images && o.images.length);
   const seed = o.seed ?? Math.floor(Math.random() * 1e9);
-  const a = [bin(), '--model', dir(), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
+  const a = [bin(o.model, editing), '--model', dir(o.model), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
-  if (o.images && o.images.length) a.push('--image-paths', ...o.images); // edit these
-  if (free < NEED_FREE) a.push('--low-ram');
+  if (editing) a.push('--image-paths', ...o.images); // edit these
+  if (free < m.needFree) a.push('--low-ram');
   return a;
 }
 
@@ -174,6 +214,7 @@ const lastLine = (text) => String(text).trim().split('\n').map((l) => l.trim()).
 // (parse) and steps to run after it (then: argv lists, e.g. adding sound).
 class Job {
   constructor(o, folder, { env = process.env, free = 100, writer = null, build = argv, ext = '.png', kind = 'image', parse = progress, then = [] } = {}) {
+    if (build === argv) o = resolve(o); // a picture: which model, and its steps
     this.options = o;
     this.writer = writer;
     this.kind = kind;
@@ -239,18 +280,19 @@ function wrapText(text, w) {
   return lines;
 }
 
-function setup(write, err) {
+function setup(key, write, err) {
+  const m = MODELS[key];
   const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { stdio: 'inherit', ...opts }).status === 0;
   if (!fs.existsSync(python())) { err('sage image: set Sage up first: sage --setup\n'); return 1; }
-  // The build runs on mflux 0.21's qwen-2.1-edit pipeline.
+  // Both builds run on mflux 0.21 (its qwen-2.1-edit and flux2 pipelines).
   write(`Installing mflux ${MFLUX}…\n`);
   if (!run(python(), ['-m', 'pip', 'install', '-q', `mflux==${MFLUX}`])) { err('sage image: pip install failed\n'); return 1; }
-  fs.mkdirSync(dir(), { recursive: true });
-  write(`Downloading ${REPO} (${SIZE}) into ${dir()}…\n`);
-  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(REPO)}, local_dir='.')\n`;
+  fs.mkdirSync(dir(key), { recursive: true });
+  write(`Downloading ${m.label}: ${m.repo} (${m.size}) into ${dir(key)}…\n`);
+  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.')\n`;
   // HF_HUB_VERBOSITY: no "set a HF_TOKEN" warning — public models need no account
-  if (!run(python(), ['-c', snap], { cwd: dir(), env: { HF_HUB_VERBOSITY: 'error', ...process.env, HF_HUB_DISABLE_XET: '1' } })) { err('sage image: download failed\n'); return 1; }
-  write('Sage can draw now — try: sage image "a lighthouse at dusk, oil painting"\n');
+  if (!run(python(), ['-c', snap], { cwd: dir(key), env: { HF_HUB_VERBOSITY: 'error', ...process.env, HF_HUB_DISABLE_XET: '1' } })) { err('sage image: download failed\n'); return 1; }
+  write(`${m.label} can draw now — try: sage image${key === 'lite' ? ' --lite' : ''} "a lighthouse at dusk, oil painting"\n`);
   return 0;
 }
 
@@ -261,14 +303,18 @@ const HELP = `sage image — pictures from a prompt, made on your Mac
   sage image --edit photo.jpg <prompt>   change your picture (it's kept; the result is a new file)
   sage image --size 1024x768 …   another size (256–2048, multiples of 32; --size 512 with
                                  --edit is the long side, keeping your picture's shape)
-  sage image --steps 20 …        more steps: finer, slower (default ${DEFAULTS.steps})
+  sage image --lite …            Sage Image Lite (FLUX.2 klein 4B): smaller and faster
+  sage image --steps 20 …        more steps: finer, slower (default ${MODELS.image.steps}, Lite ${MODELS.lite.steps})
   sage image --seed 7 …          the same seed and prompt make the same picture
   sage image -o name.png …       choose the file name (never over an existing file)
   sage image --no-open …         don't open it
   sage image --exact …           draw from your words as they are (Sage Pro writes a
-                                 detailed prompt from them first, by default)
-  sage image --setup             install it (~${SIZE})
-Qwen-Image 2.1 — Qwen Research License: research and evaluation, not commercial use.
+                                 detailed prompt from them first, by default; for
+                                 --lite, Sage Lite does)
+  sage image --setup             install it (~${MODELS.image.size})
+  sage image --lite --setup      install Sage Image Lite (~${MODELS.lite.size})
+Sage Image: ${MODELS.image.license}
+Sage Image Lite: ${MODELS.lite.license}
 `;
 
 function runImage(args, io, shell) {
@@ -276,10 +322,17 @@ function runImage(args, io, shell) {
   const theme = require('./theme');
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
-  if (args[0] === '--setup') return setup(write, err);
+  if (args.includes('--setup')) return setup(args.includes('--lite') ? 'lite' : 'image', write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
   const o = parseArgs(args, { chat: true });
   if (o.error) { err(`sage image: ${o.error}\n`); return 1; }
+  o.model = choose(o.model);
+  const m = MODELS[o.model];
+  const unready = () => {
+    if (!ready()) err('sage image: the image model isn’t set up — run: sage image --setup (or --lite --setup for the smaller one)\n');
+    else err(`sage image: ${m.label} isn’t set up — run: sage image${o.model === 'lite' ? ' --lite' : ''} --setup\n`);
+    return 1;
+  };
   if (o.images.length > 1) { err('sage image: one picture at a time\n'); return 1; }
   let mine = null;
   if (o.images.length) {
@@ -290,22 +343,23 @@ function runImage(args, io, shell) {
   }
   if (!o.prompt) {
     if (!(process.stdin.isTTY && process.stdout.isTTY && io.stdout.kind === 'term')) { write(HELP); return 1; }
-    if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
+    if (!ready(o.model)) return unready();
     const sage = require('./sage');
     const tui = require('./tui');
     const free = () => require('./gemma').freeMemory();
     const app = new sage.SageApp({
-      mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE,
-      startImage: (opts) => new Job(opts, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell) }),
+      mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE, imageLabel: m.label,
+      startImage: (opts) => new Job({ ...opts, model: o.model }, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell, { lite: o.model === 'lite' }) }),
     });
     if (mine) app.load(mine);
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
-  if (!ready()) { err('sage image: the image model isn’t set up — run: sage image --setup\n'); return 1; }
+  if (!ready(o.model)) return unready();
+  if (!o.steps) o.steps = m.steps;
   const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd); // named after your words
   if (fs.existsSync(out)) { err(`sage image: ${o.output} is already there — pick another name\n`); return 1; }
   const muted = theme.style(theme.current().ui.muted);
-  const writer = o.exact ? null : require('./gemma').promptWriter(shell);
+  const writer = o.exact ? null : require('./gemma').promptWriter(shell, { lite: o.model === 'lite' }); // Lite's prompt: by Sage Lite
   if (writer) { // Sage turns the words into a detailed prompt first
     write(`${muted}✦ ${writer.label} is writing a detailed prompt…${ansi.reset()}\n`);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-prompt-'));
@@ -320,7 +374,7 @@ function runImage(args, io, shell) {
       for (const l of wrapText(detailed, Math.max(20, (process.stdout.columns || 80) - 4))) write(`${muted}  ${l}${ansi.reset()}\n`);
     } else write(`${muted}  (${lastLine(r.stderr) || 'Sage didn’t answer'} — drawing from your words)${ansi.reset()}\n`);
   }
-  write(`${muted}✦ ${mine ? 'editing' : 'drawing'} ${o.width}×${o.height}, ${o.steps} steps — usually a few minutes${ansi.reset()}\n`);
+  write(`${muted}✦ ${m.label} is ${mine ? 'editing' : 'drawing'} ${o.width}×${o.height}, ${o.steps} steps — ${m.eta}${ansi.reset()}\n`);
   const began = Date.now();
   const free = require('./gemma').freeMemory();
   const status = shell.runExternal(argv(o, out, free), io, { ...shell.env, PYTHONUNBUFFERED: '1' });
@@ -332,4 +386,4 @@ function runImage(args, io, shell) {
   return 0;
 }
 
-module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, show, openFile, dir, DEFAULTS, REPO, HELP };
+module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, choose, resolve, show, openFile, dir, MODELS, DEFAULTS, REPO, HELP };

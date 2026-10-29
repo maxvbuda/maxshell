@@ -157,13 +157,13 @@ const MAX_APPS = 8;
 
 function makeApp({ id, mode, root, model, items }) {
   const shell = shellFor(root);
-  const writer = () => gemma.promptWriter(shell);
+  const writer = (lite = false) => gemma.promptWriter(shell, { lite }); // Image Lite: Sage Lite writes
   const free = () => gemma.freeMemory();
   const conv = { id, items: items || [] };
   if (mode === 'image' || mode === 'video') {
     return new sage.SageApp({
       mode, root, model: 'e4b', models: [], start: () => sage.IDLE, resume: conv,
-      startImage: mode === 'image' && img.ready() ? (o) => new img.Job(o, root, { env: shell.env, free: free(), writer: o.exact ? null : writer() }) : null,
+      startImage: mode === 'image' && img.ready() ? (o) => new img.Job(o, root, { env: shell.env, free: free(), writer: o.exact ? null : writer(img.resolve(o).model === 'lite') }) : null,
       startVideo: mode === 'video' && video.ready() ? (o) => video.job(o, root, { env: shell.env, free: free(), writer: o.exact ? null : writer() }) : null,
     });
   }
