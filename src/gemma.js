@@ -204,7 +204,7 @@ function runSage(args, io, shell, name = 'sage') {
   const err = (s) => shell.writeTo(io.stderr, s);
   let mode = 'chat';
   if (args[0] === '--setup' && args.length > 1) args = [...args.slice(1), '--setup']; // sage --setup --lite is sage --lite --setup
-  if (args[0] === '--lite' && args[1] === 'image') args = ['image', '--lite', ...args.slice(2)]; // sage --lite image is sage image --lite
+  if (/^--(flash|lite)$/.test(args[0]) && args[1] === 'image') args = ['image', args[0], ...args.slice(2)]; // sage --flash image is sage image --flash
   if (args[0] === 'image') return require('./sageimage').runImage(args.slice(1), io, shell);
   if (args[0] === 'video') return require('./sagevideo').runVideo(args.slice(1), io, shell);
   if (args[0] === 'app') return runApp(args.slice(1), write, err);

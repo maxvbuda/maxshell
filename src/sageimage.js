@@ -2,11 +2,15 @@
 
 // sage image: pictures from a prompt, made on this Mac by Qwen-Image 2.1
 // (Alibaba's open image model; 4-bit, run with mflux on MLX). The model is
-// in ~/.maxshell/gemma/image; mflux is in Sage's Python. `sage image --lite`
-// is Sage Image Lite: Black Forest Labs' FLUX.2 [klein] 4B (4-bit, the
-// mflux-community build) in ~/.maxshell/gemma/image-lite — under half the
-// size, 4 steps instead of 8, Apache 2.0. With no flag, Sage Image if it's
-// set up, else Lite ($MAXSHELL_IMAGE_MODEL=lite picks Lite). A picture is saved
+// in ~/.maxshell/gemma/image; mflux is in Sage's Python. Two quicker ones:
+// `sage image --flash` is Sage Image Flash, Black Forest Labs' FLUX.2 [klein]
+// 4B (4-bit, the mflux-community build, in ~/.maxshell/gemma/image-flash),
+// and `sage image --lite` is Sage Image Lite, DreamShaper 7 with LCM (Stable
+// Diffusion 1.5, distilled to 4 steps; diffusers on PyTorch's Metal backend,
+// in ~/.maxshell/gemma/image-lite). Both draw small through a warm worker
+// (src/sageflux.py) and upscale to the size asked for. With no flag, Sage
+// Image if it's set up, else Flash, else Lite ($MAXSHELL_IMAGE_MODEL picks
+// one). A picture is saved
 // as a PNG in the current folder, named after the prompt — never over a
 // file that's there — and opened in Preview (or shown inline in iTerm2).
 //
@@ -21,7 +25,7 @@
 // your own (--edit, /edit, or a file dragged in) can be the starting point.
 //
 // The image model follows a detailed prompt far better than a short one, so
-// first Sage Pro (Sage Lite, for Sage Image Lite; src/sage.py --image-prompt) turns your words into one —
+// first Sage Lite (src/sage.py --image-prompt) turns your words into one —
 // the subjects, their places, setting, light, framing and style — or, for an
 // edit, into a precise instruction of what to change and what to keep. It
 // runs before the image model and exits, so the two never share memory.
@@ -48,16 +52,34 @@ const MODELS = {
   // FLUX.2 [klein] is distilled to 4 steps (guidance stays 1.0, mflux's default).
   // It draws through src/sageflux.py, a worker that keeps it loaded between
   // pictures (mflux's own command when memory is short: it has low-RAM mode).
-  // At 384² (side) a warm picture takes ~8.5 s on an M3 MacBook Air; 512² is
-  // ~17 s and 768² ~50 s — the steps are compute-bound, so fewer pixels is
-  // what makes it quick, and at 384 it still looks right.
-  lite: {
-    key: 'lite', label: 'Sage Image Lite', repo: 'mflux-community/flux2-klein-4b-mflux-q4', size: '4.6 GB', folder: 'image-lite',
+  // The steps are compute-bound — on an M3 MacBook Air a warm 384² picture
+  // takes ~8.5 s, 512² ~17 s, 768² ~50 s — so it draws small (side: 384 on
+  // the long side, or a quarter of the size asked for if that's more) and
+  // the upscaler brings it up to the size asked for, sharper than resizing.
+  flash: {
+    key: 'flash', label: 'Sage Image Flash', repo: 'mflux-community/flux2-klein-4b-mflux-q4', size: '4.6 GB', folder: 'image-flash',
     draw: 'mflux-generate-flux2', edit: 'mflux-generate-flux2-edit', parts: ['transformer', 'text_encoder', 'vae', 'tokenizer'],
-    steps: 4, needFree: 15, eta: 'about 10 seconds once it’s warm', worker: 'sageflux.py', side: 384,
+    steps: 4, needFree: 15, eta: 'about 10 seconds once it’s warm', worker: 'sageflux.py', engine: 'flux', side: 384,
     license: 'FLUX.2 [klein] 4B — Apache 2.0: free to use, commercially too.',
   },
+  // DreamShaper 7 with a latent consistency model (SimianLuo/LCM_Dreamshaper_v7):
+  // Stable Diffusion 1.5 at its own 512², 4 steps, on PyTorch's Metal backend
+  // (diffusers, installed by its setup) in the same worker. Its text encoder
+  // reads 77 tokens, so a long prompt is cut short. Edits redraw the picture
+  // from the words, starting from it (img2img), rather than following an
+  // instruction the way Flash and Sage Image do.
+  lite: {
+    key: 'lite', label: 'Sage Image Lite', repo: 'SimianLuo/LCM_Dreamshaper_v7', size: '4.3 GB', folder: 'image-lite',
+    parts: ['unet', 'text_encoder', 'vae', 'tokenizer', 'scheduler'], pip: 'diffusers',
+    files: ['model_index.json', 'scheduler/*', 'tokenizer/*', 'text_encoder/config.json', 'text_encoder/model.safetensors',
+      'unet/config.json', 'unet/diffusion_pytorch_model.safetensors', 'vae/*', 'feature_extractor/*'],
+    steps: 4, needFree: 8, eta: 'a few seconds once it’s warm', worker: 'sageflux.py', engine: 'lcm', side: 512,
+    license: 'DreamShaper 7 LCM — MIT (Stable Diffusion 1.5 underneath: CreativeML Open RAIL-M).',
+  },
 };
+// Real-ESRGAN's compact x4 model (BSD-3, 2.4 MB, ~0.2 s): what Flash and Lite
+// upscale with, in ~/.maxshell/gemma/upscaler.
+const UPSCALER = { repo: 'mlx-community/Real-ESRGAN-general-x4v3', folder: 'upscaler', file: 'model.safetensors' };
 const REPO = MODELS.image.repo;
 const DEFAULTS = { width: 768, height: 768, steps: MODELS.image.steps };
 
@@ -66,30 +88,37 @@ const dir = (key = 'image') => path.join(base(), MODELS[key].folder);
 const python = () => process.env.MAXSHELL_GEMMA_PYTHON || path.join(base(), 'venv', 'bin', 'python');
 const bin = (key = 'image', editing = false) => process.env.MAXSHELL_IMAGE_BIN
   || path.join(path.dirname(python()), MODELS[key][editing ? 'edit' : 'draw']);
-const modelReady = (key) => fs.existsSync(bin(key)) && MODELS[key].parts.every((p) => fs.existsSync(path.join(dir(key), p)));
-// ready(): can Sage draw at all; ready('lite'): is that model set up.
+// Lite has no mflux command: the worker, in Sage's Python, is all it needs.
+const modelReady = (key) => fs.existsSync(MODELS[key].draw ? bin(key) : python()) && MODELS[key].parts.every((p) => fs.existsSync(path.join(dir(key), p)));
+// ready(): can Sage draw at all; ready('flash'): is that model set up.
 const ready = (key) => (key ? modelReady(key) : Object.keys(MODELS).some(modelReady));
 
-// The model for a picture: the one asked for (--lite, $MAXSHELL_IMAGE_MODEL),
-// else Sage Image if it's set up, else Lite if that is.
+// The model for a picture: the one asked for (--flash, --lite,
+// $MAXSHELL_IMAGE_MODEL), else the best one set up: Sage Image, Flash, Lite.
 function choose(want) {
   const asked = want || process.env.MAXSHELL_IMAGE_MODEL;
   if (asked && MODELS[asked]) return asked;
-  return modelReady('image') || !modelReady('lite') ? 'image' : 'lite';
+  return ['image', 'flash', 'lite'].find(modelReady) || 'image';
 }
 
-// Options with the model, its steps and its size filled in. A model with its
-// own size (Lite: 384, for speed) shrinks the picture to it — keeping the
-// shape of a photo being edited — unless a size was asked for.
+// The upscaler, if it's downloaded (by Flash's or Lite's setup).
+const upscaler = () => path.join(base(), UPSCALER.folder, UPSCALER.file);
+const canUpscale = (key) => !!MODELS[key].side && fs.existsSync(upscaler());
+
+// Options with the model and its steps filled in, and — for a model that
+// draws small and upscales (Flash, Lite) — the size it draws at (draw: { width,
+// height }, the picture's shape, long side `side` or a quarter of the size
+// asked for, whichever is more). width × height is always what's saved.
 function resolve(o) {
   const model = choose(o.model);
   const m = MODELS[model];
   const r = { ...o, model, steps: o.steps || m.steps };
   const long = Math.max(r.width, r.height);
-  if (m.side && !o.sizeSet && long > m.side) {
-    const fit = (v) => Math.max(192, Math.round((v * m.side) / long / 32) * 32);
-    Object.assign(r, { width: fit(r.width), height: fit(r.height) });
-  }
+  const side = m.side && Math.max(m.side, Math.ceil(long / 4 / 32) * 32);
+  if (side && long > side && canUpscale(model)) {
+    const fit = (v) => Math.max(64, Math.round((v * side) / long / 32) * 32);
+    r.draw = { width: fit(r.width), height: fit(r.height) };
+  } else delete r.draw;
   return r;
 }
 
@@ -151,14 +180,13 @@ function parseArgs(args, { chat = false } = {}) {
       o.width = Number(m[1]);
       o.height = Number(m[2] || m[1]);
       o.sized = !!m[2]; // WxH is exact; one number is the long side when editing
-      o.sizeSet = true; // asked for: no model's own size replaces it
     } else if (a === '--edit' || a === '-e') o.images.push(next() || '');
     else if (a === '--steps') o.steps = Number(next());
     else if (a === '--seed') o.seed = Number(next());
     else if (a === '-o' || a === '--output') o.output = next();
     else if (a === '--no-open') o.open = false;
     else if (a === '--exact') o.exact = true;
-    else if (a === '--lite') o.model = 'lite';
+    else if (a === '--flash' || a === '--lite') o.model = a.slice(2);
     else words.push(a);
   }
   o.prompt = words.join(' ').trim();
@@ -179,13 +207,15 @@ function argv(opts, out, free = 100) {
   const editing = !!(o.images && o.images.length);
   const seed = o.seed ?? Math.floor(Math.random() * 1e9);
   const short = free < m.needFree;
-  const warm = m.worker && !short && !process.env.MAXSHELL_IMAGE_BIN;
-  const cmd = warm ? [python(), path.join(__dirname, m.worker)] : [bin(o.model, editing)];
+  // the warm worker — always, for Lite; for Flash unless memory is short (mflux's command has low-RAM mode)
+  const warm = m.worker && (!m.draw || (!short && !process.env.MAXSHELL_IMAGE_BIN));
+  const cmd = warm ? [python(), path.join(__dirname, m.worker), '--engine', m.engine] : [bin(o.model, editing)];
   const a = [...cmd, '--model', dir(o.model), ...(o.promptFile ? ['--prompt-file', o.promptFile] : ['--prompt', o.prompt]),
     '--width', String(o.width), '--height', String(o.height), '--steps', String(o.steps), '--seed', String(seed),
     '--output', out, '--vae-tiling'];
   if (editing) a.push('--image-paths', ...o.images); // edit these
-  if (short) a.push('--low-ram');
+  if (warm && o.draw) a.push('--draw-size', `${o.draw.width}x${o.draw.height}`, '--upscaler', upscaler()); // small, then up
+  if (short && !warm) a.push('--low-ram');
   return a;
 }
 
@@ -306,15 +336,22 @@ function setup(key, write, err) {
   const m = MODELS[key];
   const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { stdio: 'inherit', ...opts }).status === 0;
   if (!fs.existsSync(python())) { err('sage image: set Sage up first: sage --setup\n'); return 1; }
-  // Both builds run on mflux 0.21 (its qwen-2.1-edit and flux2 pipelines).
-  write(`Installing mflux ${MFLUX}…\n`);
-  if (!run(python(), ['-m', 'pip', 'install', '-q', `mflux==${MFLUX}`])) { err('sage image: pip install failed\n'); return 1; }
+  // Sage Image and Flash run on mflux 0.21 (its qwen-2.1-edit and flux2 pipelines); Lite on diffusers.
+  const pkg = m.pip || `mflux==${MFLUX}`;
+  write(`Installing ${pkg}…\n`);
+  if (!run(python(), ['-m', 'pip', 'install', '-q', pkg])) { err('sage image: pip install failed\n'); return 1; }
   fs.mkdirSync(dir(key), { recursive: true });
   write(`Downloading ${m.label}: ${m.repo} (${m.size}) into ${dir(key)}…\n`);
-  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.')\n`;
+  const only = m.files ? `, allow_patterns=${JSON.stringify(m.files)}` : '';
+  const snap = `from huggingface_hub import snapshot_download\nsnapshot_download(${JSON.stringify(m.repo)}, local_dir='.'${only})\n`;
   // HF_HUB_VERBOSITY: no "set a HF_TOKEN" warning — public models need no account
-  if (!run(python(), ['-c', snap], { cwd: dir(key), env: { HF_HUB_VERBOSITY: 'error', ...process.env, HF_HUB_DISABLE_XET: '1' } })) { err('sage image: download failed\n'); return 1; }
-  write(`${m.label} can draw now — try: sage image${key === 'lite' ? ' --lite' : ''} "a lighthouse at dusk, oil painting"\n`);
+  const hf = { cwd: dir(key), env: { HF_HUB_VERBOSITY: 'error', ...process.env, HF_HUB_DISABLE_XET: '1' } };
+  if (!run(python(), ['-c', snap], hf)) { err('sage image: download failed\n'); return 1; }
+  if (m.side) { // Flash and Lite draw small and upscale: the upscaler too (2.4 MB)
+    const up = `from huggingface_hub import hf_hub_download\nhf_hub_download(${JSON.stringify(UPSCALER.repo)}, ${JSON.stringify(UPSCALER.file)}, local_dir=${JSON.stringify(path.join(base(), UPSCALER.folder))})\n`;
+    if (!run(python(), ['-c', up], hf)) { err('sage image: the upscaler’s download failed\n'); return 1; }
+  }
+  write(`${m.label} can draw now — try: sage image${key === 'image' ? '' : ` --${key}`} "a lighthouse at dusk, oil painting"\n`);
   return 0;
 }
 
@@ -325,17 +362,19 @@ const HELP = `sage image — pictures from a prompt, made on your Mac
   sage image --edit photo.jpg <prompt>   change your picture (it's kept; the result is a new file)
   sage image --size 1024x768 …   another size (256–2048, multiples of 32; --size 512 with
                                  --edit is the long side, keeping your picture's shape)
-  sage image --lite …            Sage Image Lite (FLUX.2 klein 4B): smaller and faster
-  sage image --steps 20 …        more steps: finer, slower (default ${MODELS.image.steps}, Lite ${MODELS.lite.steps})
+  sage image --flash …           Sage Image Flash (FLUX.2 klein 4B): ~10 s a picture
+  sage image --lite …            Sage Image Lite (DreamShaper 7 LCM): a few seconds
+  sage image --steps 20 …        more steps: finer, slower (default ${MODELS.image.steps}; Flash and Lite ${MODELS.flash.steps})
   sage image --seed 7 …          the same seed and prompt make the same picture
   sage image -o name.png …       choose the file name (never over an existing file)
   sage image --no-open …         don't open it
   sage image --exact …           draw from your words as they are (Sage Pro writes a
-                                 detailed prompt from them first, by default; for
-                                 --lite, Sage Lite does)
+                                 detailed prompt from them first, by default)
   sage image --setup             install it (~${MODELS.image.size})
+  sage image --flash --setup     install Sage Image Flash (~${MODELS.flash.size})
   sage image --lite --setup      install Sage Image Lite (~${MODELS.lite.size})
 Sage Image: ${MODELS.image.license}
+Sage Image Flash: ${MODELS.flash.license}
 Sage Image Lite: ${MODELS.lite.license}
 `;
 
@@ -344,15 +383,15 @@ function runImage(args, io, shell) {
   const theme = require('./theme');
   const write = (s) => shell.writeTo(io.stdout, s);
   const err = (s) => shell.writeTo(io.stderr, s);
-  if (args.includes('--setup')) return setup(args.includes('--lite') ? 'lite' : 'image', write, err);
+  if (args.includes('--setup')) return setup(args.includes('--flash') ? 'flash' : args.includes('--lite') ? 'lite' : 'image', write, err);
   if (args[0] === '--help' || args[0] === '-h') { write(HELP); return 0; }
   const o = parseArgs(args, { chat: true });
   if (o.error) { err(`sage image: ${o.error}\n`); return 1; }
   o.model = choose(o.model);
   const m = MODELS[o.model];
   const unready = () => {
-    if (!ready()) err('sage image: the image model isn’t set up — run: sage image --setup (or --lite --setup for the smaller one)\n');
-    else err(`sage image: ${m.label} isn’t set up — run: sage image${o.model === 'lite' ? ' --lite' : ''} --setup\n`);
+    if (!ready()) err('sage image: the image model isn’t set up — run: sage image --setup (or --flash / --lite --setup for a quicker one)\n');
+    else err(`sage image: ${m.label} isn’t set up — run: sage image${o.model === 'image' ? '' : ` --${o.model}`} --setup\n`);
     return 1;
   };
   if (o.images.length > 1) { err('sage image: one picture at a time\n'); return 1; }
@@ -371,17 +410,17 @@ function runImage(args, io, shell) {
     const free = () => require('./gemma').freeMemory();
     const app = new sage.SageApp({
       mode: 'image', root: shell.cwd, model: 'image', models: [], start: () => sage.IDLE, imageLabel: m.label, imageModel: o.model,
-      startImage: (opts) => new Job({ ...opts, model: o.model }, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell, { lite: o.model === 'lite' }) }),
+      startImage: (opts) => new Job({ ...opts, model: o.model }, shell.cwd, { env: shell.env, free: free(), writer: opts.exact ? null : require('./gemma').promptWriter(shell) }),
     });
     if (mine) app.load(mine);
     return tui.fullscreen(() => sage.loop(app), { cursor: true, mouse: true });
   }
   if (!ready(o.model)) return unready();
-  Object.assign(o, resolve(o)); // the model's steps, and Lite's size
+  Object.assign(o, resolve(o)); // the model's steps, and the size Flash and Lite draw at
   const out = o.output ? path.resolve(shell.cwd, o.output) : outputPath(o.prompt, shell.cwd); // named after your words
   if (fs.existsSync(out)) { err(`sage image: ${o.output} is already there — pick another name\n`); return 1; }
   const muted = theme.style(theme.current().ui.muted);
-  const writer = o.exact ? null : require('./gemma').promptWriter(shell, { lite: o.model === 'lite' }); // Lite's prompt: by Sage Lite
+  const writer = o.exact ? null : require('./gemma').promptWriter(shell);
   if (writer) { // Sage turns the words into a detailed prompt first
     write(`${muted}✦ ${writer.label} is writing a detailed prompt…${ansi.reset()}\n`);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-prompt-'));
@@ -408,4 +447,4 @@ function runImage(args, io, shell) {
   return 0;
 }
 
-module.exports = { runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, choose, resolve, show, openFile, dir, MODELS, DEFAULTS, REPO, HELP };
+module.exports = { UPSCALER, upscaler, runImage, Job, parseArgs, outputPath, argv, prepare, fitSize, droppedPath, request, lastLine, wrapText, quote, progress, ready, choose, resolve, show, openFile, dir, MODELS, DEFAULTS, REPO, HELP };

@@ -131,8 +131,8 @@ class SageApp {
   constructor({ mode = 'chat', root = process.cwd(), model, models, start, ask = null, notice = null, startImage = null, startVideo = null, resume = null, imageLabel = 'Sage Image', imageModel = null }) {
     this.id = conversations.newId(); // where this conversation is kept (src/conversations.js)
     this.startImage = startImage; // (options) → a sageimage Job, or null when it isn't set up
-    this.imageLabel = imageLabel; // image chat's model: Sage Image or Sage Image Lite
-    this.imageModel = imageModel; // …its key ('lite'), so sizes and steps are that model's
+    this.imageLabel = imageLabel; // image chat's model: Sage Image, Flash or Lite
+    this.imageModel = imageModel; // …its key ('flash', 'lite'), so sizes and steps are that model's
     this.startVideo = startVideo; // video chat: (options) → a sagevideo job
     this.clip = null;             // video chat: the latest clip, which the next message changes or extends
     this.clipName = null;         // …and the first prompt, which names every version
@@ -520,7 +520,7 @@ class SageApp {
         if (this.mode !== 'image') return false;
         const o = require('./sageimage').parseArgs([`--${cmd}`, arg || '', 'x']);
         if (o.error) { this.note(o.error, 'err'); return true; }
-        Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height, sizeSet: true } : { steps: o.steps });
+        Object.assign(this.drawOpts, cmd === 'size' ? { width: o.width, height: o.height } : { steps: o.steps });
         if (cmd === 'size' && this.fitted) { // your picture keeps its shape unless WxH says otherwise
           this.fitted = o.sized ? null : require('./sageimage').fitSize(this.fitted.width, this.fitted.height, o.width);
         }

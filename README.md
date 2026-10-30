@@ -1213,32 +1213,36 @@ conversation while you keep chatting; ^C stops it. On an M3 a picture takes abou
 low-RAM mode is used). `sage image --setup` installs mflux 0.21 and downloads
 `OsaurusAI/Qwen-Image-2.1-mflux-4bit` (10.6 GB) into `~/.maxshell/gemma/image`.
 
-**Sage Image Lite.** `sage image --lite …` (or `sage --lite image …`) draws
-with Black Forest Labs' FLUX.2 [klein] 4B instead: the 4-bit
-`mflux-community/flux2-klein-4b-mflux-q4` build (4.6 GB, in
-`~/.maxshell/gemma/image-lite`; `sage image --lite --setup` downloads it). It's
-distilled to 4 steps and draws at **384×384** by default, which is what
-makes it quick: on an M3 MacBook Air a picture takes **about 8 seconds**
-from the command to the saved file once Lite is warm (about 17 s at 512×512
-and 50 s at 768×768 — the steps are compute-bound, so fewer pixels is the
-only way to go faster, and at 384 pictures still look right). `--size 768`
-or `/size 768` draws bigger; a photo you edit keeps its shape, its long side
-at 384. It needs about 3.4 GB of memory, and low-RAM mode only below 15%
-free. It draws through a **warm worker** (`src/sageflux.py`): the first
-picture starts it, and it keeps the model loaded so the next ones skip
-starting Python, loading 4.6 GB and compiling — only the drawing is left,
-and that is about a quarter quicker than mflux's own command because the
-prompt isn't padded to 512 tokens (the pictures look the same).
-The worker leaves after 5 idle minutes (`MAXSHELL_FLUX_IDLE`, in seconds),
-freeing its memory; stopping a picture (^C) stops it at the next step. With
-memory short, mflux's own command runs instead, in low-RAM mode. **Sage Lite** writes its detailed
-prompt, so the whole picture stays small and quick — it adds about 7
-seconds, and `--exact` skips it (Sage Pro or Flash writes it if Lite isn't
-set up). Everything else works the same — `--edit`, image chat,
-`/size`, `/steps` — and the image chat's title says which model is drawing.
-With no flag, `sage image` uses Sage Image if it's set up, else Lite;
-`MAXSHELL_IMAGE_MODEL=lite` makes Lite the default. FLUX.2 [klein] 4B is
-**Apache 2.0**: free to use, commercially too.
+**Sage Image Flash and Lite: pictures in seconds.** Two quicker models,
+both drawing small and upscaling to the size asked for (768×768 by
+default) with Real-ESRGAN's compact x4 model (BSD-3, 2.4 MB, ~0.2 s) —
+sharper than resizing, and far quicker than drawing big, since the steps
+are what take the time and they grow with the pixels. Both run in a **warm
+worker** (`src/sageflux.py`) that keeps the model loaded between pictures
+and leaves after 5 idle minutes (`MAXSHELL_FLUX_IDLE`, in seconds); ^C stops
+a picture at its next step. Times are on an M3 MacBook Air once the model is
+loaded (the first picture adds about 5 seconds):
+
+- `sage image --flash …` (or `sage --flash image …`) — **Sage Image Flash**,
+  Black Forest Labs' FLUX.2 [klein] 4B, 4-bit (`mflux-community/flux2-klein-4b-mflux-q4`,
+  4.6 GB, in `~/.maxshell/gemma/image-flash`). About **10 seconds** a
+  picture (drawn at 384, or a quarter of the size asked for); an edit about
+  20, following an instruction like Sage Image does. Apache 2.0. With memory
+  short, mflux's own command runs instead, in low-RAM mode, at full size.
+- `sage image --lite …` — **Sage Image Lite**, DreamShaper 7 with LCM
+  (`SimianLuo/LCM_Dreamshaper_v7`, Stable Diffusion 1.5 distilled to 4
+  steps, 4.3 GB in `~/.maxshell/gemma/image-lite`, run with diffusers on
+  PyTorch's Metal backend). About **4 seconds** a picture (drawn at 512).
+  Its text encoder reads 77 tokens, so a long prompt is cut short, and an
+  edit redraws the picture from your words starting from it, rather than
+  following an instruction. MIT (Stable Diffusion 1.5's CreativeML Open
+  RAIL-M underneath).
+
+`sage image --flash --setup` / `--lite --setup` installs one (mflux, or
+diffusers for Lite, plus the upscaler). Everything else works the same —
+`--edit`, image chat, `/size`, `/steps` — and image chat's title says which
+model is drawing. With no flag, `sage image` uses Sage Image if it's set up,
+else Flash, else Lite; `MAXSHELL_IMAGE_MODEL=flash` (or `lite`) picks one.
 
 **Sage writes the prompt.** The image model follows a detailed prompt much
 better than a short one, so Sage Lite goes first: it turns your words into a

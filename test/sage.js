@@ -581,7 +581,7 @@ test('sage image: options, file names that never overwrite, progress', () => {
   fs.rmSync(dir, { recursive: true });
 });
 
-test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps; picked when it’s the one set up', () => {
+test('sage image --flash (FLUX.2 klein) and --lite (DreamShaper LCM): 4 steps, a warm worker, drawn small and upscaled', () => {
   const img = require('../src/sageimage');
   const gem = fs.mkdtempSync(path.join(os.tmpdir(), 'sage-gem-'));
   const was = { ...process.env };
@@ -592,13 +592,13 @@ test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps;
     const bin = path.join(gem, 'venv', 'bin');
     fs.mkdirSync(bin, { recursive: true });
     for (const b of ['python', 'mflux-generate-flux2', 'mflux-generate-flux2-edit', 'mflux-generate-qwen-2.1-edit']) fs.writeFileSync(path.join(bin, b), '');
-    const o = img.parseArgs(['--lite', 'a', 'red', 'panda']);
-    assert.deepStrictEqual([o.model, o.steps, o.prompt], ['lite', null, 'a red panda']);
+    const o = img.parseArgs(['--flash', 'a', 'red', 'panda']);
+    assert.deepStrictEqual([o.model, o.steps, o.prompt], ['flash', null, 'a red panda']);
     // Drawn by the warm worker; mflux's own command, in low-RAM mode, when memory is short.
     const a = img.argv(o, '/tmp/x.png', 80);
-    assert.deepStrictEqual([path.basename(a[0]), path.basename(a[1])], ['python', 'sageflux.py']);
+    assert.deepStrictEqual([path.basename(a[0]), path.basename(a[1]), a[3]], ['python', 'sageflux.py', 'flux']);
     assert.strictEqual(path.basename(img.argv(o, '/tmp/x.png', 10)[0]), 'mflux-generate-flux2');
-    assert.strictEqual(a[a.indexOf('--model') + 1], path.join(gem, 'image-lite'));
+    assert.strictEqual(a[a.indexOf('--model') + 1], path.join(gem, 'image-flash'));
     assert.strictEqual(a[a.indexOf('--steps') + 1], '4');
     assert.ok(!a.includes('--low-ram'), 'Lite fits where Sage Image needs low-RAM mode');
     assert.ok(img.argv(o, '/tmp/x.png', 10).includes('--low-ram'));
@@ -612,22 +612,35 @@ test('sage image --lite: FLUX.2 klein through mflux’s flux2 commands, 4 steps;
     assert.strictEqual(full[full.indexOf('--steps') + 1], '8');
     // With only Lite downloaded, it's the one used — and ready() says Sage can draw.
     assert.ok(!img.ready());
-    for (const part of img.MODELS.lite.parts) fs.mkdirSync(path.join(gem, 'image-lite', part), { recursive: true });
-    assert.ok(img.ready() && img.ready('lite') && !img.ready('image'));
-    assert.strictEqual(img.choose(null), 'lite');
+    for (const part of img.MODELS.flash.parts) fs.mkdirSync(path.join(gem, 'image-flash', part), { recursive: true });
+    assert.ok(img.ready() && img.ready('flash') && !img.ready('image') && !img.ready('lite'));
+    assert.strictEqual(img.choose(null), 'flash');
     assert.strictEqual(img.resolve(img.parseArgs(['a', 'cat'])).steps, 4);
     for (const part of img.MODELS.image.parts) fs.mkdirSync(path.join(gem, 'image', part), { recursive: true });
     assert.strictEqual(img.choose(null), 'image');
-    process.env.MAXSHELL_IMAGE_MODEL = 'lite';
-    assert.strictEqual(img.choose(null), 'lite');
+    process.env.MAXSHELL_IMAGE_MODEL = 'flash';
+    assert.strictEqual(img.choose(null), 'flash');
+    assert.match(img.HELP, /--flash/);
     assert.match(img.HELP, /--lite/);
-    // Lite draws at 384² unless a size is asked for; a photo keeps its shape; Sage Image keeps 768.
-    const size = (args, extra = {}) => { const r = img.resolve({ ...img.parseArgs(args), ...extra }); return `${r.width}×${r.height}`; };
-    assert.strictEqual(size(['--lite', 'a', 'cat']), '384×384');
-    assert.strictEqual(size(['--lite', '--size', '768', 'a', 'cat']), '768×768');
-    assert.strictEqual(size(['--lite', 'a', 'cat'], { width: 768, height: 512 }), '384×256');
-    assert.strictEqual(size(['--lite', '--size', '256', 'a', 'cat']), '256×256');
-    assert.strictEqual(size(['a', 'cat'], { model: 'image' }), '768×768');
+    // Flash draws small and upscales to the size asked for — once its upscaler is there.
+    const drawn = (args, extra = {}) => { const r = img.resolve({ ...img.parseArgs(args), ...extra }); return [`${r.width}×${r.height}`, r.draw && `${r.draw.width}×${r.draw.height}`]; };
+    assert.deepStrictEqual(drawn(['--flash', 'a', 'cat']), ['768×768', undefined]); // no upscaler yet: drawn full size
+    fs.mkdirSync(path.join(gem, 'upscaler'), { recursive: true });
+    fs.writeFileSync(path.join(gem, 'upscaler', 'model.safetensors'), '');
+    assert.deepStrictEqual(drawn(['--flash', 'a', 'cat']), ['768×768', '384×384']);
+    assert.deepStrictEqual(drawn(['--flash', 'a', 'cat'], { width: 768, height: 512 }), ['768×512', '384×256']); // a photo's shape
+    assert.deepStrictEqual(drawn(['--flash', '--size', '2048', 'a', 'cat']), ['2048×2048', '512×512']); // at most 4× up
+    assert.deepStrictEqual(drawn(['--flash', '--size', '320', 'a', 'cat']), ['320×320', undefined]); // small already
+    assert.deepStrictEqual(drawn(['a', 'cat'], { model: 'image' }), ['768×768', undefined]);
+    const up = img.argv({ ...img.parseArgs(['--flash', 'a', 'cat']) }, '/tmp/x.png', 80);
+    assert.deepStrictEqual([up[up.indexOf('--width') + 1], up[up.indexOf('--draw-size') + 1]], ['768', '384x384']);
+    assert.ok(!img.argv({ ...img.parseArgs(['--flash', 'a', 'cat']) }, '/tmp/x.png', 10).includes('--draw-size')); // mflux: full size
+    // Lite: DreamShaper through the worker's lcm engine, at 512 and upscaled; no mflux, so the worker even with memory short.
+    for (const part of img.MODELS.lite.parts) fs.mkdirSync(path.join(gem, 'image-lite', part), { recursive: true });
+    assert.ok(img.ready('lite'));
+    const lite = img.argv(img.parseArgs(['--lite', 'a', 'cat']), '/tmp/x.png', 5);
+    assert.deepStrictEqual([path.basename(lite[1]), lite[3], lite[lite.indexOf('--draw-size') + 1], lite.includes('--low-ram')], ['sageflux.py', 'lcm', '512x512', false]);
+    assert.deepStrictEqual(drawn(['--lite', 'a', 'cat']), ['768×768', '512×512']);
     // Sage Lite writes every prompt: quick to load, and it leaves the memory to the image model
     const gemma = require('../src/gemma');
     process.env.MAXSHELL_SAGE_WRITER = path.join(__dirname, 'fake-sage-writer.js');
